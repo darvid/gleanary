@@ -1,0 +1,49 @@
+[tools]
+hk = "2.0.1"
+pkl = "0.32.1"
+swiftformat = "0.63.0"
+swiftlint = "0.65.1"
+
+[tasks.dev]
+description = "Build and open the native Sink app (quit it first to reload changes)"
+depends = ["app:build"]
+run = 'open "$MISE_PROJECT_ROOT/.build/Sink.app"'
+
+[tasks."dev:release"]
+description = "Build an optimized Sink app for graph performance (quit it first)"
+run = '''
+CONFIGURATION=release bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"
+open "$MISE_PROJECT_ROOT/.build/Sink.app"
+'''
+
+[tasks."app:build"]
+description = "Build and sign a local sandboxed Sink.app bundle"
+run = 'bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
+
+[tasks.format]
+description = "Format Swift source files"
+run = "swiftformat ."
+
+[tasks."format:check"]
+description = "Check Swift formatting without changing files"
+run = "swiftformat --lint ."
+
+[tasks.lint]
+description = "Lint Swift source files without changing them"
+# Resolve SourceKit from the active compiler, including Command Line Tools.
+run = '''
+export TOOLCHAIN_DIR="${TOOLCHAIN_DIR:-$(dirname "$(dirname "$(dirname "$(xcrun --find swift)")")")}"
+swiftlint lint --strict
+'''
+
+[tasks.check]
+description = "Check Swift formatting and lint rules"
+depends = ["format:check", "lint"]
+
+[tasks."hooks:install"]
+description = "Install hk hooks in the current Git repository"
+run = "hk install --mise"
+
+[tasks."hooks:check"]
+description = "Validate hk configuration and run its checks on all files"
+run = "hk validate && hk check --all"

@@ -1,0 +1,20 @@
+amends "package://github.com/jdx/hk/releases/download/v2.0.1/hk@2.0.1#/Config.pkl"
+
+// Reuse the same project-wide checks locally and at commit time.
+steps {
+  ["swift-checks"] {
+    check = "mise run check"
+  }
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = false
+    stage = false
+    // Check the staged snapshot without including unrelated unstaged edits.
+    stash = "git"
+  }
+  ["fix"] {
+    enabled = false
+  }
+}

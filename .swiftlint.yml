@@ -1,0 +1,17 @@
+included:
+  - Sink
+  - SinkTests
+  - Package.swift
+
+# SwiftFormat owns layout. Keep lint focused on code-quality checks.
+only_rules:
+  - duplicate_imports
+  - force_cast
+  - force_try
+  - force_unwrapping
+  - unused_enumerated
+  - unused_closure_parameter
+  - unused_optional_binding
+  - weak_delegate
+  - cyclomatic_complexity
+  - nesting
