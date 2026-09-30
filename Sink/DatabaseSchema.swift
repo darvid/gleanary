@@ -1,3 +1,4 @@
+import Foundation
 import GRDB
 
 /// Notes, revisions, captures, source blocks and artifact manifests are canonical.
@@ -180,6 +181,31 @@ enum DatabaseSchema {
                 collapsed INTEGER NOT NULL DEFAULT 0
             );
             """)
+        }
+        migrator.registerMigration("document-library-v1") { db in
+            try db.execute(sql: """
+            ALTER TABLE notes ADD COLUMN sourceURL TEXT;
+            ALTER TABLE notes ADD COLUMN faviconURL TEXT;
+            ALTER TABLE notes ADD COLUMN faviconData BLOB;
+            ALTER TABLE notes ADD COLUMN faviconCheckedAt REAL;
+            CREATE INDEX notes_library_order ON notes(updatedAt DESC, id) WHERE deletedAt IS NULL;
+            """)
+            // Recover provenance locally; existing icons are acquired only when a page is viewed.
+            for row in try Row.fetchAll(
+                db,
+                sql: "SELECT noteID, document FROM captures ORDER BY createdAt"
+            ) {
+                let metadata = try JSONDecoder().decode(
+                    CapturedDocument.self,
+                    from: row["document"]
+                )
+                if let url = metadata.sourceURL {
+                    try db.execute(
+                        sql: "UPDATE notes SET sourceURL = ? WHERE id = ?",
+                        arguments: [url.absoluteString, row["noteID"] as String]
+                    )
+                }
+            }
         }
         // Never erase a store on migration failure: the notes are the user's knowledge base.
         try migrator.migrate(database)

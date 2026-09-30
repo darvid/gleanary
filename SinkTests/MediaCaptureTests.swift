@@ -49,14 +49,14 @@ private actor MediaProviderFixture: YouTubeProviding {
 }
 
 private actor MediaFetchFixture: SourceFetching {
-    var calls = 0
+    var requestedURLs: [URL] = []
     var html: String?
     func setHTML(_ text: String) {
         html = text
     }
 
     func fetch(_ url: URL) throws -> DownloadedContent {
-        calls += 1
+        requestedURLs.append(url)
         if url.path.hasSuffix("audio.m4a") {
             return DownloadedContent(
                 data: Data("synthetic audio bytes".utf8),
@@ -163,7 +163,7 @@ struct MediaCaptureTests {
         _ = try await engine.enqueue("https://youtu.be/abcdefghijk?t=65"); try await engine.run()
         #expect(try await fixture.store.documents().count == 1)
         #expect(await provider.audioCalls == 0)
-        #expect(await fetcher.calls == 0)
+        #expect(await fetcher.requestedURLs == [URL(string: "https://www.youtube.com/favicon.ico")])
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open(seed: [])
         #expect(try await reopened.searchSnapshot(query: "cobaltbeacon", candidateLimit: 10)
@@ -197,7 +197,10 @@ struct MediaCaptureTests {
         try await engine.run()
         #expect(try await fixture.store.captureJobs().first?.state == .ready)
         #expect(await provider.audioCalls == 1)
-        #expect(await fetcher.calls == 1)
+        #expect(await fetcher.requestedURLs == [
+            URL(string: "https://fixture.example/audio.m4a"),
+            URL(string: "https://www.youtube.com/favicon.ico"),
+        ])
         #expect(await speech.calls == 2)
     }
 

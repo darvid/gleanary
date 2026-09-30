@@ -1,97 +1,200 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+private enum LibraryViewMode: String, CaseIterable {
+    case documents = "Documents"
+    case graph = "Graph"
+    case mindMap = "Mind Map"
+}
+
 struct ContentView: View {
     @Bindable var library: LibraryModel
     @State private var importing = false
     @State private var preview: MarkdownDocument?
     @State private var source: SourceCitation?
     @State private var searchDetails = false
+    @State private var viewMode: LibraryViewMode = .documents
+    @State private var documentSearchTask: Task<Void, Never>?
+    @FocusState private var documentSearchFocused: Bool
     @FocusState private var inputFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        knowledgeCanvas
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
-            .navigationTitle("Sink")
-            .focusedSceneValue(\.sinkActions, SinkActions(
-                enabled: library.ready && !library.busy,
-                newNote: { preview = MarkdownDocument(
-                    name: "Untitled.md",
-                    markdown: ""
-                ) },
-                attach: { importing = true },
-                focus: { inputFocused = true }
-            ))
-            .dropDestination(for: URL.self) { urls, _ in
-                let files = urls.filter(\.isFileURL)
-                if !files.isEmpty {
-                    Task { await library.importFiles(files) }
-                }
-                let links = urls.filter { !$0.isFileURL }
-                if let link = links
-                    .first
-                {
-                    library.query = link.absoluteString; inputFocused = true
-                }
-                if links
-                    .count >
-                    1
-                {
-                    library
-                        .error = "Drop one web link at a time. The first link is in the input box."
-                }
-                return !urls.isEmpty
+        VStack(spacing: 0) {
+            libraryHeader
+            if viewMode == .documents {
+                DocumentGridView(
+                    model: library.documentGrid,
+                    openNote: openNote,
+                    deleteNote: deleteNote,
+                    canDeleteNotes: library.canDeleteNotes
+                )
+            } else {
+                knowledgeCanvas
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [
-                .pdf, .html, .plainText, UTType(filenameExtension: "md") ?? .plainText,
-                UTType(filenameExtension: "markdown") ?? .plainText,
-            ], allowsMultipleSelection: true) { result in
-                switch result {
-                case let .success(urls): Task { await library.importFiles(urls) }
-                case let .failure(error): library.error = error.localizedDescription
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+        .navigationTitle("Sink")
+        .focusedSceneValue(\.sinkActions, SinkActions(
+            enabled: library.ready && !library.busy,
+            newNote: { preview = MarkdownDocument(
+                name: "Untitled.md",
+                markdown: ""
+            ) },
+            attach: { importing = true },
+            focus: {
+                if viewMode == .documents {
+                    documentSearchFocused = true
+                } else {
+                    inputFocused = true
                 }
             }
-            .sheet(item: $preview) { NoteEditor(document: $0, library: library) }
-            .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
-            .sheet(item: $library.browserJob) { job in
-                if let url = job.request.url, let target = try? MediaTarget.parse(url) {
-                    SocialBrowserView(job: job, target: target, library: library)
-                }
+        ))
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            if !files.isEmpty {
+                Task { await library.importFiles(files) }
             }
-            .sheet(item: $library.audioJob) { AudioOptionsView(job: $0, library: library) }
-            .task { await library.load(); inputFocused = true }
-            .task(id: library.captureNotice?.id) {
-                guard let notice = library.captureNotice else { return }
+            let links = urls.filter { !$0.isFileURL }
+            if let link = links
+                .first
+            {
+                library.query = link.absoluteString; inputFocused = true
+            }
+            if links
+                .count >
+                1
+            {
+                library
+                    .error = "Drop one web link at a time. The first link is in the input box."
+            }
+            return !urls.isEmpty
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [
+            .pdf, .html, .plainText, UTType(filenameExtension: "md") ?? .plainText,
+            UTType(filenameExtension: "markdown") ?? .plainText,
+        ], allowsMultipleSelection: true) { result in
+            switch result {
+            case let .success(urls): Task { await library.importFiles(urls) }
+            case let .failure(error): library.error = error.localizedDescription
+            }
+        }
+        .sheet(item: $preview) { NoteEditor(document: $0, library: library) }
+        .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
+        .sheet(item: $library.browserJob) { job in
+            if let url = job.request.url, let target = try? MediaTarget.parse(url) {
+                SocialBrowserView(job: job, target: target, library: library)
+            }
+        }
+        .sheet(item: $library.audioJob) { AudioOptionsView(job: $0, library: library) }
+        .task { await library.load(); inputFocused = true }
+        .task(id: library.captureNotice?.id) {
+            guard let notice = library.captureNotice else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, library.captureNotice?.id == notice.id else { return }
+            while library.graph.jobs.contains(where: {
+                $0.noteID == notice.noteID && $0.state != "ready"
+            }) {
                 try? await Task.sleep(for: .milliseconds(250))
                 guard !Task.isCancelled, library.captureNotice?.id == notice.id else { return }
-                while library.graph.jobs.contains(where: {
-                    $0.noteID == notice.noteID && $0.state != "ready"
-                }) {
-                    try? await Task.sleep(for: .milliseconds(250))
-                    guard !Task.isCancelled, library.captureNotice?.id == notice.id else { return }
-                }
-                try? await Task.sleep(for: .seconds(7))
-                guard !Task.isCancelled, library.captureNotice?.id == notice.id else { return }
-                withAnimation(.easeOut(duration: 0.2)) { library.captureNotice = nil }
             }
-            .onExitCommand {
-                if library.graph.canvasMode == .mindMap,
-                   library.graph.selectedMapNodeID != nil
-                {
-                    library.graph.deselectMapNode()
-                } else if library.graph.selection == nil {
-                    library.graph.overview()
-                } else {
-                    library.graph.deselect()
+            try? await Task.sleep(for: .seconds(7))
+            guard !Task.isCancelled, library.captureNotice?.id == notice.id else { return }
+            withAnimation(.easeOut(duration: 0.2)) { library.captureNotice = nil }
+        }
+        .onDisappear { documentSearchTask?.cancel() }
+        .onExitCommand {
+            if viewMode == .documents {
+                library.documentGrid.query = ""
+            } else if library.graph.canvasMode == .mindMap,
+                      library.graph.selectedMapNodeID != nil
+            {
+                library.graph.deselectMapNode()
+            } else if library.graph.selection == nil {
+                library.graph.overview()
+            } else {
+                library.graph.deselect()
+            }
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                library.refreshIntelligence()
+            }
+        }
+    }
+
+    private var libraryHeader: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(viewMode.rawValue).font(.title2.weight(.semibold))
+                if viewMode == .documents, library.ready {
+                    Text(library.documentGrid.total.formatted()).font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(library.documentGrid.total) documents")
+                }
+                Spacer()
+                HStack(spacing: 2) {
+                    ForEach(LibraryViewMode.allCases, id: \.self) { mode in
+                        Button { viewMode = mode } label: {
+                            Text(mode.rawValue).font(.callout)
+                                .frame(maxWidth: .infinity).padding(.vertical, 6)
+                                .background(
+                                    viewMode == mode ? Color.accentColor : .clear,
+                                    in: RoundedRectangle(cornerRadius: 6)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(viewMode == mode ? Color.white : .secondary)
+                        .accessibilityAddTraits(viewMode == mode ? .isSelected : [])
+                    }
+                }
+                .padding(3).frame(width: 280)
+                .background(
+                    Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .accessibilityElement(children: .contain).accessibilityLabel("Library view")
+                .onChange(of: viewMode) {
+                    if viewMode != .documents {
+                        library.graph.showCanvas(viewMode == .graph ? .graph : .mindMap)
+                    }
                 }
             }
-            .onChange(of: scenePhase) {
-                if scenePhase == .active {
-                    library.refreshIntelligence()
+            if viewMode == .documents {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search titles and document text", text: Binding(
+                        get: { library.documentGrid.query },
+                        set: { library.documentGrid.query = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .focused($documentSearchFocused)
+                    .accessibilityLabel("Search documents")
+                    .disabled(!library.ready)
+                    if !library.documentGrid.query.isEmpty {
+                        Button("Clear search", systemImage: "xmark.circle.fill") {
+                            library.documentGrid.query = ""
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                    }
+                }
+                .padding(10)
+                .background(
+                    Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8)
+                )
+                .onChange(of: library.documentGrid.query) {
+                    documentSearchTask?.cancel()
+                    documentSearchTask = Task {
+                        do { try await Task.sleep(for: .milliseconds(250)) }
+                        catch { return }
+                        await library.documentGrid.reload()
+                    }
                 }
             }
+        }
+        .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 16)
     }
 
     private var knowledgeCanvas: some View {
@@ -124,26 +227,18 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
-        .overlay(alignment: .top) {
-            if !library.graph.mindMap.nodes.isEmpty {
-                Picker("Knowledge view", selection: Binding(
-                    get: { library.graph.canvasMode },
-                    set: { library.graph.showCanvas($0) }
-                )) {
-                    ForEach(KnowledgeCanvasMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented).labelsHidden().frame(width: 190)
-                .padding(8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .padding(.top, 12)
-            }
-        }
     }
 
     private func openNote(_ id: UUID) {
-        preview = library.documents.first { $0.id == id }
+        Task { preview = await library.document(id: id) }
+    }
+
+    private func deleteNote(_ id: UUID) {
+        guard library.canDeleteNotes else { return }
+        Task {
+            guard let document = await library.document(id: id) else { return }
+            DeleteNoteConfirmation.present(document, library: library)
+        }
     }
 
     private var composer: some View {
@@ -220,7 +315,7 @@ struct ContentView: View {
                 }
                 .labelStyle(.iconOnly).buttonStyle(.borderless)
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
-                .disabled(inputDisabled || library.documents.isEmpty)
+                .disabled(inputDisabled || library.documentCount == 0)
                 .help("Search · ⌘⇧Return")
                 Button("Save to Sink", systemImage: "arrow.down.to.line") {
                     Task { await library.captureInput() }

@@ -43,7 +43,10 @@ actor DocumentStore {
 
     /// A legacy file is imported exactly once, in a transaction. It is never removed or changed.
     /// Invalid JSON leaves initialization pending instead of silently replacing the user's notes.
-    func open(seed: [MarkdownDocument] = []) throws -> [MarkdownDocument] {
+    func open(
+        seed: [MarkdownDocument] = [],
+        loadDocuments: Bool = true
+    ) throws -> [MarkdownDocument] {
         let pool = try database()
         if try pool.read({ try Self.metadata("initialized", in: $0) }) != "1" {
             let initial: [MarkdownDocument] = if FileManager.default
@@ -78,7 +81,7 @@ actor DocumentStore {
             }
             try Self.setMetadata("chunker", value: MarkdownChunker.version, in: db)
         }
-        return try documents()
+        return try loadDocuments ? documents() : []
     }
 
     func documents() throws -> [MarkdownDocument] {
