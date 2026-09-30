@@ -4,6 +4,28 @@ import GRDB
 @testable import Sink
 import Testing
 
+@Test func plainLanguagePolicyPreservesTaskInstructions() {
+    let task = "Copy the quotation exactly. Return JSON with evidenceID E3 and predicate partOf."
+    let instructions = AIProsePolicy.instructions(for: task)
+    #expect(instructions == task + "\n\n" + AIProsePolicy.guidance)
+    #expect(instructions.contains("These rules apply only to prose you compose."))
+    #expect(instructions.contains("Follow the task's output schema and tighter length limits."))
+}
+
+@Test func plainLanguagePolicyCoversMindMapProseAndAccuracy() {
+    let instructions = AIProsePolicy.instructions(for: "Build a mind map from supplied evidence.")
+    #expect(instructions.contains("Titles and summaries are plain text, not Markdown."))
+    #expect(instructions.contains("Preserve uncertainty, limitations, and scope;"))
+    #expect(instructions.contains("Never invent definitions or facts"))
+    #expect(instructions.contains("at most 30 words per sentence."))
+}
+
+@Test func plainLanguagePolicyInvalidatesStoredCurationButNotSourceExtraction() {
+    #expect(GraphExtractor.curationVersion.hasSuffix("/" + AIProsePolicy.version))
+    #expect(GraphExtractor.version.contains(AIProsePolicy.version))
+    #expect(!GraphExtractor.candidateVersion.contains(AIProsePolicy.version))
+}
+
 struct UnavailableGraphProvider: GraphExtracting {
     func extract(_: String) throws -> GraphProposal {
         throw GraphError.unavailable
