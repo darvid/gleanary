@@ -3,3 +3,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .DS_Store
+.env
+.env.*
+.superset/config.local.json
