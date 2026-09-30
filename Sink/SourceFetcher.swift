@@ -112,15 +112,27 @@ struct SourceFetcher: SourceFetching {
     private let policy: URLPolicy
     private let protocolClasses: [AnyClass]?
     private let maximumBytes: Int
+    private let timeout: TimeInterval
 
     init(
         policy: URLPolicy = URLPolicy(),
         protocolClasses: [AnyClass]? = nil,
-        maximumBytes: Int = CaptureLimits.artifactBytes
+        maximumBytes: Int = CaptureLimits.artifactBytes,
+        timeout: TimeInterval = 120
     ) {
         self.policy = policy
         self.protocolClasses = protocolClasses
         self.maximumBytes = min(CaptureLimits.artifactBytes, max(1, maximumBytes))
+        self.timeout = max(1, timeout)
+    }
+
+    func limitingBytes(to limit: Int) -> SourceFetcher {
+        SourceFetcher(
+            policy: policy,
+            protocolClasses: protocolClasses,
+            maximumBytes: limit,
+            timeout: min(timeout, 5)
+        )
     }
 
     func fetch(_ url: URL) async throws -> DownloadedContent {
@@ -129,8 +141,8 @@ struct SourceFetcher: SourceFetching {
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
         configuration.httpShouldSetCookies = false
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 120
+        configuration.timeoutIntervalForRequest = min(30, timeout)
+        configuration.timeoutIntervalForResource = timeout
         configuration.protocolClasses = protocolClasses
         let session = URLSession(
             configuration: configuration,
@@ -150,7 +162,7 @@ struct SourceFetcher: SourceFetching {
                     forHTTPHeaderField: "User-Agent"
                 )
                 request.setValue(
-                    "text/html, application/pdf, text/plain;q=0.8",
+                    "text/html, application/pdf, image/*, text/plain;q=0.8",
                     forHTTPHeaderField: "Accept"
                 )
                 let (bytes, response) = try await session.bytes(for: request)

@@ -1,0 +1,589 @@
+import AppKit
+import Foundation
+import GRDB
+@testable import Sink
+import SwiftUI
+import Testing
+
+private struct LibraryFixture {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    let store: DocumentStore
+
+    init() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        store = DocumentStore(url: root.appending(path: "library.sqlite"))
+    }
+
+    func clean() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+private actor IconFixtureFetcher: SourceFetching {
+    var responses: [URL: Data] = [:]
+    var calls: [URL] = []
+    func set(_ url: URL, data: Data) {
+        responses[url] = data
+    }
+
+    func fetch(_ url: URL) throws -> DownloadedContent {
+        calls.append(url)
+        guard let data = responses[url] else { throw CaptureError.http(404) }
+        return DownloadedContent(data: data, url: url, mime: "image/png", encoding: nil)
+    }
+}
+
+private struct DeletionFixtureEmbedder: EmbeddingProviding {
+    func profile() async throws -> EmbeddingProfile {
+        EmbeddingProfile(revision: 1, dimensions: 2)
+    }
+
+    func vector(for _: String, profile _: EmbeddingProfile) async throws -> [Float] {
+        [1, 0]
+    }
+}
+
+@Suite(.serialized)
+struct DocumentLibraryTests {
+    @Test func pagesAreBoundedOrderedSearchableAndExcludeDeletedNotes() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let notes = (0 ..< 185).map { index in
+            MarkdownDocument(
+                name: "Title \(index)",
+                markdown: index == 0
+                    ? "Unique cobaltbeacon paragraph.\n\nUnique cobaltbeacon paragraph."
+                    : "Synthetic content \(index)."
+            )
+        }
+        _ = try await fixture.store.open(seed: notes)
+        let first = try await fixture.store.documentPage(limit: 10000)
+        #expect(first.documents.count == 80)
+        #expect(first.total == 185)
+        let second = try await fixture.store.documentPage(offset: 80)
+        let last = try await fixture.store.documentPage(offset: 160)
+        #expect(last.documents.count == 25)
+        let all = first.documents + second.documents + last.documents
+        #expect(Set(all.map(\.id)).count == 185)
+        #expect(all.first?.id == notes.last?.id)
+        let search = try await fixture.store.documentPage(query: "cobalt")
+        #expect(search.total == 1)
+        #expect(search.documents.first?.id == notes.first?.id)
+        #expect(try await fixture.store.documentPage(query: "Title 184").total == 1)
+        #expect(try await fixture.store.documentPage(query: "\" OR * --").total == 0)
+        let note = try #require(await fixture.store.document(id: notes[0].id))
+        try await fixture.store.remove(note)
+        #expect(try await fixture.store.documentPage().total == 184)
+        #expect(try await fixture.store.documentPage(query: "cobalt").total == 0)
+        #expect(try await fixture.store.document(id: note.id) == nil)
+    }
+
+    @Test @MainActor func cacheStaysBoundedAndCanScrollBackAndSearch() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: (0 ..< 1200).map {
+            MarkdownDocument(name: "Bookmark \($0)", markdown: "Fixture searchable body \($0).")
+        }, loadDocuments: false)
+        let model = DocumentGridModel(store: fixture.store)
+        await model.reload()
+        #expect(model.total == 1200)
+        for page in 0 ..< 15 {
+            model.show(indices: [page * 80])
+            await model.waitForPages()
+            #expect(model.document(at: page * 80) != nil)
+            #expect(model.cachedDocumentCount <= 480)
+        }
+        #expect(model.document(at: 0) == nil)
+        model.show(indices: [0])
+        await model.waitForPages()
+        #expect(model.document(at: 0)?.name == "Bookmark 1199")
+        model.query = "Bookmark 734"
+        await model.reload()
+        #expect(model.total == 1)
+        #expect(model.cachedDocumentCount == 1)
+        #expect(model.document(at: 0)?.name == "Bookmark 734")
+        model.query = "no-such-document"
+        await model.reload()
+        #expect(model.total == 0)
+        #expect(model.cachedDocumentCount == 0)
+    }
+
+    @Test @MainActor func concurrentMutationsInvalidateOffsetPages() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: (0 ..< 100).map {
+            MarkdownDocument(name: "Bookmark \($0)", markdown: "Fixture body.")
+        })
+        let model = DocumentGridModel(store: fixture.store)
+        await model.reload()
+        let generation = model.generation
+        _ = try await fixture.store.save(MarkdownDocument(name: "Newest", markdown: "Fresh body."))
+        model.requestPage(1)
+        await model.waitForPages()
+        #expect(model.generation > generation)
+        #expect(model.total == 101)
+        #expect(model.document(at: 0)?.name == "Newest")
+    }
+
+    @Test func findsDeclaredIconBeforeSanitizingHTML() throws {
+        let analysis = try HTMLExtractor.analyze("""
+        <html><head><title>Fixture</title><link rel="shortcut icon" href="/assets/icon.png"></head>
+        <body><p>Fixture content.</p></body></html>
+        """, url: URL(string: "https://example.org/articles/fixture"))
+        #expect(analysis.faviconURL?.absoluteString == "https://example.org/assets/icon.png")
+        #expect(!analysis.sanitizedHTML.contains("/assets/icon.png"))
+    }
+
+    @Test @MainActor func iconsAreValidatedPersistedAndIndependentOfCaptureIdentity() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let source = try #require(URL(string: "https://example.org/article"))
+        let iconURL = try #require(URL(string: "https://example.org/site.png"))
+        let png = try Self.iconPNG()
+        let fetcher = IconFixtureFetcher()
+        await fetcher.set(iconURL, data: png)
+        let icon = try #require(await FaviconLoader(fetcher: fetcher).load(
+            source: source,
+            preferred: iconURL
+        ))
+        #expect(icon.data.count <= 16384)
+        #expect(FaviconLoader.thumbnail(Data("not an image".utf8)) == nil)
+        #expect(FaviconLoader
+            .thumbnail(Data(repeating: 0, count: FaviconLoader.maximumBytes + 1)) == nil)
+        let request = CaptureRequest(url: source, identity: "url:fixture-icon", label: "Fixture")
+        _ = try await fixture.store.enqueueCapture(request)
+        let job = try #require(await fixture.store.claimCapture())
+        let document = CapturedDocument(
+            title: "Stored icon",
+            sourceURL: source,
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Retained synthetic article.",
+                text: "Retained synthetic article."
+            )]
+        )
+        let noteID = try await fixture.store.publishCapture(
+            job,
+            document: document,
+            artifacts: [],
+            favicon: icon
+        )
+        let reopened = DocumentStore(url: fixture.store.url)
+        _ = try await reopened.open(loadDocuments: false)
+        let summary = try #require(await reopened.documentPage().documents.first)
+        #expect(summary.id == noteID)
+        #expect(summary.sourceURL == source)
+        #expect(summary.faviconData == icon.data)
+        #expect(summary.faviconChecked)
+        _ = try await fixture.store.enqueueCapture(request, deduplicate: false)
+        let duplicate = try #require(await fixture.store.claimCapture())
+        #expect(try await fixture.store.publishCapture(
+            duplicate,
+            document: document,
+            artifacts: []
+        ) == noteID)
+        #expect(try await fixture.store.documentPage().total == 1)
+        #expect(try await fixture.store.documentPage().documents.first?.faviconData == icon.data)
+    }
+
+    @Test @MainActor func failedIconFetchFallsBackAndIsNotRetriedAfterReopen() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let source = try #require(URL(string: "https://example.org/article"))
+        let fetcher = IconFixtureFetcher()
+        _ = try await fixture.store.enqueueCapture(CaptureRequest(
+            url: source,
+            identity: "fixture:no-icon",
+            label: "No icon"
+        ))
+        let job = try #require(await fixture.store.claimCapture())
+        _ = try await fixture.store.publishCapture(job, document: CapturedDocument(
+            title: "No icon", sourceURL: source, coverage: .article,
+            blocks: [ContentBlock(kind: .paragraph, markdown: "Local body.", text: "Local body.")]
+        ), artifacts: [])
+        let model = DocumentGridModel(
+            store: fixture.store,
+            favicons: FaviconLoader(fetcher: fetcher)
+        )
+        await model.reload()
+        model.show(indices: [0])
+        await model.faviconTask?.value
+        #expect(await fetcher.calls.count == 1)
+        let reopened = DocumentStore(url: fixture.store.url)
+        _ = try await reopened.open(loadDocuments: false)
+        let summary = try #require(await reopened.documentPage().documents.first)
+        #expect(summary.faviconChecked)
+        #expect(summary.faviconData == nil)
+        let restored = DocumentGridModel(store: reopened, favicons: FaviconLoader(fetcher: fetcher))
+        await restored.reload()
+        restored.show(indices: [0])
+        await restored.faviconTask?.value
+        #expect(await fetcher.calls.count == 1)
+    }
+
+    @Test func migrationRecoversExistingSourceWithoutChangingNotes() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let source = try #require(URL(string: "https://example.org/legacy"))
+        _ = try await fixture.store.enqueueCapture(CaptureRequest(
+            url: source,
+            identity: "fixture:legacy",
+            label: "Legacy"
+        ))
+        let job = try #require(await fixture.store.claimCapture())
+        let id = try await fixture.store.publishCapture(job, document: CapturedDocument(
+            title: "Legacy article", sourceURL: source, coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Legacy synthetic body.",
+                text: "Legacy synthetic body."
+            )]
+        ), artifacts: [])
+        let original = try await fixture.store.document(id: id)
+        let database = try DatabaseQueue(path: fixture.store.url.path)
+        try await database.write { db in
+            try db.execute(sql: """
+            ALTER TABLE notes DROP COLUMN sourceURL;
+            ALTER TABLE notes DROP COLUMN faviconURL;
+            ALTER TABLE notes DROP COLUMN faviconData;
+            ALTER TABLE notes DROP COLUMN faviconCheckedAt;
+            DROP INDEX notes_library_order;
+            DELETE FROM grdb_migrations WHERE identifier = 'document-library-v1';
+            """)
+        }
+        let reopened = DocumentStore(url: fixture.store.url)
+        _ = try await reopened.open(loadDocuments: false)
+        #expect(try await reopened.document(id: id) == original)
+        let summary = try #require(await reopened.documentPage().documents.first)
+        #expect(summary.sourceURL == source)
+        #expect(!summary.faviconChecked)
+        #expect(try await reopened.history(for: id).count == 1)
+    }
+
+    @Test @MainActor func nativeGridReusesCellsRespondsToWidthAndOpensDocuments() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: (0 ..< 300).map {
+            MarkdownDocument(
+                name: "A long synthetic bookmark title that should truncate in one line · \($0)",
+                markdown: "Fixture body."
+            )
+        })
+        let model = DocumentGridModel(store: fixture.store)
+        await model.reload()
+        var opened: UUID?
+        var deleted: UUID?
+        _ = NSApplication.shared
+        let host = NSHostingView(rootView: DocumentGridView(
+            model: model,
+            openNote: { opened = $0 },
+            deleteNote: { deleted = $0 },
+            canDeleteNotes: true
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        let collection = try #require(Self.descendant(NSCollectionView.self, in: host))
+        let flow = try #require(collection.collectionViewLayout as? NSCollectionViewFlowLayout)
+        #expect(collection.numberOfItems(inSection: 0) == 300)
+        #expect(collection.visibleItems().count < 200)
+        #expect(flow.itemSize.height == 40)
+        #expect(flow.itemSize.width < 200)
+        let item = try #require(collection.item(at: IndexPath(item: 0, section: 0)))
+        let button = try #require(Self.descendant(NSButton.self, in: item.view))
+        button.performClick(nil)
+        #expect(opened == model.document(at: 0)?.id)
+        opened = nil
+        let trash = try #require(Self.button("delete-document", in: item.view))
+        let hover = try #require(NSEvent.enterExitEvent(
+            with: .mouseEntered,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ))
+        item.view.mouseExited(with: hover)
+        #expect(trash.isHidden)
+        let title = try #require(Self.descendant(NSTextField.self, in: item.view))
+        let titleFrame = title.frame
+        item.view.mouseEntered(with: hover)
+        #expect(!trash.isHidden)
+        #expect(trash.isEnabled)
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(trash.alphaValue == 1)
+        #expect(title.frame == titleFrame)
+        trash.performClick(nil)
+        #expect(deleted == model.document(at: 0)?.id)
+        #expect(opened == nil)
+        try Self.screenshot(host, name: "sink-grid-wide")
+        item.view.mouseExited(with: hover)
+        #expect(!trash.isEnabled)
+        // A new hover must invalidate the previous fade-out completion.
+        item.view.mouseEntered(with: hover)
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(!trash.isHidden)
+        #expect(trash.alphaValue == 1)
+        item.view.mouseExited(with: hover)
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(trash.isHidden)
+        #expect(trash.alphaValue == 0)
+        window.setContentSize(NSSize(width: 900, height: 600))
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        #expect(flow.itemSize.width > 200)
+        #expect(flow.itemSize.height == 40)
+        try Self.screenshot(host, name: "sink-grid-narrow")
+        collection.selectionIndexPaths = [IndexPath(item: 0, section: 0)]
+        let shortcut = try #require(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\u{7f}",
+            charactersIgnoringModifiers: "\u{7f}",
+            isARepeat: false,
+            keyCode: 51
+        ))
+        deleted = nil
+        collection.keyDown(with: shortcut)
+        #expect(deleted == model.document(at: 0)?.id)
+        host.rootView = DocumentGridView(
+            model: model,
+            openNote: { opened = $0 },
+            deleteNote: { deleted = $0 },
+            canDeleteNotes: false
+        )
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!trash.isEnabled)
+        deleted = nil
+        trash.performClick(nil)
+        collection.keyDown(with: shortcut)
+        #expect(deleted == nil)
+        let destination = IndexPath(item: 240, section: 0)
+        collection.scrollToItems(at: [destination], scrollPosition: .top)
+        try await Task.sleep(for: .milliseconds(100))
+        await model.waitForPages()
+        #expect(model.document(at: 240) != nil)
+        #expect(model.cachedDocumentCount <= 480)
+        #expect(collection.visibleItems().count < 200)
+    }
+
+    @Test @MainActor func defaultLibrarySurfaceRendersWithSearchAndViewSwitcher() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let titles = [
+            "A practical guide to local-first software",
+            "Swift collection view performance",
+            "Designing durable document libraries",
+            "Notes from the reading group",
+            "SQLite full-text search",
+            "Typography and information density",
+            "Building tools that work offline",
+            "The collected papers",
+        ]
+        _ = try await fixture.store.open(seed: (0 ..< 150).map {
+            MarkdownDocument(name: titles[$0 % titles.count], markdown: "Synthetic document body.")
+        }, loadDocuments: false)
+        let library = LibraryModel(store: fixture.store)
+        library.ready = true
+        await library.documentGrid.reload()
+        _ = NSApplication.shared
+        let host = NSHostingView(rootView: ContentView(library: library)
+            .preferredColorScheme(.dark))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        #expect(Self.descendant(NSCollectionView.self, in: host) != nil)
+        try Self.screenshot(host, name: "sink-library-wide")
+        window.setContentSize(NSSize(width: 900, height: 600))
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.layoutSubtreeIfNeeded()
+        try Self.screenshot(host, name: "sink-library-narrow")
+    }
+
+    @Test @MainActor func deletingDocumentPurgesPayloadsFilesAndCachedNotices() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let artifacts = ArtifactStore(root: fixture.root.appending(path: "artifacts"))
+        let original = try await artifacts.retain(
+            Data("Synthetic original bytes".utf8),
+            kind: .html,
+            name: "original.html"
+        )
+        let source = try #require(URL(string: "https://example.org/deletion-fixture"))
+        let request = CaptureRequest(
+            url: source,
+            artifact: original,
+            identity: "fixture:purge",
+            label: "Delete fixture"
+        )
+        _ = try await fixture.store.enqueueCapture(request)
+        let job = try #require(await fixture.store.claimCapture())
+        let icon = try StoredFavicon(url: source, data: Self.iconPNG())
+        let id = try await fixture.store.publishCapture(job, document: CapturedDocument(
+            title: "Delete fixture", sourceURL: source, coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Synthetic cobaltbeacon body.",
+                text: "Synthetic cobaltbeacon body."
+            )]
+        ), artifacts: [original], favicon: icon)
+        let note = try #require(await fixture.store.document(id: id))
+        let revision = try #require(note.revision)
+        let database = try DatabaseQueue(path: fixture.store.url.path)
+        try await database.write { db in
+            try db.execute(
+                sql: "INSERT INTO mind_maps(noteID, revision, version, rootID, generatedAt) VALUES (?, ?, 'fixture', 'fixture-root', 1)",
+                arguments: [id.uuidString, revision.uuidString]
+            )
+            try db.execute(
+                sql: "INSERT INTO mind_map_nodes(id, noteID, title, summary, role, ordinal, depth) VALUES ('fixture-root', ?, 'Fixture', 'Synthetic summary', 'root', 0, 0)",
+                arguments: [id.uuidString]
+            )
+            try db.execute(
+                sql: "INSERT INTO mind_map_evidence(id, nodeID, noteID, quote, offset) VALUES ('fixture-evidence', 'fixture-root', ?, 'Synthetic quote', 0)",
+                arguments: [id.uuidString]
+            )
+            try db.execute(
+                sql: "INSERT INTO mind_map_state(nodeID, noteID, collapsed) VALUES ('fixture-root', ?, 1)",
+                arguments: [id.uuidString]
+            )
+            try db.execute(
+                sql: "INSERT INTO graph_layout(nodeID, x, y, pinned) VALUES (?, 1, 2, 0)",
+                arguments: [GraphNode.documentID(id)]
+            )
+        }
+        let library = LibraryModel(store: fixture.store, provider: DeletionFixtureEmbedder())
+        library.ready = true
+        await library.refreshCaptures()
+        await library.indexingTask?.value
+        #expect(library.documentGrid.document(at: 0)?.faviconData == icon.data)
+        _ = try await fixture.store.enqueueCapture(request, deduplicate: false)
+        let pending = try #require(await fixture.store.claimCapture())
+        try await fixture.store.failCapture(
+            pending,
+            error: "Synthetic recovery",
+            recovery: .browser
+        )
+        let recovery = try #require(await fixture.store.captureJobs().first { $0.id == pending.id })
+        library.browserJob = recovery
+        library.audioJob = recovery
+        #expect(await library.remove(id))
+        await library.indexingTask?.value
+        #expect(library.documentCount == 0)
+        #expect(library.documentGrid.cachedDocumentCount == 0)
+        #expect(library.captureNotice == nil)
+        #expect(library.browserJob == nil)
+        #expect(library.audioJob == nil)
+        #expect(library.captureJobs.isEmpty)
+        await #expect(throws: CaptureError.self) { try await artifacts.data(for: original) }
+        try await database.read { db in
+            for table in ["notes", "note_revisions", "local_changes", "captures", "content_blocks",
+                          "sources", "artifacts", "artifact_deletions", "ingestion_jobs",
+                          "passages",
+                          "index_jobs", "embeddings", "graph_nodes", "graph_node_fts",
+                          "graph_edges",
+                          "graph_evidence", "graph_jobs", "graph_links", "graph_layout",
+                          "graph_passage_cache", "graph_decisions", "mind_maps", "mind_map_nodes",
+                          "mind_map_evidence", "mind_map_state"]
+            {
+                let count = try Int.fetchOne(db, sql: "SELECT count(*) FROM \(table)")
+                #expect(count == 0)
+            }
+            let markers = try Int.fetchOne(db, sql: "SELECT count(*) FROM purged_notes")
+            #expect(markers == 1)
+        }
+        #expect(try await fixture.store.documentPage(query: "cobaltbeacon").total == 0)
+        await #expect(throws: SinkError.self) { try await fixture.store.save(note) }
+    }
+
+    @Test @MainActor func deletingAnOlderNoteInvalidatesOffsetPagesEvenWhenMaxSequenceIsUnchanged(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let notes = try await fixture.store.open(seed: (0 ..< 100).map {
+            MarkdownDocument(name: "Fixture \($0)", markdown: "Synthetic body.")
+        })
+        let model = DocumentGridModel(store: fixture.store)
+        await model.reload()
+        let generation = model.generation
+        let sequence = try await fixture.store.libraryChangeSequence()
+        let oldest = try #require(notes.first { $0.name == "Fixture 0" })
+        _ = try await fixture.store.permanentlyRemove(oldest)
+        #expect(try await fixture.store.libraryChangeSequence() == sequence)
+        model.requestPage(1)
+        await model.waitForPages()
+        #expect(model.generation > generation)
+        #expect(model.total == 99)
+    }
+
+    @MainActor private static func button(_ identifier: String, in view: NSView) -> NSButton? {
+        if let button = view as? NSButton,
+           button.accessibilityIdentifier() == identifier
+        {
+            return button
+        }
+        return view.subviews.lazy.compactMap { button(identifier, in: $0) }.first
+    }
+
+    @MainActor private static func iconPNG() throws -> Data {
+        let bitmap = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 32,
+            pixelsHigh: 32,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        for x in 0 ..< 32 {
+            for y in 0 ..< 32 {
+                bitmap.setColor(
+                    NSColor(calibratedRed: 1, green: 0.5, blue: 0.1, alpha: 1),
+                    atX: x,
+                    y: y
+                )
+            }
+        }
+        return try #require(bitmap.representation(using: .png, properties: [:]))
+    }
+
+    @MainActor private static func descendant<T: NSView>(_ type: T.Type, in view: NSView) -> T? {
+        if let match = view as? T {
+            return match
+        }
+        return view.subviews.lazy.compactMap { descendant(type, in: $0) }.first
+    }
+
+    @MainActor private static func screenshot(_ view: NSView, name: String) throws {
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: FileManager.default.temporaryDirectory.appending(path: "\(name).png"))
+    }
+}

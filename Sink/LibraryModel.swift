@@ -12,7 +12,9 @@ struct CaptureNotice: Identifiable, Equatable {
 @MainActor @Observable
 final class LibraryModel {
     let graph: KnowledgeGraphModel
-    var documents: [MarkdownDocument] = []
+    let documentGrid: DocumentGridModel
+    private(set) var documentCount = 0
+    private var documentChangeSequence: Int64 = 0
     var matches: [SearchMatch] = []
     var selectedMatch: UUID?
     var query = ""
@@ -48,6 +50,7 @@ final class LibraryModel {
         graphProvider: any GraphExtracting = AppleGraphExtractor()
     ) {
         self.store = store
+        documentGrid = DocumentGridModel(store: store)
         graph = KnowledgeGraphModel(store: store, provider: graphProvider)
         engine = SearchEngine(store: store, provider: provider)
         ingestion = IngestionEngine(store: store)
@@ -94,10 +97,9 @@ final class LibraryModel {
         defer { busy = false }
         refreshIntelligence()
         do {
-            documents = try await store.open()
-            if try await store.retireBuiltInSamples() > 0 {
-                documents = try await store.documents()
-            }
+            _ = try await store.open(loadDocuments: false)
+            _ = try await store.retireBuiltInSamples()
+            try await refreshDocumentGrid()
             needsArtifactCleanup = try await store.hasPendingArtifactDeletions()
             try await applyStatistics(store.statistics())
             try await store.recoverCaptureJobs()
@@ -148,12 +150,24 @@ final class LibraryModel {
     }
 
     private func refreshAfterMutation() async throws {
-        documents = try await store.documents()
+        try await refreshDocumentGrid()
         try await applyStatistics(store.statistics())
         clearResults()
         await graph.refresh()
         graph.startExtraction()
         startIndexing()
+    }
+
+    private func refreshDocumentGrid() async throws {
+        let page = try await store.documentPage(limit: 1)
+        documentCount = page.total
+        documentChangeSequence = page.changeSequence
+        await documentGrid.reload()
+    }
+
+    func document(id: UUID) async -> MarkdownDocument? {
+        do { return try await store.document(id: id) }
+        catch { self.error = error.localizedDescription; return nil }
     }
 
     func clearResults() {
@@ -272,17 +286,16 @@ final class LibraryModel {
             let previousStates = Dictionary(uniqueKeysWithValues: captureJobs
                 .map { ($0.id, $0.state) })
             let refreshedJobs = try await store.captureJobs()
-            let updated = try await store.documents()
+            let sequence = try await store.libraryChangeSequence()
             if let completed = refreshedJobs.first(where: {
                 $0.state == .ready && previousStates[$0.id] != .ready && $0.noteID != nil
             }), let noteID = completed.noteID {
-                captureNotice = CaptureNotice(
+                captureNotice = try await CaptureNotice(
                     id: completed.id,
                     noteID: noteID,
                     title: completed.progress.hasPrefix("Already captured")
                         ? "Already in Sink" : "Saved to Sink",
-                    noteName: updated.first(where: { $0.id == noteID })?.name ?? completed.request
-                        .label
+                    noteName: store.document(id: noteID)?.name ?? completed.request.label
                 )
             }
             if let failure = refreshedJobs.first(where: {
@@ -295,8 +308,8 @@ final class LibraryModel {
                 }
             }
             captureJobs = refreshedJobs
-            if updated != documents {
-                documents = updated
+            if sequence != documentChangeSequence {
+                try await refreshDocumentGrid()
                 try await applyStatistics(store.statistics())
                 clearResults()
                 await graph.refresh()
@@ -344,13 +357,22 @@ final class LibraryModel {
 
     @discardableResult
     func remove(_ id: UUID) async -> Bool {
-        guard canDeleteNotes,
-              let document = documents.first(where: { $0.id == id }) else { return false }
+        guard canDeleteNotes else { return false }
         busy = true
         error = nil
         defer { busy = false }
         do {
-            _ = try await store.permanentlyRemove(document)
+            guard let document = try await store.document(id: id) else { return false }
+            let removedJobs = try await store.permanentlyRemove(document)
+            if captureNotice?.noteID == id {
+                captureNotice = nil
+            }
+            if let job = browserJob, removedJobs.contains(job.id) {
+                browserJob = nil
+            }
+            if let job = audioJob, removedJobs.contains(job.id) {
+                audioJob = nil
+            }
             try await refreshAfterMutation()
             captureJobs = try await store.captureJobs()
             needsArtifactCleanup = true

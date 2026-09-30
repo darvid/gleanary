@@ -9,6 +9,7 @@ struct HTMLAnalysis: Sendable {
     let published: String?
     let identifier: String?
     let pdfURL: URL?
+    let faviconURL: URL?
     let academic: Bool
     let warnings: [String]
 }
@@ -92,6 +93,11 @@ enum HTMLExtractor {
         let fallbackAuthors = try values("author")
         let published = try values("citation_publication_date").first ?? values("date").first
         let identifier = try values("citation_doi").first ?? values("citation_arxiv_id").first
+        let faviconURL = try document.select("link[rel]").array().first { link in
+            try link.attr("rel").lowercased().split(whereSeparator: \.isWhitespace).contains("icon")
+        }.flatMap { link in
+            try URL(string: link.attr("href"), relativeTo: url)?.absoluteURL
+        }
         try sanitize(document, url: url)
         return try HTMLAnalysis(
             sanitizedHTML: document.outerHtml(),
@@ -100,6 +106,7 @@ enum HTMLExtractor {
             published: published,
             identifier: identifier,
             pdfURL: unique.count == 1 ? unique.first : nil,
+            faviconURL: faviconURL,
             academic: academic,
             warnings: warnings
         )

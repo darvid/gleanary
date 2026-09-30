@@ -176,7 +176,8 @@ extension DocumentStore {
     func publishCapture(
         _ job: CaptureJob,
         document: CapturedDocument,
-        artifacts: [Artifact]
+        artifacts: [Artifact],
+        favicon: StoredFavicon? = nil
     ) throws -> UUID {
         var document = document
         try document.validate()
@@ -237,6 +238,14 @@ extension DocumentStore {
                 try Self.replacePassages(note, in: db)
                 try Self.refreshGraphLinks(in: db)
             }
+            try db.execute(sql: """
+            UPDATE notes SET sourceURL = coalesce(sourceURL, ?),
+                faviconURL = coalesce(?, faviconURL), faviconData = coalesce(?, faviconData),
+                faviconCheckedAt = coalesce(faviconCheckedAt, ?)
+            WHERE id = ?
+            """, arguments: [document.sourceURL?.absoluteString ?? job.request.url?.absoluteString,
+                             favicon?.url.absoluteString, favicon?.data,
+                             favicon == nil ? nil : now, noteID.uuidString])
             try db.execute(
                 sql: "UPDATE ingestion_jobs SET state = 'ready', noteID = ?, error = NULL, progress = ?, updatedAt = ? WHERE id = ?",
                 arguments: [

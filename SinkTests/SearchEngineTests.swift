@@ -675,7 +675,7 @@ private actor PausedEmbedder: EmbeddingProviding {
         title: "Already in Sink",
         noteName: "Existing note"
     ))
-    #expect(library.documents.count == 1)
+    #expect(library.documentCount == 1)
 }
 
 @Test @MainActor func deletingNoteClearsResultsAndSurvivesRestart() async throws {
@@ -699,7 +699,7 @@ private actor PausedEmbedder: EmbeddingProviding {
     library.summary = "Synthetic summary to clear."
     #expect(await library.remove(note.id))
     await library.indexingTask?.value
-    #expect(library.documents.isEmpty)
+    #expect(library.documentCount == 0)
     #expect(library.matches.isEmpty)
     #expect(library.selectedMatch == nil)
     #expect(library.summary.isEmpty)
@@ -742,7 +742,7 @@ private actor PausedEmbedder: EmbeddingProviding {
         name: "new.md",
         markdown: "Synthetic notebook content."
     )))
-    #expect(library.documents.count == 4)
+    #expect(library.documentCount == 4)
     await provider.release()
     await library.indexingTask?.value
     #expect(!library.indexing)
@@ -754,7 +754,8 @@ private actor PausedEmbedder: EmbeddingProviding {
     )
     await restored.load()
     await restored.indexingTask?.value
-    #expect(restored.documents == library.documents)
+    #expect(restored.documentCount == library.documentCount)
+    #expect(restored.documentGrid.document(at: 0) == library.documentGrid.document(at: 0))
     await library.graph.extractionTask?.value
     await library.graph.layoutTask?.value
     await restored.graph.extractionTask?.value

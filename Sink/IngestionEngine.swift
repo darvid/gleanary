@@ -105,6 +105,7 @@ actor IngestionEngine {
         var acquired = try await acquireOriginals(job, changed: changed)
         guard let primary = acquired.first else { throw CaptureError.missingArtifact }
         var document: CapturedDocument
+        var faviconURL: URL?
         switch primary.kind {
         case .capture:
             document = try await JSONDecoder().decode(
@@ -134,6 +135,7 @@ actor IngestionEngine {
                 primary,
                 job: job,
                 acquired: &acquired,
+                faviconURL: &faviconURL,
                 changed: changed
             )
         case .text, .markdown:
@@ -156,7 +158,17 @@ actor IngestionEngine {
         }
         try Task.checkCancellation()
         try document.validate()
-        return try await store.publishCapture(job, document: document, artifacts: acquired)
+        let favicon = await FaviconLoader(fetcher: fetcher).load(
+            source: primary.sourceURL ?? document.sourceURL ?? job.request.url,
+            preferred: faviconURL
+        )
+        try Task.checkCancellation()
+        return try await store.publishCapture(
+            job,
+            document: document,
+            artifacts: acquired,
+            favicon: favicon
+        )
     }
 
     private func acquireOriginals(
@@ -177,11 +189,13 @@ actor IngestionEngine {
 
     private func extractHTML(
         _ primary: Artifact, job: CaptureJob, acquired: inout [Artifact],
+        faviconURL: inout URL?,
         changed: @escaping @Sendable () async -> Void
     ) async throws -> CapturedDocument {
         let data = try await artifacts.data(for: primary)
         let html = try Self.decodeText(data, encoding: primary.textEncoding, html: true)
         let analysis = try HTMLExtractor.analyze(html, url: primary.sourceURL)
+        faviconURL = analysis.faviconURL
         guard let pdfURL = analysis.pdfURL else {
             return try await HTMLExtractor.extract(analysis, url: primary.sourceURL)
         }

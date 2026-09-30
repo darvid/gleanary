@@ -21,6 +21,7 @@ private struct CaptureFixture {
 private actor FixtureFetcher: SourceFetching {
     var responses: [String: DownloadedContent] = [:]
     var calls = 0
+    var requestedURLs: [URL] = []
     func set(_ url: URL, data: Data, mime: String, finalURL: URL? = nil) {
         responses[url.absoluteString] = DownloadedContent(
             data: data,
@@ -32,6 +33,7 @@ private actor FixtureFetcher: SourceFetching {
 
     func fetch(_ url: URL) throws -> DownloadedContent {
         calls += 1
+        requestedURLs.append(url)
         guard let response = responses[url.absoluteString] else { throw CaptureError.http(403) }
         return response
     }
@@ -407,7 +409,8 @@ struct CaptureTests {
         try await reopened.recoverCaptureJobs()
         let resumed = IngestionEngine(store: reopened, fetcher: fetcher)
         try await resumed.run()
-        #expect(await fetcher.calls == 0)
+        // Optional icon acquisition must not redownload the retained article.
+        #expect(await fetcher.requestedURLs == [URL(string: "https://fixture.example/favicon.ico")])
         #expect(try await reopened.documents().count == 1)
     }
 
