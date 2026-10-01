@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 private enum LibraryViewMode: String, CaseIterable {
-    case documents = "Documents"
+    case documents = "Library"
     case graph = "Graph"
     case mindMap = "Mind Map"
 }
