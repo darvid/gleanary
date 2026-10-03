@@ -177,11 +177,16 @@ extension DocumentStore {
         _ job: CaptureJob,
         document: CapturedDocument,
         artifacts: [Artifact],
-        favicon: StoredFavicon? = nil
+        favicon: StoredFavicon? = nil,
+        summary: String? = nil
     ) throws -> UUID {
         var document = document
         try document.validate()
         let fingerprint = try document.fingerprint
+        let markdown = summary ?? document.markdown
+        guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              markdown.utf8.count <= CaptureLimits.markdownBytes
+        else { throw CaptureError.noContent }
         return try readyDatabase().write { db in
             try Self.requireActive(job, in: db)
             let sourceID = try String.fetchOne(
@@ -214,7 +219,7 @@ extension DocumentStore {
             } else {
                 let captureID = UUID()
                 let note = try Self.writeNote(
-                    MarkdownDocument(name: document.title, markdown: document.markdown),
+                    MarkdownDocument(name: document.title, markdown: markdown),
                     in: db
                 )
                 noteID = note.id
@@ -224,7 +229,7 @@ extension DocumentStore {
                 INSERT INTO captures(id, sourceID, noteID, fingerprint, markdownHash, extractorVersion, document, artifacts, createdAt)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, arguments: [captureID.uuidString, sourceID, noteID.uuidString, fingerprint,
-                                 ContentHash.of(document.markdown),
+                                 ContentHash.of(markdown),
                                  CapturedDocument.extractorVersion,
                                  JSONEncoder().encode(metadata),
                                  JSONEncoder().encode(artifacts),
@@ -258,6 +263,81 @@ extension DocumentStore {
                 ]
             )
             return noteID
+        }
+    }
+
+    /// Only untouched link captures can become summary-first notes.
+    func summarySource(for document: MarkdownDocument) throws -> CaptureDetail {
+        let captureID = try readyDatabase().read { db -> UUID in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM notes WHERE id = ?",
+                arguments: [document.id.uuidString]
+            ),
+                row["deletedAt"] as Double? == nil else { throw SinkError.noteDeleted }
+            let current = try Self.document(row)
+            guard current.revision == document.revision else { throw SinkError.editConflict }
+            guard let source: String = row["sourceURL"], !source.isEmpty,
+                  let id = try String.fetchOne(
+                      db,
+                      sql: "SELECT id FROM captures WHERE noteID = ? AND markdownHash = ?",
+                      arguments: [document.id.uuidString, ContentHash.of(document.markdown)]
+                  )
+            else { throw LinkSummaryError.editedCapture }
+            return try Self.uuid(id)
+        }
+        let detail = try captureDetail(id: captureID)
+        guard detail.document.markdown == document.markdown
+        else { throw LinkSummaryError.editedCapture }
+        return detail
+    }
+
+    /// Keep the source, note revision, artifact descriptor, and index updates in one transaction.
+    func publishSummary(
+        _ summary: String,
+        artifact: Artifact,
+        for document: MarkdownDocument,
+        captureID: UUID
+    ) throws -> MarkdownDocument {
+        guard !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              summary.utf8.count <= CaptureLimits.markdownBytes,
+              artifact.kind == .markdown, artifact.hash == ContentHash.of(summary)
+        else { throw LinkSummaryError.failed }
+        try Task.checkCancellation()
+        return try readyDatabase().write { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM notes WHERE id = ?",
+                arguments: [document.id.uuidString]
+            ),
+                row["deletedAt"] as Double? == nil else { throw SinkError.noteDeleted }
+            guard try Self.document(row).revision == document.revision
+            else { throw SinkError.editConflict }
+            guard let capture = try Row.fetchOne(
+                db,
+                sql: "SELECT artifacts FROM captures WHERE id = ? AND noteID = ? AND markdownHash = ?",
+                arguments: [
+                    captureID.uuidString,
+                    document.id.uuidString,
+                    ContentHash.of(document.markdown),
+                ]
+            )
+            else { throw LinkSummaryError.editedCapture }
+            var artifacts = try JSONDecoder().decode([Artifact].self, from: capture["artifacts"])
+            artifacts.append(artifact)
+            try Self.recordArtifact(artifact, in: db)
+            // Update the capture hash first so writeNote indexes original blocks, not AI prose.
+            try db.execute(
+                sql: "UPDATE captures SET markdownHash = ?, artifacts = ? WHERE id = ?",
+                arguments: [
+                    ContentHash.of(summary),
+                    JSONEncoder().encode(artifacts),
+                    captureID.uuidString,
+                ]
+            )
+            var updated = document
+            updated.markdown = summary
+            return try Self.writeNote(updated, in: db)
         }
     }
 

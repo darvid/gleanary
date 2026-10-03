@@ -7,13 +7,15 @@ struct DocumentGridView: View {
     let openNote: (UUID) -> Void
     var deleteNote: (UUID) -> Void = { _ in }
     var canDeleteNotes = false
+    var selectsOnOpen = false
 
     var body: some View {
         DocumentCollection(
             model: model,
             openNote: openNote,
             deleteNote: deleteNote,
-            canDeleteNotes: canDeleteNotes
+            canDeleteNotes: canDeleteNotes,
+            selectsOnOpen: selectsOnOpen
         )
         .onDisappear { model.pause() }
         .overlay {
@@ -50,6 +52,7 @@ private struct DocumentCollection: NSViewRepresentable {
     let openNote: (UUID) -> Void
     let deleteNote: (UUID) -> Void
     let canDeleteNotes: Bool
+    let selectsOnOpen: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -65,6 +68,7 @@ private struct DocumentCollection: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
         let collection = ResponsiveDocumentCollection()
+        collection.selectsOnOpen = selectsOnOpen
         let layout = NSCollectionViewFlowLayout()
         layout.minimumInteritemSpacing = 8
         layout.minimumLineSpacing = 8
@@ -95,6 +99,7 @@ private struct DocumentCollection: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         let coordinator = context.coordinator
+        coordinator.collection?.selectsOnOpen = selectsOnOpen
         coordinator.openNote = openNote
         coordinator.deleteNote = deleteNote
         let deletionChanged = coordinator.canDeleteNotes != canDeleteNotes
@@ -187,11 +192,23 @@ private struct DocumentCollection: NSViewRepresentable {
             let document = model.document(at: index)
             tile.configure(document, canDelete: canDeleteNotes, action: { [weak self] in
                 guard let document else { return }
+                if self?.collection?.selectsOnOpen == true {
+                    self?.collection?.selectionIndexPaths = [IndexPath(item: index, section: 0)]
+                }
                 self?.openNote(document.id)
             }, delete: { [weak self] in
                 guard let self, canDeleteNotes, let document else { return }
                 deleteNote(document.id)
             })
+        }
+
+        func collectionView(
+            _: NSCollectionView,
+            didSelectItemsAt paths: Set<IndexPath>
+        ) {
+            if let path = paths.first {
+                open(path.item)
+            }
         }
 
         func open(_ index: Int) {
@@ -216,6 +233,7 @@ private final class ResponsiveDocumentCollection: NSCollectionView {
     var activate: ((Int) -> Void)?
     var deleteSelected: ((Int) -> Void)?
     var viewportChanged: (() -> Void)?
+    var selectsOnOpen = false
 
     override func layout() {
         if let flow = collectionViewLayout as? NSCollectionViewFlowLayout {

@@ -146,7 +146,12 @@ struct MediaCaptureTests {
         let fixture = try MediaFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
         let provider = MediaProviderFixture(), fetcher = MediaFetchFixture()
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher, youtube: provider)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            youtube: provider,
+            summarizer: FixtureLinkSummarizer()
+        )
         _ = try await engine.enqueue(Self.video); try await engine.run()
         let snapshot = try await fixture.store.searchSnapshot(
             query: "cobaltbeacon",
@@ -158,7 +163,7 @@ struct MediaCaptureTests {
         #expect(match.citation?.url?.query?.contains("t=65") == true)
         let detail = try await fixture.store.captureDetail(id: #require(match.citation?.captureID))
         #expect(detail.document.coverage == .transcript)
-        #expect(detail.artifacts.map(\.kind) == [.capture, .json])
+        #expect(detail.artifacts.map(\.kind) == [.capture, .json, .markdown])
         #expect(detail.document.markdown.contains("1:05"))
         _ = try await engine.enqueue("https://youtu.be/abcdefghijk?t=65"); try await engine.run()
         #expect(try await fixture.store.documents().count == 1)
@@ -180,7 +185,8 @@ struct MediaCaptureTests {
             store: fixture.store,
             fetcher: fetcher,
             youtube: provider,
-            transcriber: speech
+            transcriber: speech,
+            summarizer: FixtureLinkSummarizer()
         )
         _ = try await engine.enqueue(Self.video); try await engine.run()
         var job = try #require(await fixture.store.captureJobs().first)
@@ -265,7 +271,8 @@ struct MediaCaptureTests {
         let engine = IngestionEngine(
             store: fixture.store,
             fetcher: MediaFetchFixture(),
-            youtube: MediaProviderFixture()
+            youtube: MediaProviderFixture(),
+            summarizer: FixtureLinkSummarizer()
         )
         _ = try await engine.enqueue(Self.reddit); try await engine.run()
         let job = try #require(await fixture.store.captureJobs().first)
@@ -299,7 +306,11 @@ struct MediaCaptureTests {
         try await engine.submitBrowserCapture(snapshot, job: job)
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open(seed: [])
-        let resumed = IngestionEngine(store: reopened, fetcher: MediaFetchFixture())
+        let resumed = IngestionEngine(
+            store: reopened,
+            fetcher: MediaFetchFixture(),
+            summarizer: FixtureLinkSummarizer()
+        )
         try await resumed.run()
         #expect(try await reopened.documents().count == 1)
         await #expect(throws: CaptureError.self) { try await engine.submitBrowserCapture(
