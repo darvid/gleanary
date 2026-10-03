@@ -127,6 +127,16 @@ extension DocumentStore {
         return referenced
     }
 
+    /// Cleanup rechecks shared references before deleting a content-addressed file.
+    func queueArtifactCleanup(_ artifact: Artifact) throws {
+        try readyDatabase().write { db in
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO artifact_deletions(hash) VALUES (?)",
+                arguments: [artifact.hash]
+            )
+        }
+    }
+
     func hasPendingArtifactDeletions() throws -> Bool {
         try readyDatabase().read { db in
             try Bool.fetchOne(db, sql: "SELECT EXISTS(SELECT 1 FROM artifact_deletions)") ?? false

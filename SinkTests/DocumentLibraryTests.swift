@@ -395,7 +395,14 @@ struct DocumentLibraryTests {
             "The collected papers",
         ]
         _ = try await fixture.store.open(seed: (0 ..< 150).map {
-            MarkdownDocument(name: titles[$0 % titles.count], markdown: "Synthetic document body.")
+            MarkdownDocument(name: titles[$0 % titles.count], markdown: """
+            Local-first tools keep your work available offline.
+
+            ## Key takeaways
+
+            - Keep a local copy of your sources.
+            - Use **plain language** to make saved knowledge easy to recall.
+            """)
         }, loadDocuments: false)
         let library = LibraryModel(store: fixture.store)
         library.ready = true
@@ -415,12 +422,20 @@ struct DocumentLibraryTests {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
-        #expect(Self.descendant(NSCollectionView.self, in: host) != nil)
+        let collection = try #require(Self.descendant(NSCollectionView.self, in: host))
+        try Self.expectMultipleColumns(in: collection)
+        let item = try #require(collection.item(at: IndexPath(item: 0, section: 0)))
+        let button = try #require(Self.button("open-document", in: item.view))
+        button.performClick(nil)
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        #expect(collection.selectionIndexPaths == [IndexPath(item: 0, section: 0)])
         try Self.screenshot(host, name: "sink-library-wide")
         window.setContentSize(NSSize(width: 900, height: 600))
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
+        try Self.expectMultipleColumns(in: collection)
         try Self.screenshot(host, name: "sink-library-narrow")
     }
 
@@ -537,6 +552,17 @@ struct DocumentLibraryTests {
         await model.waitForPages()
         #expect(model.generation > generation)
         #expect(model.total == 99)
+    }
+
+    @MainActor private static func expectMultipleColumns(in collection: NSCollectionView) throws {
+        let layout = try #require(collection.collectionViewLayout)
+        let first = try #require(layout.layoutAttributesForItem(at: IndexPath(item: 0, section: 0)))
+        let second = try #require(layout.layoutAttributesForItem(at: IndexPath(
+            item: 1,
+            section: 0
+        )))
+        #expect(first.frame.minY == second.frame.minY)
+        #expect(second.frame.minX > first.frame.minX)
     }
 
     @MainActor private static func button(_ identifier: String, in view: NSView) -> NSButton? {

@@ -11,6 +11,7 @@ struct ContentView: View {
     @Bindable var library: LibraryModel
     @State private var importing = false
     @State private var preview: MarkdownDocument?
+    @State private var documentPreview = DocumentPreviewModel()
     @State private var source: SourceCitation?
     @State private var searchDetails = false
     @State private var viewMode: LibraryViewMode = .documents
@@ -24,12 +25,30 @@ struct ContentView: View {
         VStack(spacing: 0) {
             libraryHeader
             if viewMode == .documents {
-                DocumentGridView(
-                    model: library.documentGrid,
-                    openNote: openNote,
-                    deleteNote: deleteNote,
-                    canDeleteNotes: library.canDeleteNotes
-                )
+                HSplitView {
+                    DocumentGridView(
+                        model: library.documentGrid,
+                        openNote: openNote,
+                        deleteNote: deleteNote,
+                        canDeleteNotes: library.canDeleteNotes,
+                        selectsOnOpen: true
+                    )
+                    .frame(minWidth: 440, idealWidth: 600, maxWidth: .infinity)
+                    DocumentPreview(
+                        model: documentPreview,
+                        openSource: { source = $0 },
+                        summaryEnabled: library.canGenerateSummaries,
+                        generatingSummary: library.generatingSummaryID != nil,
+                        generateSummary: { library.generateSummary(for: $0) },
+                        cancelSummary: library.cancelSummary
+                    )
+                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .task(
+                    id: "\(documentPreview.selectedID?.uuidString ?? "none")/\(library.documentGrid.generation)"
+                ) {
+                    await library.loadPreview(documentPreview)
+                }
             } else {
                 knowledgeCanvas
             }
@@ -230,7 +249,15 @@ struct ContentView: View {
     }
 
     private func openNote(_ id: UUID) {
-        Task { preview = await library.document(id: id) }
+        if viewMode == .documents {
+            if documentPreview.selectedID == id {
+                Task { await library.loadPreview(documentPreview) }
+            } else {
+                documentPreview.selectedID = id
+            }
+        } else {
+            Task { preview = await library.document(id: id) }
+        }
     }
 
     private func deleteNote(_ id: UUID) {

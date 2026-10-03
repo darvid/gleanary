@@ -7,6 +7,7 @@ actor IngestionEngine {
     let fetcher: any SourceFetching
     let youtube: any YouTubeProviding
     let transcriber: any AudioTranscribing
+    let summarizer: any LinkSummarizing
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -15,12 +16,14 @@ actor IngestionEngine {
         store: DocumentStore,
         fetcher: any SourceFetching = SourceFetcher(),
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
-        transcriber: any AudioTranscribing = LocalTranscriber()
+        transcriber: any AudioTranscribing = LocalTranscriber(),
+        summarizer: any LinkSummarizing = AppleLinkSummarizer()
     ) {
         self.store = store
         self.fetcher = fetcher
         self.youtube = youtube
         self.transcriber = transcriber
+        self.summarizer = summarizer
         artifacts = ArtifactStore(root: store.url.deletingLastPathComponent()
             .appending(path: "artifacts"))
     }
@@ -78,6 +81,8 @@ actor IngestionEngine {
                     error: error.localizedDescription,
                     recovery: error.recovery
                 )
+            } catch let error as LinkSummaryError {
+                try await store.failCapture(job, error: error.localizedDescription)
             } catch let error as CaptureError {
                 try await store.failCapture(job, error: error.localizedDescription)
             } catch {
@@ -95,6 +100,27 @@ actor IngestionEngine {
         try await store.cancelCapture(id)
         if active?.0 == id {
             active?.1.cancel()
+        }
+    }
+
+    func summarizeExisting(_ document: MarkdownDocument) async throws -> MarkdownDocument {
+        let source = try await store.summarySource(for: document)
+        let summary = try await summarizer.summarize(source.document)
+        try Task.checkCancellation()
+        let artifact = try await artifacts.retain(
+            Data(summary.utf8), kind: .markdown, name: "Summary.md",
+            sourceURL: source.document.sourceURL
+        )
+        do {
+            return try await store.publishSummary(
+                summary,
+                artifact: artifact,
+                for: document,
+                captureID: source.id
+            )
+        } catch {
+            try? await store.queueArtifactCleanup(artifact)
+            throw error
         }
     }
 
@@ -158,6 +184,12 @@ actor IngestionEngine {
         }
         try Task.checkCancellation()
         try document.validate()
+        let summary = try await summarize(
+            job,
+            document: document,
+            acquired: &acquired,
+            changed: changed
+        )
         let favicon = await FaviconLoader(fetcher: fetcher).load(
             source: primary.sourceURL ?? document.sourceURL ?? job.request.url,
             preferred: faviconURL
@@ -167,8 +199,46 @@ actor IngestionEngine {
             job,
             document: document,
             artifacts: acquired,
-            favicon: favicon
+            favicon: favicon,
+            summary: summary
         )
+    }
+
+    private func summarize(
+        _ job: CaptureJob,
+        document: CapturedDocument,
+        acquired: inout [Artifact],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws -> String? {
+        guard job.request.url != nil else { return nil }
+        var summary: String?
+        try await store.checkpoint(job, acquired: acquired, progress: "Writing a brief summary")
+        await changed()
+        do {
+            summary = try await summarizer.summarize(document)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as LinkSummaryError {
+            throw error
+        } catch {
+            throw LinkSummaryError.failed
+        }
+        guard let summary, !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              summary.utf8.count <= CaptureLimits.markdownBytes
+        else {
+            throw LinkSummaryError.failed
+        }
+        let artifact = try await artifacts.retain(
+            Data(summary.utf8), kind: .markdown,
+            name: "Summary.md", sourceURL: document.sourceURL ?? job.request.url
+        )
+        acquired.append(artifact)
+        try await store.checkpoint(
+            job,
+            acquired: acquired,
+            progress: "Summary retained locally"
+        )
+        return summary
     }
 
     private func acquireOriginals(

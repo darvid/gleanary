@@ -43,17 +43,20 @@ final class LibraryModel {
     private var indexAgain = false
     private var resultToken = UUID()
     @ObservationIgnored private(set) var indexingTask: Task<Void, Never>?
+    private(set) var generatingSummaryID: UUID?
+    @ObservationIgnored private(set) var summaryTask: Task<Void, Never>?
 
     init(
         store: DocumentStore = DocumentStore(),
         provider: any EmbeddingProviding = AppleEmbeddingProvider(),
-        graphProvider: any GraphExtracting = AppleGraphExtractor()
+        graphProvider: any GraphExtracting = AppleGraphExtractor(),
+        summarizer: any LinkSummarizing = AppleLinkSummarizer()
     ) {
         self.store = store
         documentGrid = DocumentGridModel(store: store)
         graph = KnowledgeGraphModel(store: store, provider: graphProvider)
         engine = SearchEngine(store: store, provider: provider)
-        ingestion = IngestionEngine(store: store)
+        ingestion = IngestionEngine(store: store, summarizer: summarizer)
     }
 
     /// File acquisition must be idle before permanently deleting content-addressed originals.
@@ -163,6 +166,42 @@ final class LibraryModel {
         documentCount = page.total
         documentChangeSequence = page.changeSequence
         await documentGrid.reload()
+    }
+
+    var canGenerateSummaries: Bool {
+        ready && !busy && captureTask == nil
+    }
+
+    func generateSummary(for document: MarkdownDocument) {
+        guard canGenerateSummaries else { return }
+        busy = true
+        error = nil
+        generatingSummaryID = document.id
+        summaryTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await ingestion.summarizeExisting(document)
+                try await refreshAfterMutation()
+            } catch is CancellationError {
+                // The original remains the primary note until publishing succeeds.
+            } catch {
+                self.error = error.localizedDescription
+            }
+            needsArtifactCleanup = await (try? store.hasPendingArtifactDeletions()) ??
+                needsArtifactCleanup
+            busy = false
+            generatingSummaryID = nil
+            summaryTask = nil
+            await cleanDeletedArtifacts()
+        }
+    }
+
+    func cancelSummary() {
+        summaryTask?.cancel()
+    }
+
+    func loadPreview(_ preview: DocumentPreviewModel) async {
+        await preview.load(from: store)
     }
 
     func document(id: UUID) async -> MarkdownDocument? {

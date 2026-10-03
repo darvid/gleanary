@@ -133,7 +133,11 @@ struct CaptureTests {
     @Test func textCaptureIsDurableAndSearchable() async throws {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
-        let engine = IngestionEngine(store: fixture.store, fetcher: FixtureFetcher())
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: FixtureFetcher(),
+            summarizer: FixtureLinkSummarizer()
+        )
         let text = "# Local memory\n\nZebracobalt notes are retained on this computer."
         _ = try await engine.enqueue(text)
         try await engine.run()
@@ -270,7 +274,7 @@ struct CaptureTests {
     @Test func artifactRetentionSurvivesInputRemovalAndRepairsDamage() async throws {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
-        let engine = IngestionEngine(store: fixture.store)
+        let engine = IngestionEngine(store: fixture.store, summarizer: FixtureLinkSummarizer())
         let file = fixture.root.appending(path: "local.md")
         let data = Data("A synthetic document kept for reliable local retrieval.".utf8)
         try data.write(to: file)
@@ -295,7 +299,7 @@ struct CaptureTests {
     @Test func cancellationAndRecoveryRejectStalePublication() async throws {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
-        let engine = IngestionEngine(store: fixture.store)
+        let engine = IngestionEngine(store: fixture.store, summarizer: FixtureLinkSummarizer())
         let id = try await engine.enqueue("A cancelled synthetic capture must never publish.")
         let first = try #require(await fixture.store.claimCapture())
         try await fixture.store.cancelCapture(id)
@@ -358,7 +362,11 @@ struct CaptureTests {
         let fetcher = FixtureFetcher()
         let url = try #require(URL(string: "https://fixture.example/article"))
         await fetcher.set(url, data: Data(Self.article().utf8), mime: "text/html")
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         _ = try await engine.enqueue(url.absoluteString); try await engine.run()
         var edited = try #require(await fixture.store.documents().first)
         let originalID = edited.id
@@ -393,7 +401,11 @@ struct CaptureTests {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
         let fetcher = FixtureFetcher()
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         let url = try #require(URL(string: "https://fixture.example/resume"))
         _ = try await engine.enqueue(url.absoluteString)
         let claimed = try #require(await fixture.store.claimCapture())
@@ -407,7 +419,11 @@ struct CaptureTests {
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open(seed: [])
         try await reopened.recoverCaptureJobs()
-        let resumed = IngestionEngine(store: reopened, fetcher: fetcher)
+        let resumed = IngestionEngine(
+            store: reopened,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         try await resumed.run()
         // Optional icon acquisition must not redownload the retained article.
         #expect(await fetcher.requestedURLs == [URL(string: "https://fixture.example/favicon.ico")])
@@ -425,7 +441,11 @@ struct CaptureTests {
             with: "<meta name='citation_title' content='Synthetic paper'><meta name='citation_pdf_url' content='/full.pdf'><meta name='citation_doi' content='10.0000/synthetic'></head>"
         )
         await fetcher.set(url, data: Data(html.utf8), mime: "text/html")
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         _ = try await engine.enqueue(url.absoluteString); try await engine.run()
         let note = try #require(await fixture.store.documents().first)
         let id = try #require(await fixture.store.captureID(for: note.id))
@@ -433,7 +453,7 @@ struct CaptureTests {
         #expect(detail.document.coverage == .abstractOnly)
         #expect(detail.document.identifier == "10.0000/synthetic")
         #expect(detail.document.warnings.contains { $0.contains("could not be acquired") })
-        #expect(detail.artifacts.count == 1)
+        #expect(detail.artifacts.map(\.kind) == [.html, .markdown])
     }
 
     @Test func academicCaptureRetainsLandingPageAndMainPDF() async throws {
@@ -448,7 +468,11 @@ struct CaptureTests {
         )
         await fetcher.set(url, data: Data(html.utf8), mime: "text/html")
         try await fetcher.set(pdfURL, data: Self.pdfData(), mime: "application/pdf")
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         _ = try await engine.enqueue(url.absoluteString)
         try await engine.run()
         let note = try #require(await fixture.store.documents().first)
@@ -457,7 +481,7 @@ struct CaptureTests {
         #expect(detail.document.coverage == .document)
         #expect(detail.document.title == "Synthetic full paper")
         #expect(detail.document.sourceURL == pdfURL)
-        #expect(detail.artifacts.map(\.kind) == [.html, .pdf])
+        #expect(detail.artifacts.map(\.kind) == [.html, .pdf, .markdown])
         #expect(detail.document.blocks.contains { $0.page == 2 })
     }
 
@@ -465,7 +489,11 @@ struct CaptureTests {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
         let fetcher = FixtureFetcher()
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         await #expect(throws: MediaError.self) {
             try await engine.enqueue("https://www.youtube.com/watch?v=synthetic")
         }
@@ -508,7 +536,7 @@ struct CaptureTests {
         let data = try Self.pdfData()
         let file = fixture.root.appending(path: "synthetic.pdf")
         try data.write(to: file)
-        let engine = IngestionEngine(store: fixture.store)
+        let engine = IngestionEngine(store: fixture.store, summarizer: FixtureLinkSummarizer())
         _ = try await engine.enqueueFile(file)
         try await engine.run()
         let snapshot = try await fixture.store.searchSnapshot(
@@ -569,7 +597,11 @@ struct CaptureTests {
         let fixture = try CaptureFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [])
         let fetcher = HeldFetcher()
-        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let engine = IngestionEngine(
+            store: fixture.store,
+            fetcher: fetcher,
+            summarizer: FixtureLinkSummarizer()
+        )
         let id = try await engine.enqueue("https://fixture.example/retry.txt")
         let runner = Task { try await engine.run() }
         await fetcher.waitUntilHeld()
@@ -592,7 +624,7 @@ struct CaptureTests {
                         sql: "CREATE TRIGGER reject_capture BEFORE INSERT ON content_blocks BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
                     )
             }
-        let engine = IngestionEngine(store: fixture.store)
+        let engine = IngestionEngine(store: fixture.store, summarizer: FixtureLinkSummarizer())
         _ = try await engine
             .enqueue("A synthetic transaction failure must not leave a half-published note.")
         try await engine.run()
