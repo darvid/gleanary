@@ -433,7 +433,10 @@ struct ConversationPlan: Codable, Sendable {
         first, especially when categoryCode is empty; leave it empty when nothing else fits.
         An explicit user choice of an existing home takes precedence over your topic suggestion.
         requestedHome copies the destination the user explicitly asked for (a code or name),
-        exactly as written, even if it isn't supplied; leave it empty when they named none.
+        exactly as written, even if it isn't supplied. If the user asks to refile or find a
+        better or more specific home without naming one, and only broad or unrelated supplied
+        categories remain, set requestedHome to a concise specific name for the subject instead
+        of settling for a broad parent. Otherwise leave it empty.
         requestedHomeMatch: the supplied code that means the same home as requestedHome (same
         subject under a synonym, abbreviation, plural or different wording), else empty. Reuse an
         equivalent home; never create a duplicate of an existing category.

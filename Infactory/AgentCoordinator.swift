@@ -488,14 +488,21 @@ actor AgentCoordinator {
     ) async throws {
         guard !references.isEmpty else { try await askForTargets(taskID: taskID); return }
         let categories = try await store.categories()
-        let suggestion = step.categoryID.isEmpty
-            ? try await suggestedFiling(taskID: taskID, ids: references, request: request) : nil
+        // The planner only routes the request; the classifier reads the items and the taxonomy,
+        // so its decision and rationale win. The planner's choice is the fallback without a model.
+        let suggestion = try await suggestedFiling(
+            taskID: taskID,
+            ids: references,
+            request: request
+        )
+        let rationale = suggestion.map(\.rationale).flatMap { $0.isEmpty ? nil : $0 }
+            ?? step.argument
         if let created = suggestion?.newCategory {
             for id in references {
                 _ = try await store.proposeFiling(
                     noteID: id,
                     category: created,
-                    rationale: suggestion?.rationale ?? step.argument,
+                    rationale: rationale,
                     taskID: taskID,
                     creating: true
                 )
@@ -526,7 +533,7 @@ actor AgentCoordinator {
             _ = try await store.proposeFiling(
                 noteID: id,
                 category: destination,
-                rationale: step.argument,
+                rationale: rationale,
                 taskID: taskID
             )
         }

@@ -449,7 +449,7 @@ extension ConversationPlan {
                 .init(name: "rationale", schema: .init(type: String.self)),
                 .init(
                     name: "requestedHome",
-                    description: "The destination the user explicitly named, verbatim, or empty.",
+                    description: "The destination the user named, verbatim; or a specific new home when they asked for a better one and none fits; else empty.",
                     schema: .init(type: String.self)
                 ),
                 .init(
