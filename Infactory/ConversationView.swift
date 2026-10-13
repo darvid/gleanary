@@ -281,20 +281,24 @@ struct ConversationView: View {
                 Text(proposal.rationale).font(.callout).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // macOS convention: secondary action leading, decision buttons trailing, primary last.
             HStack {
                 if proposal.status == "pending" {
                     Button("Review document") {
                         open(proposal.filing == nil ? proposal.right : proposal.left)
                     }
+                    Spacer()
+                    Button("Reject") { Task { await model.review(proposal, action: "reject") } }
                     Button(proposal.filing == nil ? "Apply link" : "Apply filing") {
                         Task { await model.review(
                             proposal,
                             action: "apply"
                         ) }
-                    }
-                    Button("Reject") { Task { await model.review(proposal, action: "reject") } }
+                    }.buttonStyle(.borderedProminent)
                 } else {
                     Text(proposal.status.capitalized).font(.callout)
+                        .foregroundStyle(Color.primary.opacity(0.72))
+                    Spacer()
                     if proposal.status == "applied" {
                         Button(proposal.filing == nil ? "Undo link" : "Undo filing") {
                             Task { await model.review(
@@ -305,7 +309,9 @@ struct ConversationView: View {
                     }
                 }
             }.controlSize(.small)
-        }.padding(14).background(
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14).background(
             Color(nsColor: .controlBackgroundColor),
             in: RoundedRectangle(cornerRadius: 12)
         )
@@ -353,7 +359,8 @@ struct ConversationView: View {
             }
             if let task = model.activeTask {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.mini)
+                    // The mini spinner's glyph sits ~0.5pt above the caption's lowercase centre.
+                    ProgressView().controlSize(.mini).offset(y: 0.5)
                     Text(task.progress.isEmpty ? "Working…" : task.progress)
                         .font(.caption).foregroundStyle(.secondary)
                 }
