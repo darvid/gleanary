@@ -47,7 +47,27 @@ extension IngestionEngine {
             await changed()
             return try await transcribeAudio(target, job: job, acquired: acquired, changed: changed)
         }
-        let transcript = try await youtube.transcript(for: target)
+        let transcript: VideoTranscript
+        do { transcript = try await youtube.transcript(for: target) }
+        catch {
+            try Task.checkCancellation()
+            guard job.request.summarizeLink == false else { throw error }
+            // A user-requested chat capture can retain a known video identity without inventing
+            // content.
+            return try await retainSnapshot(CapturedDocument(
+                title: "YouTube · \(target.id)", identifier: target.id, sourceURL: target.url,
+                coverage: .partial,
+                warnings: [
+                    "No authorized transcript was available. Only the source link is saved.",
+                ],
+                blocks: [ContentBlock(
+                    kind: .paragraph,
+                    markdown: "Source: \(target.url.absoluteString)\n\nTranscript unavailable.",
+                    text: "Source: \(target.url.absoluteString). Transcript unavailable.",
+                    method: "metadata-only"
+                )]
+            ), originals: [])
+        }
         let raw = try await artifacts.retain(
             JSONEncoder().encode(transcript),
             kind: .json,

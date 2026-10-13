@@ -163,7 +163,10 @@ enum HTMLExtractor {
             published: analysis.published,
             identifier: analysis.identifier,
             sourceURL: url,
-            coverage: analysis.academic ? .abstractOnly : .article,
+            coverage: analysis.academic ? .abstractOnly :
+                (result.blocks
+                    .contains { $0.method == "html-main" || $0.method == "html-body" } ? .partial :
+                    .article),
             warnings: analysis.warnings + result
                 .warnings +
                 (analysis
@@ -244,7 +247,8 @@ private struct ArticleDOMResult: Decodable, Sendable {
                 guard json.utf8.count <= CaptureLimits.markdownBytes
                 else { throw CaptureError.tooLarge }
                 finish(.success(json))
-            } catch { finish(.failure(CaptureError.extractionFailed)) }
+            } catch let error as CaptureError { finish(.failure(error)) }
+            catch { finish(.failure(CaptureError.extractionFailed)) }
         }
     }
 
