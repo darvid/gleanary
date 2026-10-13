@@ -13,6 +13,10 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
     var coverage: String?
 
     var kindLabel: String {
+        Self.kindLabel(for: kind)
+    }
+
+    static func kindLabel(for kind: String) -> String {
         switch kind {
         case "source": "Source"
         case "summary": "Summary"
@@ -74,6 +78,53 @@ extension DocumentStore {
                     coverage: row["coverage"]
                 )
             }, total: total, changeSequence: Self.libraryChangeSequence(in: db))
+        }
+    }
+
+    /// Every live item with its filing memberships, for the Knowledge Atlas. Bodies stay unread.
+    func atlasSnapshot() throws -> AtlasSnapshot {
+        try readyDatabase().read { db in
+            var memberships: [String: [UUID]] = [:]
+            for row in try Row.fetchAll(db, sql: """
+            SELECT nc.noteID, nc.categoryID FROM note_categories nc
+            JOIN decimal_categories c ON c.id = nc.categoryID
+            ORDER BY nc.noteID, nc.isPrimary DESC, c.code
+            """) {
+                try memberships[row["noteID"], default: []].append(Self.uuid(row["categoryID"]))
+            }
+            let items = try Row.fetchAll(db, sql: """
+            SELECT n.id, n.name, n.sourceURL, n.updatedAt, \(Self.libraryKindSQL) AS kind
+            FROM notes n WHERE n.deletedAt IS NULL
+            """).map { row in
+                let id: String = row["id"]
+                let source: String? = row["sourceURL"]
+                return try AtlasItem(
+                    id: Self.uuid(id), title: row["name"], kind: row["kind"],
+                    host: source.flatMap(URL.init(string:))?.host(),
+                    updatedAt: Date(timeIntervalSince1970: row["updatedAt"]),
+                    categoryIDs: memberships[id] ?? []
+                )
+            }
+            let categories = try Row.fetchAll(
+                db,
+                sql: "SELECT id, code, name FROM decimal_categories ORDER BY code"
+            )
+            .map {
+                try DecimalCategory(id: Self.uuid($0["id"]), code: $0["code"], name: $0["name"])
+            }
+            return AtlasSnapshot(categories: categories, items: items)
+        }
+    }
+
+    /// IDs of every live item matching the Library's full-text search, without pagination.
+    func libraryMatches(query: String) throws -> Set<UUID> {
+        try readyDatabase().read { db in
+            let filter = Self.libraryFilter(query, scope: .all)
+            return try Set(String.fetchAll(
+                db,
+                sql: "SELECT n.id FROM notes n WHERE \(filter.sql)",
+                arguments: filter.arguments
+            ).map(Self.uuid))
         }
     }
 
