@@ -140,6 +140,7 @@ final class ConversationModel {
             let context = capturing ? [] : retry?
                 .sources ??
                 (selectedSources.isEmpty ? Array(lastSources.prefix(4)) : selectedSources)
+            let userSelected = !capturing && retry == nil && !selectedSources.isEmpty
             let id = try await store.beginConversation(
                 request,
                 owner: route.roles[0],
@@ -159,6 +160,7 @@ final class ConversationModel {
                         taskID: id,
                         request: request,
                         selected: context,
+                        userSelected: userSelected,
                         existingCaptureID: captureID ?? retry?
                             .captureID
                     ) { [weak self] in

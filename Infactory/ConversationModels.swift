@@ -407,7 +407,8 @@ struct ConversationPlan: Codable, Sendable {
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.
-    If records is empty, targets MUST be empty. Chat, filingScheme, review, unsupported and clarify
+    For file with more than one record, list exactly the intended targets; if you can't tell
+    which one the user means, use clarify. If records is empty, targets MUST be empty. Chat, filingScheme, review, unsupported and clarify
     have empty targets and empty categoryCode. Never repeat a target index or add an unrelated step.
     The records array contains ONLY selected/follow-up records, NOT the entire library. An empty
     records array does not mean the library is empty. Search needs a query, not preselected records.
@@ -432,7 +433,10 @@ struct ConversationPlan: Codable, Sendable {
         first, especially when categoryCode is empty; leave it empty when nothing else fits.
         An explicit user choice of an existing home takes precedence over your topic suggestion.
         requestedHome copies the destination the user explicitly asked for (a code or name),
-        exactly as written, even if it isn't supplied; leave it empty when they named none.
+        exactly as written, even if it isn't supplied. If the user asks to refile or find a
+        better or more specific home without naming one, and only broad or unrelated supplied
+        categories remain, set requestedHome to a concise specific name for the subject instead
+        of settling for a broad parent. Otherwise leave it empty.
         requestedHomeMatch: the supplied code that means the same home as requestedHome (same
         subject under a synonym, abbreviation, plural or different wording), else empty. Reuse an
         equivalent home; never create a duplicate of an existing category.

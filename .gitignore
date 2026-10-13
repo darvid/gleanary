@@ -6,3 +6,4 @@ xcuserdata/
 .env
 .env.*
 .superset/config.local.json
+mise.local.toml

@@ -41,7 +41,11 @@ plutil -replace CFBundleShortVersionString -string 0.1 "$plist"
 plutil -replace LSMinimumSystemVersion -string 26.0 "$plist"
 plutil -replace NSHighResolutionCapable -bool YES "$plist"
 
-codesign --force --sign - --entitlements Infactory/Infactory.entitlements "$stage/Infactory.app"
+# Ad hoc by default. Ad hoc signatures change every build, so macOS treats each build as a new
+# app and asks for Keychain access again. Set CODESIGN_IDENTITY (e.g. in mise.local.toml) to a
+# local signing certificate to keep a stable identity across rebuilds.
+codesign --force --sign "${CODESIGN_IDENTITY:--}" \
+    --entitlements Infactory/Infactory.entitlements "$stage/Infactory.app"
 codesign --verify --strict "$stage/Infactory.app"
 
 # Replace only the generated bundle; the sandboxed library is untouched.

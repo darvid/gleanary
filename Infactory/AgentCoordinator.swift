@@ -20,10 +20,13 @@ actor AgentCoordinator {
 
     /// One validated intent plan, at most four capability steps, no recursive model/tool loop.
     /// Models select capabilities; application code owns persistence and review permissions.
+    /// `userSelected` is true when the user picked `selected` themselves, rather than it being
+    /// inferred from the last agent message.
     func execute(
         taskID: UUID,
         request: String,
         selected: [UUID],
+        userSelected: Bool = false,
         existingCaptureID: UUID? = nil,
         changed: @escaping @Sendable () async -> Void
     ) async throws {
@@ -66,6 +69,14 @@ actor AgentCoordinator {
                 } else if step.action == .file, index > 0, plan.steps[index - 1].action == .search {
                     // "File my X under Y" files the best match, not every search hit.
                     references = Array(references.prefix(1))
+                }
+                // Follow-up context can hold several items (e.g. a capture and a related document).
+                // Filing them all on an unnamed "this" would guess, so ask which one instead.
+                if step.action == .file, step.targets.isEmpty, !userSelected,
+                   references == selected, references.count > 1
+                {
+                    try await askWhichToFile(taskID: taskID, candidates: references)
+                    continue
                 }
                 try await dispatch(
                     step,
@@ -380,6 +391,19 @@ actor AgentCoordinator {
         )
     }
 
+    private func askWhichToFile(taskID: UUID, candidates: [UUID]) async throws {
+        var titles: [String] = []
+        for id in candidates {
+            try await titles.append("“" + (store.document(id: id)?.name ?? "Untitled") + "”")
+        }
+        try await store.postConversation(
+            author: .librarian,
+            text: "Which should I file: \(titles.joined(separator: " or "))? Say which one, or select it with Use as source. Nothing has changed.",
+            references: candidates,
+            taskID: taskID
+        )
+    }
+
     private func askForTargets(taskID: UUID) async throws {
         try await store.postConversation(
             author: .assistant,
@@ -464,14 +488,21 @@ actor AgentCoordinator {
     ) async throws {
         guard !references.isEmpty else { try await askForTargets(taskID: taskID); return }
         let categories = try await store.categories()
-        let suggestion = step.categoryID.isEmpty
-            ? try await suggestedFiling(taskID: taskID, ids: references, request: request) : nil
+        // The planner only routes the request; the classifier reads the items and the taxonomy,
+        // so its decision and rationale win. The planner's choice is the fallback without a model.
+        let suggestion = try await suggestedFiling(
+            taskID: taskID,
+            ids: references,
+            request: request
+        )
+        let rationale = suggestion.map(\.rationale).flatMap { $0.isEmpty ? nil : $0 }
+            ?? step.argument
         if let created = suggestion?.newCategory {
             for id in references {
                 _ = try await store.proposeFiling(
                     noteID: id,
                     category: created,
-                    rationale: suggestion?.rationale ?? step.argument,
+                    rationale: rationale,
                     taskID: taskID,
                     creating: true
                 )
@@ -502,7 +533,7 @@ actor AgentCoordinator {
             _ = try await store.proposeFiling(
                 noteID: id,
                 category: destination,
-                rationale: step.argument,
+                rationale: rationale,
                 taskID: taskID
             )
         }

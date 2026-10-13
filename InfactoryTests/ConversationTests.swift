@@ -496,6 +496,78 @@ private struct NoTranscriptProvider: YouTubeProviding {
         }
     }
 
+    @Test(arguments: [(false, false), (true, false), (false, true)])
+    func filingAmbiguousFollowUpAsksUnlessTargetsAreKnown(
+        userSelected: Bool,
+        modelNamedTarget: Bool
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ids: [UUID] = []
+        for name in ["Captured article", "Related survey"] {
+            try await ids.append(store.save(MarkdownDocument(name: name, markdown: "Agents.")).id)
+        }
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        let request = "move this to agent architectures"
+        let plan = ConversationPlan(steps: [.init(
+            action: .file,
+            targets: modelNamedTarget ? [ids[0]] : [],
+            categoryID: home.id.uuidString
+        )])
+        let task = try await store.beginConversation(request, owner: .librarian, sources: ids)
+        try await AgentCoordinator(
+            store: store,
+            inference: ConversationFixtureInference(intent: plan)
+        )
+        .execute(
+            taskID: task,
+            request: request,
+            selected: ids,
+            userSelected: userSelected,
+            changed: {}
+        )
+        let proposals = try await store.proposals()
+        let reply = try #require(await store.conversationMessages().last)
+        if userSelected {
+            #expect(Set(proposals.map(\.left)) == Set(ids))
+        } else if modelNamedTarget {
+            #expect(proposals.map(\.left) == [ids[0]])
+        } else {
+            #expect(proposals.isEmpty)
+            #expect(reply.author == "librarian")
+            #expect(reply.text
+                .contains("Which should I file: “Captured article” or “Related survey”?"))
+            #expect(reply.references == ids)
+        }
+    }
+
+    @Test func betterHomeRequestProposesSpecificCategoryWithClassifierRationale() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "e2e: The open source AI testing framework",
+            markdown: "A TypeScript framework for testing AI agents end to end."
+        ))
+        let broad = try #require(await store.categories().first { $0.code == "31" })
+        let request = "find a more appropriate category for this"
+        let plan = ConversationPlan(steps: [.init(
+            action: .file,
+            targets: [note.id],
+            argument: "Suggest a more appropriate filing home for this framework.",
+            categoryID: broad.id.uuidString
+        )])
+        let task = try await store.beginConversation(request, owner: .librarian, sources: [note.id])
+        try await AgentCoordinator(store: store, inference: ConversationFixtureInference(
+            intent: plan,
+            classificationCode: nil,
+            requestedHome: "Software Testing",
+            newCategoryCode: "31.05"
+        )).execute(taskID: task, request: request, selected: [note.id], changed: {})
+        let proposal = try #require(await store.proposals().first)
+        #expect(proposal.filing?.newCategory == .init(code: "31.05", name: "Software Testing"))
+        #expect(proposal.rationale == "Fixture rationale.")
+    }
+
     @Test func searchThenFileProposesOnlyTheTopMatch() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1882,6 +1954,20 @@ private struct NoTranscriptProvider: YouTubeProviding {
             author: .librarian,
             text: "Proposed filing under \(home.label). Nothing has moved yet.",
             references: [note.id],
+            taskID: task
+        )
+        let created = DecimalCategory(id: UUID(), code: "31.05", name: "Software Testing")
+        _ = try await store.proposeFiling(
+            noteID: related.id,
+            category: created,
+            rationale: "Synthetic new category review.",
+            taskID: task,
+            creating: true
+        )
+        try await store.postConversation(
+            author: .librarian,
+            text: "Proposed creating \(created.label) and filing there. Nothing has changed yet.",
+            references: [related.id],
             taskID: task
         )
         try await store.updateConversationTask(task, state: "succeeded", progress: "Saved")
