@@ -496,6 +496,51 @@ private struct NoTranscriptProvider: YouTubeProviding {
         }
     }
 
+    @Test(arguments: [(false, false), (true, false), (false, true)])
+    func filingAmbiguousFollowUpAsksUnlessTargetsAreKnown(
+        userSelected: Bool,
+        modelNamedTarget: Bool
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ids: [UUID] = []
+        for name in ["Captured article", "Related survey"] {
+            try await ids.append(store.save(MarkdownDocument(name: name, markdown: "Agents.")).id)
+        }
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        let request = "move this to agent architectures"
+        let plan = ConversationPlan(steps: [.init(
+            action: .file,
+            targets: modelNamedTarget ? [ids[0]] : [],
+            categoryID: home.id.uuidString
+        )])
+        let task = try await store.beginConversation(request, owner: .librarian, sources: ids)
+        try await AgentCoordinator(
+            store: store,
+            inference: ConversationFixtureInference(intent: plan)
+        )
+        .execute(
+            taskID: task,
+            request: request,
+            selected: ids,
+            userSelected: userSelected,
+            changed: {}
+        )
+        let proposals = try await store.proposals()
+        let reply = try #require(await store.conversationMessages().last)
+        if userSelected {
+            #expect(Set(proposals.map(\.left)) == Set(ids))
+        } else if modelNamedTarget {
+            #expect(proposals.map(\.left) == [ids[0]])
+        } else {
+            #expect(proposals.isEmpty)
+            #expect(reply.author == "librarian")
+            #expect(reply.text
+                .contains("Which should I file: “Captured article” or “Related survey”?"))
+            #expect(reply.references == ids)
+        }
+    }
+
     @Test func searchThenFileProposesOnlyTheTopMatch() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }

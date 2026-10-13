@@ -20,10 +20,13 @@ actor AgentCoordinator {
 
     /// One validated intent plan, at most four capability steps, no recursive model/tool loop.
     /// Models select capabilities; application code owns persistence and review permissions.
+    /// `userSelected` is true when the user picked `selected` themselves, rather than it being
+    /// inferred from the last agent message.
     func execute(
         taskID: UUID,
         request: String,
         selected: [UUID],
+        userSelected: Bool = false,
         existingCaptureID: UUID? = nil,
         changed: @escaping @Sendable () async -> Void
     ) async throws {
@@ -66,6 +69,14 @@ actor AgentCoordinator {
                 } else if step.action == .file, index > 0, plan.steps[index - 1].action == .search {
                     // "File my X under Y" files the best match, not every search hit.
                     references = Array(references.prefix(1))
+                }
+                // Follow-up context can hold several items (e.g. a capture and a related document).
+                // Filing them all on an unnamed "this" would guess, so ask which one instead.
+                if step.action == .file, step.targets.isEmpty, !userSelected,
+                   references == selected, references.count > 1
+                {
+                    try await askWhichToFile(taskID: taskID, candidates: references)
+                    continue
                 }
                 try await dispatch(
                     step,
@@ -376,6 +387,19 @@ actor AgentCoordinator {
             author: .curator,
             text: "Review the proposed connection below. Nothing has been linked yet.",
             references: references,
+            taskID: taskID
+        )
+    }
+
+    private func askWhichToFile(taskID: UUID, candidates: [UUID]) async throws {
+        var titles: [String] = []
+        for id in candidates {
+            try await titles.append("“" + (store.document(id: id)?.name ?? "Untitled") + "”")
+        }
+        try await store.postConversation(
+            author: .librarian,
+            text: "Which should I file: \(titles.joined(separator: " or "))? Say which one, or select it with Use as source. Nothing has changed.",
+            references: candidates,
             taskID: taskID
         )
     }

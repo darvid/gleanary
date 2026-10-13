@@ -407,7 +407,8 @@ struct ConversationPlan: Codable, Sendable {
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.
-    If records is empty, targets MUST be empty. Chat, filingScheme, review, unsupported and clarify
+    For file with more than one record, list exactly the intended targets; if you can't tell
+    which one the user means, use clarify. If records is empty, targets MUST be empty. Chat, filingScheme, review, unsupported and clarify
     have empty targets and empty categoryCode. Never repeat a target index or add an unrelated step.
     The records array contains ONLY selected/follow-up records, NOT the entire library. An empty
     records array does not mean the library is empty. Search needs a query, not preselected records.
