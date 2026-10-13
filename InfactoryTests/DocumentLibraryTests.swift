@@ -176,6 +176,7 @@ struct DocumentLibraryTests {
             provider: "synthetic-fixture",
             kind: "summary"
         )
+        try await fixture.store.seedExampleCategories()
         let category = try #require(await fixture.store.categories().first { $0.code == "31.04" })
         try await fixture.store.fileNote(sourceID, categoryID: category.id, includeSources: true)
         let sources = try await fixture.store.documentPage(scope: .sources)
@@ -664,8 +665,9 @@ struct DocumentLibraryTests {
         }
         _ = try await fixture.store.open(seed: notes, loadDocuments: false)
         let latest = try #require(notes.last)
-        let home = try #require(UUID(uuidString: "10000000-0000-0000-0000-000000000004"))
-        try await fixture.store.fileNote(latest.id, categoryID: home)
+        try await fixture.store.seedExampleCategories()
+        let home = try #require(await fixture.store.categories().first { $0.code == "31.04" })
+        try await fixture.store.fileNote(latest.id, categoryID: home.id)
         let library = LibraryModel(store: fixture.store)
         library.ready = true
         await library.documentGrid.reload()

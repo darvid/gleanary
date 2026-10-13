@@ -95,12 +95,16 @@ struct ChatGPTSettings: View {
                 destination: URL(string: "https://chatgpt.com/settings/usage")!
             )
             .font(.callout).padding(.vertical, 16)
-            DisclosureGroup("How AI is used", isExpanded: $showingDetails) {
+            DisclosureGroup(isExpanded: $showingDetails) {
                 Text(
                     "ChatGPT uses your eligible plan, not an API key. Source-grounded research includes a second AI request to check the evidence. Library summaries and graph features use Apple Intelligence. Failed ChatGPT requests never silently switch providers."
                 )
                 .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
+            } label: {
+                // Outside a List, macOS only toggles from the chevron, not the label.
+                Button("How AI is used") { withAnimation { showingDetails.toggle() } }
+                    .buttonStyle(.plain)
             }.font(.callout)
         }
         .confirmationDialog("Use ChatGPT?", isPresented: Binding(

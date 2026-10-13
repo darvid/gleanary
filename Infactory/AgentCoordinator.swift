@@ -130,13 +130,20 @@ actor AgentCoordinator {
         let previouslyUnfiled = try await store.categories(for: noteID).isEmpty
         var filingExplanation = ""
         if previouslyUnfiled {
-            let category = try await suggestedCategory(
+            let suggestion = try await suggestedFiling(
                 taskID: taskID,
                 ids: [noteID],
                 request: route.text
             )
-            if let category {
-                try await store.fileNote(noteID, categoryID: category.id, includeSources: true)
+            if let category = suggestion?.category {
+                // Filed through an applied proposal so the reason and Undo stay on the card.
+                let proposal = try await store.proposeFiling(
+                    noteID: noteID,
+                    category: category,
+                    rationale: suggestion?.rationale ?? "",
+                    taskID: taskID
+                )
+                try await store.reviewProposal(proposal, action: "apply")
             } else {
                 let inbox = try await store.categories().first { $0.code == "10" }
                 if let inbox {
@@ -146,7 +153,18 @@ actor AgentCoordinator {
                         includeSources: true
                     )
                 }
-                filingExplanation = " No confident filing home was identified; review the filing categories to choose one."
+                let options = (suggestion?.alternatives ?? []).filter { $0.id != inbox?.id }
+                for category in options {
+                    _ = try await store.proposeFiling(
+                        noteID: noteID,
+                        category: category,
+                        rationale: suggestion?.rationale ?? "",
+                        taskID: taskID
+                    )
+                }
+                filingExplanation = options.isEmpty
+                    ? " No confident filing home was identified; review the filing categories to choose one."
+                    : " No confident filing home was identified; apply one of the suggested homes below or keep it in Inbox."
             }
         }
         let filed = try await store.categories(for: noteID).first?.label ?? "Unfiled"
@@ -386,11 +404,18 @@ actor AgentCoordinator {
         )
     }
 
-    private func suggestedCategory(
+    private struct FilingSuggestion {
+        let category: DecimalCategory?
+        let rationale: String
+        let alternatives: [DecimalCategory]
+    }
+
+    /// Nil when no model is available; otherwise a validated decision plus alternative homes.
+    private func suggestedFiling(
         taskID: UUID,
         ids: [UUID],
         request: String
-    ) async throws -> DecimalCategory? {
+    ) async throws -> FilingSuggestion? {
         let context = try await planningContext(
             taskID: taskID,
             selected: ids,
@@ -400,9 +425,16 @@ actor AgentCoordinator {
         do { plan = try await inference.plan(request: request, context: context) }
         catch LinkSummaryError.unavailable { return nil }
         try plan.validate(context: context, hasURL: false)
-        guard plan.steps.count == 1, let step = plan.steps.first,
-              step.action == .file else { throw ConversationError.invalidPlan }
-        return context.categories.first { $0.id.uuidString == step.categoryID }
+        guard let step = plan.steps.first, plan.steps.count <= 3,
+              plan.steps.allSatisfy({ $0.action == .file }),
+              plan.steps.dropFirst().allSatisfy({ !$0.categoryID.isEmpty })
+        else { throw ConversationError.invalidPlan }
+        let home = { (id: String) in context.categories.first { $0.id.uuidString == id } }
+        return FilingSuggestion(
+            category: home(step.categoryID),
+            rationale: step.argument.trimmingCharacters(in: .whitespacesAndNewlines),
+            alternatives: plan.steps.dropFirst().compactMap { home($0.categoryID) }
+        )
     }
 
     private func proposeFiling(
@@ -414,7 +446,7 @@ actor AgentCoordinator {
         guard !references.isEmpty else { try await askForTargets(taskID: taskID); return }
         let categories = try await store.categories()
         let destination: DecimalCategory? = if step.categoryID.isEmpty {
-            try await suggestedCategory(taskID: taskID, ids: references, request: request)
+            try await suggestedFiling(taskID: taskID, ids: references, request: request)?.category
         } else {
             categories.first { $0.id.uuidString == step.categoryID }
         }
@@ -546,11 +578,11 @@ actor AgentCoordinator {
             provider: inference.capabilities.identifier,
             kind: sources.count > 1 ? "comparison" : "summary"
         )
-        if let category = try await suggestedCategory(
+        if let category = try await suggestedFiling(
             taskID: taskID,
             ids: [artifact.id],
             request: question
-        ) {
+        )?.category {
             try await store.fileNote(artifact.id, categoryID: category.id)
         }
         await changed()

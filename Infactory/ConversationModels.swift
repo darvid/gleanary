@@ -245,6 +245,8 @@ struct ConversationPlan: Codable, Sendable {
     struct Classification: Decodable {
         let categoryCode: String
         let rationale: String
+        /// Other plausible homes, most likely first. Optional so older outputs still decode.
+        let alternatives: [String]?
     }
 
     static func decode(
@@ -257,11 +259,16 @@ struct ConversationPlan: Codable, Sendable {
                 let category = context.categories.first { $0.code == result.categoryCode }
                 guard result.categoryCode.isEmpty || category != nil
                 else { throw ConversationError.invalidPlan }
+                // The first step is the decision; any further steps are alternative homes.
+                var seen: Set<UUID> = category.map { [$0.id] } ?? []
+                let alternatives = (result.alternatives ?? []).compactMap { code in
+                    context.categories.first { $0.code == code && seen.insert($0.id).inserted }
+                }.prefix(2)
                 return ConversationPlan(steps: [.init(
                     action: .file,
                     argument: result.rationale,
                     categoryID: category?.id.uuidString ?? ""
-                )])
+                )] + alternatives.map { .init(action: .file, categoryID: $0.id.uuidString) })
             }
             return try JSONDecoder().decode(ModelPlan.self, from: data).resolved(context: context)
         } catch is DecodingError { throw ConversationError.invalidPlan }
@@ -338,6 +345,8 @@ struct ConversationPlan: Codable, Sendable {
         categoryCode is an
         existing numbered category code or empty if no confident fit exists. rationale explains the fit or
         uncertainty briefly. Prefer the most specific category supported by the actual topic.
+        alternatives lists up to two other existing codes that could plausibly fit, most likely
+        first, especially when categoryCode is empty; leave it empty when nothing else fits.
         An explicit user choice of an existing home takes precedence over your topic suggestion.
         Existing filing is context, not proof that a placeholder home is appropriate. Use Inbox
         only when no topical category fits. Never invent a category, hierarchy, tags or permission.

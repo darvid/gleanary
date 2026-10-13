@@ -61,11 +61,10 @@ enum ConversationSchema {
             proposalID TEXT NOT NULL UNIQUE REFERENCES knowledge_proposals(id),
             PRIMARY KEY(leftID, rightID), CHECK(leftID != rightID)
         );
+        -- Only the Inbox fallback is built in; users define their own filing scheme.
+        -- Libraries created before this change keep the categories they already have.
         INSERT INTO decimal_categories VALUES
-            ('10000000-0000-0000-0000-000000000001', '10', 'Inbox'),
-            ('10000000-0000-0000-0000-000000000002', '31', 'Computing'),
-            ('10000000-0000-0000-0000-000000000003', '31.01', 'Distributed Systems'),
-            ('10000000-0000-0000-0000-000000000004', '31.04', 'Agent Architectures');
+            ('10000000-0000-0000-0000-000000000001', '10', 'Inbox');
         """)
     }
 }
