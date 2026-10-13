@@ -326,6 +326,84 @@ struct CaptureTests {
         #expect(try await fixture.store.documents().count == 1)
     }
 
+    @Test(arguments: [true, false]) @MainActor
+    func capturesNonArticleMainTextWithoutSourceScriptsOrPageControls(hasMain: Bool) async throws {
+        _ = NSApplication.shared
+        let tag = hasMain ? "main" : "div"
+        let html = """
+        <html><head><title>Testing toolkit</title></head><body>
+        <nav>Navigation chrome</nav>
+        <\(tag)><h1>Testing toolkit</h1>
+        <h2><a href="/models">Choose your testing model.</a></h2>
+        <h2><a href="/keys">Bring your own credentials.</a></h2>
+        <h2><a href="/pipeline">Run checks in your pipeline.</a></h2>
+        <h2><a href="/results">Keep the results on your machine.</a></h2>
+        <h2><a href="/guide">Read the guide</a></h2>
+        <h2><a href="/example"><code>testFixture("evidencealpha")</code></a></h2>
+        <button>Subscribe control</button><div hidden>Hidden fixture</div>
+        <script>document.body.innerHTML = 'COMPROMISED'; fetch('https://never-contact.invalid');</script>
+        </\(tag)><footer>Footer chrome</footer></body></html>
+        """
+        let url = try #require(URL(string: "https://fixture.example/landing"))
+        let analysis = try HTMLExtractor.analyze(html, url: url)
+        var document = try await HTMLExtractor.extract(analysis, url: url)
+        try document.validate()
+        #expect(document.coverage == .partial)
+        #expect(document.blocks.allSatisfy { $0.method == (hasMain ? "html-main" : "html-body") })
+        #expect(document.markdown.contains("Choose your testing model"))
+        #expect(document.markdown.contains("evidencealpha"))
+        #expect(document.markdown.contains("https://fixture.example/guide"))
+        #expect(!document.markdown.contains("COMPROMISED"))
+        #expect(!document.markdown.contains("Navigation chrome"))
+        #expect(!document.markdown.contains("Footer chrome"))
+        #expect(!document.markdown.contains("Subscribe control"))
+        #expect(!document.markdown.contains("Hidden fixture"))
+        #expect(document.warnings.contains { $0.contains("No article was identified") })
+        let fixture = try CaptureFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [])
+        let fetcher = FixtureFetcher()
+        let engine = IngestionEngine(store: fixture.store, fetcher: fetcher)
+        let id = try await engine.enqueue(url.absoluteString, summarizeLink: false)
+        let claimed = try #require(await fixture.store.claimCapture())
+        let original = try await engine.artifacts.retain(
+            Data(html.utf8),
+            kind: .html,
+            name: "landing.html",
+            sourceURL: url
+        )
+        try await fixture.store.checkpoint(
+            claimed,
+            acquired: [original],
+            progress: "Original retained"
+        )
+        try await fixture.store.failCapture(
+            claimed,
+            error: CaptureError.extractionFailed.localizedDescription
+        )
+        try await fixture.store.retryCapture(id)
+        try await engine.run()
+        #expect(try await fixture.store.captureJob(id: id)?.state == .ready)
+        #expect(await fetcher.requestedURLs.allSatisfy { $0 != url })
+        let note = try #require(await fixture.store.documents().first)
+        #expect(try await SearchEngine(store: fixture.store).search("evidencealpha").matches
+            .contains { $0.passage.documentID == note.id })
+    }
+
+    @Test @MainActor func emptyClientRenderedPagesDoNotBecomeSuccessfulCaptures() async throws {
+        _ = NSApplication.shared
+        let analysis = try HTMLExtractor.analyze("""
+        <html><head><title>Empty app</title></head><body><main></main>
+        <script>document.querySelector('main').textContent = 'Requires page scripts';</script>
+        </body></html>
+        """, url: nil)
+        await #expect {
+            _ = try await HTMLExtractor.extract(analysis, url: nil)
+        } throws: { error in
+            guard case CaptureError.noContent = error else { return false }
+            return true
+        }
+    }
+
     @Test @MainActor func extractsFaithfulHTMLInRestrictedDOM() async throws {
         _ = NSApplication.shared
         let url = try #require(URL(string: "https://fixture.example/articles/one"))

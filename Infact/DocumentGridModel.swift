@@ -6,6 +6,7 @@ final class DocumentGridModel {
     static let pageSize = 80
     static let maximumPages = 6
     var query = ""
+    var scope: LibraryScope = .all
     private(set) var total = 0
     private(set) var generation = 0
     private(set) var cacheVersion = 0
@@ -21,6 +22,7 @@ final class DocumentGridModel {
     private var token = UUID()
     private var changeSequence: Int64 = 0
     private var activeQuery = ""
+    private var activeScope: LibraryScope = .all
 
     init(store: DocumentStore, favicons: FaviconLoader = FaviconLoader()) {
         self.store = store
@@ -32,6 +34,8 @@ final class DocumentGridModel {
     }
 
     func document(at index: Int) -> DocumentSummary? {
+        // SwiftUI must observe arrivals in the otherwise observation-ignored page cache.
+        _ = cacheVersion
         let page = index / Self.pageSize
         guard index >= 0, let rows = pages[page],
               rows.indices.contains(index % Self.pageSize) else { return nil }
@@ -41,15 +45,21 @@ final class DocumentGridModel {
     func reload() async {
         token = UUID()
         let expected = token
+        defer {
+            if token == expected {
+                loading = false
+            }
+        }
         tasks.values.forEach { $0.cancel() }
         tasks = [:]
         faviconTask?.cancel(); faviconTask = nil
         pages = [:]; recency = []; visiblePages = []
         activeQuery = String(query.prefix(1000))
+        activeScope = scope
         total = 0; loading = true; error = nil
         generation += 1
         do {
-            let page = try await store.documentPage(query: activeQuery)
+            let page = try await store.documentPage(query: activeQuery, scope: activeScope)
             guard token == expected, !Task.isCancelled else { return }
             total = page.total
             changeSequence = page.changeSequence
@@ -60,6 +70,18 @@ final class DocumentGridModel {
         }
         guard token == expected else { return }
         loading = false
+    }
+
+    /// Reopening a browser or mounting its search task should reuse matching, valid rows.
+    /// Mutations still call reload() explicitly; an interrupted first load has no page to reuse.
+    func reloadIfNeeded() async {
+        if loading, activeQuery == String(query.prefix(1000)), activeScope == scope {
+            return
+        }
+        guard pages[0] == nil || activeQuery != String(query.prefix(1000)) || activeScope !=
+            scope ||
+            error != nil else { return }
+        await reload()
     }
 
     /// The collection supplies only its viewport, not every logical item in the library.
@@ -83,11 +105,13 @@ final class DocumentGridModel {
               tasks[page] == nil, tasks.count < 2, error == nil else { return }
         let expected = token
         let search = activeQuery
+        let scope = activeScope
         tasks[page] = Task { [weak self, store] in
             do {
                 let result = try await store.documentPage(
                     query: search,
-                    offset: page * Self.pageSize
+                    offset: page * Self.pageSize,
+                    scope: scope
                 )
                 guard let self, token == expected, !Task.isCancelled else { return }
                 tasks[page] = nil
@@ -159,7 +183,9 @@ final class DocumentGridModel {
                             name: entry.document.name,
                             sourceURL: entry.document.sourceURL,
                             faviconData: favicon?.data,
-                            faviconChecked: true
+                            faviconChecked: true,
+                            kind: entry.document.kind, filing: entry.document.filing,
+                            updatedAt: entry.document.updatedAt, coverage: entry.document.coverage
                         )
                         cache(updated, page: entry.page)
                     }

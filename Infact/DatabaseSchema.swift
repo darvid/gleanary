@@ -207,7 +207,17 @@ enum DatabaseSchema {
                 }
             }
         }
+        migrator.registerMigration("general-conversation-v1", migrate: ConversationSchema.create)
+        migrator.registerMigration("general-task-context-v1") { db in
+            try db
+                .execute(
+                    sql: "ALTER TABLE conversation_tasks ADD COLUMN sourceRefs BLOB NOT NULL DEFAULT X'5B5D'"
+                )
+        }
         // Never erase a store on migration failure: the notes are the user's knowledge base.
+        migrator.registerMigration("reviewable-filing-v1") { db in
+            try db.execute(sql: "ALTER TABLE knowledge_proposals ADD COLUMN filing BLOB")
+        }
         try migrator.migrate(database)
     }
 }

@@ -45,6 +45,258 @@ private struct DeletionFixtureEmbedder: EmbeddingProviding {
 
 @Suite(.serialized)
 struct DocumentLibraryTests {
+    @Test @MainActor func hostedListUpdatesUncachedSecondPageWithoutAnotherInteraction(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: (0 ..< 85).map {
+            MarkdownDocument(name: "Page fixture \($0)", markdown: "Saved fixture text.")
+        })
+        let grid = DocumentGridModel(store: fixture.store)
+        await grid.reload()
+        #expect(grid.document(at: 80) == nil)
+        var arrived: Set<UUID> = []
+        let host = NSHostingView(rootView: LibraryCachePageProbe(grid: grid) { arrived.insert($0) })
+        host.frame = NSRect(x: 0, y: 0, width: 360, height: 500)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(arrived.isEmpty)
+        grid.show(indices: Array(80 ..< 85))
+        await grid.waitForPages()
+        // Let SwiftUI consume the observed cache arrival, without a query, selection or reload.
+        try await Task.sleep(for: .milliseconds(150))
+        host.layoutSubtreeIfNeeded()
+        #expect(arrived == Set((80 ..< 85).compactMap { grid.document(at: $0)?.id }))
+        #expect(arrived.count == 5)
+        grid.pause()
+    }
+
+    @Test @MainActor func legacySummaryClassificationUsesArtifactEvidenceAndKeepsOriginals(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [])
+        let artifacts = ArtifactStore(root: fixture.root.appending(path: "artifacts"))
+        let url = try #require(URL(string: "https://fixture.example/legacy"))
+        let request = CaptureRequest(
+            url: url,
+            identity: "fixture:legacy-summary",
+            label: "Legacy source"
+        )
+        _ = try await fixture.store.enqueueCapture(request)
+        let job = try #require(await fixture.store.claimCapture())
+        let original = try await artifacts.retain(
+            Data("Retained original cobaltbeacon prose.".utf8),
+            kind: .text,
+            name: "Original.txt",
+            sourceURL: url
+        )
+        let summary = "# Summary\n\nA generated overview."
+        let summaryArtifact = try await artifacts.retain(
+            Data(summary.utf8),
+            kind: .markdown,
+            name: "Summary.md"
+        )
+        let captured = CapturedDocument(
+            title: "Legacy summary",
+            sourceURL: url,
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Retained original cobaltbeacon prose.",
+                text: "Retained original cobaltbeacon prose."
+            )]
+        )
+        let id = try await fixture.store.publishCapture(
+            job,
+            document: captured,
+            artifacts: [original, summaryArtifact],
+            summary: summary
+        )
+        #expect(try await fixture.store.documentPage(scope: .sources).total == 0)
+        let notes = try await fixture.store.documentPage(scope: .notes)
+        #expect(notes.documents.first?.id == id)
+        #expect(notes.documents.first?.kindLabel == "Summary")
+        #expect(try await fixture.store.libraryAuthorProvider(for: id) == "Apple Intelligence")
+        let preview = DocumentPreviewModel()
+        preview.selectedID = id
+        await preview.load(from: fixture.store)
+        #expect(preview.generatedSummary)
+        let citation = try #require(preview.citation)
+        let detail = try await fixture.store.captureDetail(id: citation.captureID)
+        #expect(detail.document.markdown == captured.markdown)
+        #expect(detail.artifacts.contains { $0.hash == original.hash })
+        #expect(try await artifacts
+            .data(for: original) == Data("Retained original cobaltbeacon prose.".utf8))
+        var edited = try #require(await fixture.store.document(id: id))
+        edited.markdown = "My own revised annotation."
+        _ = try await fixture.store.save(edited)
+        #expect(try await fixture.store.documentPage().documents.first?.kindLabel == "Source")
+        // A historical summary descriptor does not mislabel unrelated current text.
+        #expect(try await fixture.store.documentPage(scope: .sources).total == 1)
+    }
+
+    @Test @MainActor func libraryScopesCombineSearchFilingAndRealSourceAssociations() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let personal = MarkdownDocument(
+            name: "Personal note",
+            markdown: "A cobaltbeacon observation."
+        )
+        _ = try await fixture.store.open(seed: [personal])
+        let request = try CaptureRequest(
+            url: #require(URL(string: "https://fixture.example/evidence")),
+            identity: "fixture:library-source",
+            label: "Evidence"
+        )
+        _ = try await fixture.store.enqueueCapture(request)
+        let job = try #require(await fixture.store.claimCapture())
+        let captured = CapturedDocument(
+            title: "Saved source",
+            sourceURL: request.url,
+            coverage: .partial,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Source text with cobaltbeacon evidence.",
+                text: "Source text with cobaltbeacon evidence."
+            )]
+        )
+        let sourceID = try await fixture.store.publishCapture(
+            job,
+            document: captured,
+            artifacts: []
+        )
+        let source = try await fixture.store.researchSource(noteID: sourceID)
+        let task = try await fixture.store.beginConversation(
+            "summarize this source",
+            owner: .researcher
+        )
+        let summary = try await fixture.store.saveResearch(
+            "# Summary\n\nCobaltbeacon evidence.",
+            name: "Source summary",
+            sources: [source],
+            taskID: task,
+            provider: "synthetic-fixture",
+            kind: "summary"
+        )
+        let category = try #require(await fixture.store.categories().first { $0.code == "31.04" })
+        try await fixture.store.fileNote(sourceID, categoryID: category.id, includeSources: true)
+        let sources = try await fixture.store.documentPage(scope: .sources)
+        #expect(sources.documents.map(\.id) == [sourceID])
+        #expect(sources.documents.first?.kindLabel == "Source")
+        #expect(sources.documents.first?.coverage == "partial")
+        #expect(sources.documents.first?.filing == category.label)
+        #expect(try await fixture.store.documentPage(scope: .notes).total == 2)
+        #expect(try await fixture.store.documentPage(scope: .unfiled).total == 2)
+        #expect(try await fixture.store.documentPage(query: "cobalt", scope: .category(category.id))
+            .documents.map(\.id) == [sourceID])
+        #expect(try await fixture.store.documentPage(query: "Personal", scope: .sources).total == 0)
+        let related = try await fixture.store.relatedLibraryDocuments(to: sourceID)
+        #expect(related.map(\.id) == [summary.id])
+        #expect(related.first?.kindLabel == "Summary")
+        #expect(try await fixture.store.relatedLibraryDocuments(to: summary.id)
+            .map(\.id) == [sourceID])
+        #expect(try await fixture.store.relatedLibraryDocuments(to: personal.id).isEmpty)
+        let preview = DocumentPreviewModel()
+        preview.selectedID = sourceID
+        await preview.load(from: fixture.store)
+        #expect(preview.coverage == .partial)
+        #expect(preview.categories.first?.id == category.id)
+        #expect(preview.related.first?.id == summary.id)
+        let cancelledRefresh = Task { await preview.load(from: fixture.store) }
+        cancelledRefresh.cancel()
+        await cancelledRefresh.value
+        #expect(preview.document?.id == sourceID)
+        #expect(!preview.loading)
+        let library = LibraryModel(store: fixture.store)
+        library.ready = true
+        await library.documentGrid.reload()
+        try await Self.renderLibrary(library, selected: sourceID, name: "infact-library-source")
+        try await Self.renderLibrary(library, selected: summary.id, name: "infact-library-summary")
+        try await fixture.store.remove(summary)
+        #expect(try await fixture.store.relatedLibraryDocuments(to: sourceID).isEmpty)
+        #expect(try await fixture.store.documentPage(scope: .notes).total == 1)
+        let reopened = DocumentStore(url: fixture.store.url)
+        _ = try await reopened.open(loadDocuments: false)
+        #expect(try await reopened.documentPage(scope: .category(category.id)).total == 1)
+    }
+
+    @Test @MainActor func libraryScopeReloadInvalidatesCachedPagesAndKeepsSearch() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let notes = (0 ..< 100).map { MarkdownDocument(
+            name: "Fixture \($0)",
+            markdown: "Saved searchable evidence."
+        ) }
+        _ = try await fixture.store.open(seed: notes)
+        let category = try #require(await fixture.store.categories().first)
+        try await fixture.store.fileNote(notes[0].id, categoryID: category.id)
+        let grid = DocumentGridModel(store: fixture.store)
+        await grid.reload()
+        #expect(grid.total == 100)
+        grid.scope = .category(category.id)
+        await grid.reload()
+        #expect(grid.total == 1)
+        #expect(grid.document(at: 0)?.id == notes[0].id)
+        grid.query = "absent"
+        await grid.reload()
+        #expect(grid.total == 0)
+        grid.scope = .all
+        await grid.reload()
+        #expect(grid.total == 0)
+        #expect(grid.query == "absent")
+    }
+
+    @Test func nativeMarkdownRecognizesListsTablesAndEscapedPipes() {
+        let quoted = MarkdownPreview
+            .blocks(
+                "- Finding [S1P1]\n\n  > First evidence line.\n  > Second evidence line.\n\n  > > Nested quote."
+            )
+        #expect(quoted == [
+            "- Finding [S1P1]",
+            "> First evidence line.\n> Second evidence line.",
+            "> > Nested quote.",
+        ])
+        #expect(MarkdownPreview
+            .quoteText(quoted[1]) == "First evidence line.\nSecond evidence line.")
+        #expect(MarkdownPreview.quoteText(quoted[2]) == "Nested quote.")
+        #expect(MarkdownPreview.blocks("Paragraph\n  > Evidence").count == 2)
+        #expect(MarkdownPreview
+            .blocks("```text\n  > literal quote\n```") == ["```text\n  > literal quote\n```"])
+        #expect(MarkdownPreview.blocks("1. First\n2. Second\n\n+ Third") == [
+            "1. First",
+            "2. Second",
+            "+ Third",
+        ])
+        #expect(MarkdownPreview
+            .tableRows("| Name | Value |\n| --- | --- |\n| A\\|B | **42** |") == [
+                ["Name", "Value"],
+                ["A\\|B", "**42**"],
+            ])
+        #expect(MarkdownPreview.tableRows("Not a table | just prose") == nil)
+        #expect(MarkdownPreview.blocks("```swift\nlet x = 1\n```").count == 1)
+    }
+
+    @Test @MainActor func libraryOpeningReusesLoadedRowsAndSearchOnlyReloadsWhenChanged(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [MarkdownDocument(
+            name: "Opening fixture",
+            markdown: "Evidence"
+        )])
+        let grid = DocumentGridModel(store: fixture.store)
+        await grid.reloadIfNeeded()
+        let generation = grid.generation
+        let first = grid.document(at: 0)
+        await grid.reloadIfNeeded()
+        await grid.reloadIfNeeded()
+        #expect(grid.generation == generation)
+        #expect(grid.document(at: 0) == first)
+        #expect(grid.total == 1)
+        grid.query = "absent"
+        await grid.reloadIfNeeded()
+        #expect(grid.generation == generation + 1)
+        #expect(grid.total == 0)
+        await grid.reloadIfNeeded()
+        #expect(grid.generation == generation + 1)
+    }
+
     @Test func pagesAreBoundedOrderedSearchableAndExcludeDeletedNotes() async throws {
         let fixture = try LibraryFixture(); defer { fixture.clean() }
         let notes = (0 ..< 185).map { index in
@@ -284,6 +536,8 @@ struct DocumentLibraryTests {
             defer: false
         )
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        host.appearance = NSAppearance(named: .darkAqua)
         window.contentView = host
         defer { window.close() }
         host.layoutSubtreeIfNeeded()
@@ -382,7 +636,7 @@ struct DocumentLibraryTests {
         #expect(collection.visibleItems().count < 200)
     }
 
-    @Test @MainActor func defaultLibrarySurfaceRendersWithSearchAndViewSwitcher() async throws {
+    @Test @MainActor func libraryBrowserRendersNativeNavigationListAndMarkdownDetail() async throws {
         let fixture = try LibraryFixture(); defer { fixture.clean() }
         let titles = [
             "A practical guide to local-first software",
@@ -394,7 +648,7 @@ struct DocumentLibraryTests {
             "Building tools that work offline",
             "The collected papers",
         ]
-        _ = try await fixture.store.open(seed: (0 ..< 150).map {
+        let notes = (0 ..< 150).map {
             MarkdownDocument(name: titles[$0 % titles.count], markdown: """
             Local-first tools keep your work available offline.
 
@@ -403,13 +657,20 @@ struct DocumentLibraryTests {
             - Keep a local copy of your sources.
             - Use **plain language** to make saved knowledge easy to recall.
             """)
-        }, loadDocuments: false)
+        }
+        _ = try await fixture.store.open(seed: notes, loadDocuments: false)
+        let latest = try #require(notes.last)
+        let home = try #require(UUID(uuidString: "10000000-0000-0000-0000-000000000004"))
+        try await fixture.store.fileNote(latest.id, categoryID: home)
         let library = LibraryModel(store: fixture.store)
         library.ready = true
         await library.documentGrid.reload()
         _ = NSApplication.shared
-        let host = NSHostingView(rootView: ContentView(library: library)
-            .preferredColorScheme(.dark))
+        let host = NSHostingView(rootView: ContentView(
+            library: library,
+            initialSelection: notes.last?.id
+        )
+        .preferredColorScheme(.dark))
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
             styleMask: [.borderless],
@@ -422,21 +683,24 @@ struct DocumentLibraryTests {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
-        let collection = try #require(Self.descendant(NSCollectionView.self, in: host))
-        try Self.expectMultipleColumns(in: collection)
-        let item = try #require(collection.item(at: IndexPath(item: 0, section: 0)))
-        let button = try #require(Self.button("open-document", in: item.view))
-        button.performClick(nil)
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
-        #expect(collection.selectionIndexPaths == [IndexPath(item: 0, section: 0)])
+        #expect(Self.descendant(NSSplitView.self, in: host) != nil)
+        #expect(Self.descendant(NSCollectionView.self, in: host) == nil)
         try Self.screenshot(host, name: "infact-library-wide")
         window.setContentSize(NSSize(width: 900, height: 600))
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         host.layoutSubtreeIfNeeded()
-        try Self.expectMultipleColumns(in: collection)
         try Self.screenshot(host, name: "infact-library-narrow")
+        host.rootView = ContentView(library: library, initialSelection: notes.last?.id)
+            .preferredColorScheme(.light)
+        host.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: .aqua)
+        window.setContentSize(NSSize(width: 1180, height: 780))
+        try await Task.sleep(for: .milliseconds(650))
+        host.layoutSubtreeIfNeeded()
+        try Self.screenshot(host, name: "infact-library-light")
     }
 
     @Test @MainActor func deletingDocumentPurgesPayloadsFilesAndCachedNotices() async throws {
@@ -610,6 +874,62 @@ struct DocumentLibraryTests {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))
-        try png.write(to: FileManager.default.temporaryDirectory.appending(path: "\(name).png"))
+        let root = ProcessInfo.processInfo.environment["INFACT_LIBRARY_SCREENSHOTS"]
+            .map { URL(fileURLWithPath: $0) } ?? FileManager.default.temporaryDirectory
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try png.write(to: root.appending(path: "\(name).png"))
+    }
+
+    @MainActor private static func renderLibrary(
+        _ library: LibraryModel,
+        selected: UUID,
+        name: String
+    ) async throws {
+        guard ProcessInfo.processInfo.environment["INFACT_LIBRARY_SCREENSHOTS"] != nil
+        else { return }
+        let preview = DocumentPreviewModel()
+        preview.selectedID = selected
+        await preview.load(from: library.store)
+        #expect(preview.document?.id == selected)
+        let host = NSHostingView(rootView: ContentView(
+            library: library,
+            initialSelection: selected,
+            previewModel: preview
+        )
+        .preferredColorScheme(.dark))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        host.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(650))
+        host.layoutSubtreeIfNeeded()
+        try screenshot(host, name: name)
+    }
+}
+
+private struct LibraryCachePageProbe: View {
+    let grid: DocumentGridModel
+    let arrived: (UUID) -> Void
+    @State private var selection: Set<UUID> = []
+
+    var body: some View {
+        List(selection: $selection) {
+            ForEach(80 ..< 85, id: \.self) { index in
+                let document = grid.document(at: index)
+                Text(document?.name ?? "Loading…").tag(document?.id)
+                    .onChange(of: document?.id) { _, id in
+                        if let id {
+                            arrived(id)
+                        }
+                    }
+            }
+        }
     }
 }

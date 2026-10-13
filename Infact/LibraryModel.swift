@@ -39,7 +39,10 @@ final class LibraryModel {
     var intelligenceStatus = ""
     var intelligenceAvailable = false
     private let engine: SearchEngine
-    private let store: DocumentStore
+    let store: DocumentStore
+    // Graph models and persisted data remain available, but deferred features do not run in
+    // Library.
+    var graphFeaturesEnabled = false
     private var indexAgain = false
     private var resultToken = UUID()
     @ObservationIgnored private(set) var indexingTask: Task<Void, Never>?
@@ -107,7 +110,9 @@ final class LibraryModel {
             try await applyStatistics(store.statistics())
             try await store.recoverCaptureJobs()
             captureJobs = try await store.captureJobs()
-            try await graph.load()
+            if graphFeaturesEnabled {
+                try await graph.load()
+            }
             ready = true
             startIndexing()
             startCaptures()
@@ -156,9 +161,18 @@ final class LibraryModel {
         try await refreshDocumentGrid()
         try await applyStatistics(store.statistics())
         clearResults()
-        await graph.refresh()
-        graph.startExtraction()
+        if graphFeaturesEnabled {
+            await graph.refresh()
+            graph.startExtraction()
+        }
         startIndexing()
+    }
+
+    func refreshConversationChanges() async {
+        do {
+            try await refreshAfterMutation()
+            await refreshCaptures()
+        } catch { self.error = error.localizedDescription }
     }
 
     private func refreshDocumentGrid() async throws {
@@ -351,8 +365,10 @@ final class LibraryModel {
                 try await refreshDocumentGrid()
                 try await applyStatistics(store.statistics())
                 clearResults()
-                await graph.refresh()
-                graph.startExtraction()
+                if graphFeaturesEnabled {
+                    await graph.refresh()
+                    graph.startExtraction()
+                }
                 startIndexing()
             }
         } catch { self.error = error.localizedDescription }

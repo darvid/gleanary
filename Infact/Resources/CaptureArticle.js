@@ -5,9 +5,24 @@ const article = new Readability(document.cloneNode(true), {
   maxElemsToParse: 50000,
   keepClasses: false
 }).parse();
-if (!article || !article.content) throw new Error('No readable article');
-const content = new DOMParser().parseFromString(article.content, 'text/html');
 const warnings = [];
+let content;
+let method = 'readability';
+const articleContent = article && article.content
+  ? new DOMParser().parseFromString(article.content, 'text/html') : null;
+if (articleContent && articleContent.querySelector('p, pre, table, blockquote')) {
+  content = articleContent;
+} else {
+  // Landing pages and documentation are not necessarily articles. Use the already
+  // sanitized DOM, never source scripts or a live browser session.
+  const main = document.querySelector('main, [role="main"]');
+  const root = (main || document.body).cloneNode(true);
+  const chrome = 'nav, footer, aside, form, button, input, textarea, select, [hidden], [aria-hidden="true"]' + (main ? '' : ', header');
+  root.querySelectorAll(chrome).forEach(node => node.remove());
+  content = new DOMParser().parseFromString(root.outerHTML, 'text/html');
+  method = main ? 'html-main' : 'html-body';
+  warnings.push('No article was identified. Main-page text was captured instead; surrounding content may be included and interactive content is not available.');
+}
 const converter = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' });
 converter.addRule('safeTables', {
   filter: 'table',
@@ -46,7 +61,7 @@ function walk(node) {
     if (text) {
       const p = content.createElement('p');
       p.textContent = text;
-      blocks.push({kind:'paragraph', markdown:converter.turndown(p.outerHTML), text, section:headings.filter(Boolean).join(' › ') || null, method:'readability'});
+      blocks.push({kind:'paragraph', markdown:converter.turndown(p.outerHTML), text, section:headings.filter(Boolean).join(' › ') || null, method});
     }
     return;
   }
@@ -61,10 +76,10 @@ function walk(node) {
       headings[level - 1] = text;
     }
     const markdown = converter.turndown(node.outerHTML).trim();
-    if (markdown) blocks.push({kind:heading ? 'heading' : kinds[tag], markdown, text, section:headings.filter(Boolean).join(' › ') || null, method:'readability'});
+    if (markdown) blocks.push({kind:heading ? 'heading' : kinds[tag], markdown, text, section:headings.filter(Boolean).join(' › ') || null, method});
     return;
   }
   Array.from(node.childNodes).forEach(walk);
 }
 Array.from(content.body.childNodes).forEach(walk);
-return JSON.stringify({title:article.title || '', byline:article.byline || null, blocks, warnings});
+return JSON.stringify({title:article ? article.title || '' : document.title, byline:article ? article.byline || null : null, blocks, warnings});

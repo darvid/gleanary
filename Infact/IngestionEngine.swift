@@ -28,15 +28,22 @@ actor IngestionEngine {
             .appending(path: "artifacts"))
     }
 
-    func enqueue(_ input: String, deduplicate: Bool = true) async throws -> UUID {
+    func enqueue(
+        _ input: String,
+        deduplicate: Bool = true,
+        summarizeLink: Bool = true
+    ) async throws -> UUID {
         if let url = try CaptureRequest.classify(input) {
             let media = try MediaTarget.parse(url)
-            let canonical = try CaptureRequest.canonicalURL(media?.url ?? url)
+            let arxiv = SourceIdentity.arxiv(url)
+            let canonical = try CaptureRequest.canonicalURL(media?.url ?? arxiv?.url ?? url)
             guard let canonicalURL = URL(string: canonical) else { throw CaptureError.unsafeURL }
             return try await store.enqueueCapture(CaptureRequest(
                 url: canonicalURL,
-                identity: media?.identity ?? ("url:" + canonical),
-                label: canonical
+                identity: media?.identity ?? arxiv?.identity ?? ("url:" + canonical),
+                label: canonical,
+                summarizeLink: summarizeLink,
+                submittedURL: url
             ), deduplicate: deduplicate)
         }
         guard input.utf8.count <= CaptureLimits.markdownBytes else { throw CaptureError.tooLarge }
@@ -210,7 +217,7 @@ actor IngestionEngine {
         acquired: inout [Artifact],
         changed: @escaping @Sendable () async -> Void
     ) async throws -> String? {
-        guard job.request.url != nil else { return nil }
+        guard job.request.url != nil, job.request.summarizeLink != false else { return nil }
         var summary: String?
         try await store.checkpoint(job, acquired: acquired, progress: "Writing a brief summary")
         await changed()

@@ -28,6 +28,9 @@ struct CaptureRequest: Codable, Sendable {
     let label: String
     var audioLocale: String? = nil
     var downloadSpeechModel: Bool? = nil
+    // Nil preserves the incumbent summary-first capture behavior for old durable jobs.
+    var summarizeLink: Bool? = nil
+    var submittedURL: URL? = nil
 
     static func classify(_ input: String) throws -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,6 +74,28 @@ struct CaptureRequest: Codable, Sendable {
         }
         guard let value = components.string else { throw CaptureError.unsafeURL }
         return value
+    }
+}
+
+enum SourceIdentity {
+    static func arxiv(_ url: URL) -> (url: URL, identity: String)? {
+        guard ["arxiv.org", "www.arxiv.org"].contains(url.host?.lowercased() ?? ""),
+              url.user == nil, url.password == nil,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        let path = url.path.replacingOccurrences(
+            of: #"^/(abs|pdf)/"#,
+            with: "",
+            options: .regularExpression
+        )
+        .replacingOccurrences(of: #"\.pdf$"#, with: "", options: .regularExpression)
+        guard path.range(
+            of: #"^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v[1-9]\d*)?$"#,
+            options: .regularExpression
+        ) != nil,
+            let canonical = URL(string: "https://arxiv.org/abs/" + path) else { return nil }
+        // Explicit versions stay distinct; an unversioned identifier means the latest-source
+        // identity.
+        return (canonical, "arxiv:" + path)
     }
 }
 

@@ -47,7 +47,7 @@ extension DocumentStore {
         try readyDatabase().read { db in
             try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM ingestion_jobs ORDER BY CASE WHEN state IN ('queued','fetching','extracting') THEN 0 ELSE 1 END, createdAt DESC LIMIT ?",
+                sql: "SELECT * FROM ingestion_jobs ORDER BY CASE WHEN state IN ('queued','fetching','extracting') THEN 0 WHEN state = 'failed' THEN 1 WHEN state = 'cancelled' THEN 2 ELSE 3 END, createdAt DESC LIMIT ?",
                 arguments: [limit]
             ).map(Self.captureJob)
         }
@@ -262,6 +262,10 @@ extension DocumentStore {
                     job.id.uuidString,
                 ]
             )
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO note_sources(noteID, sourceID) VALUES (?, ?)",
+                arguments: [noteID.uuidString, sourceID]
+            )
             return noteID
         }
     }
@@ -428,7 +432,7 @@ extension DocumentStore {
         )
     }
 
-    private static func captureJob(_ row: Row) throws -> CaptureJob {
+    static func captureJob(_ row: Row) throws -> CaptureJob {
         let stateString: String = row["state"]
         guard let state = CaptureState(rawValue: stateString)
         else { throw InfactError.invalidDatabase }

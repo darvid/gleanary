@@ -9,23 +9,38 @@ import SwiftUI
     private(set) var canGenerateSummary = false
     private(set) var loading = false
     private(set) var error: String?
+    private(set) var categories: [DecimalCategory] = []
+    private(set) var related: [DocumentSummary] = []
+    private(set) var coverage: Coverage?
+    private(set) var warnings: [String] = []
+    private(set) var authorProvider: String?
+    private var loadToken = UUID()
 
     func load(from store: DocumentStore) async {
+        guard !Task.isCancelled else { return }
+        loadToken = UUID()
+        let token = loadToken
         let id = selectedID
-        document = nil
-        citation = nil
-        generatedSummary = false
-        canGenerateSummary = false
+        let retainingPreview = document?.id == id && id != nil
+        if !retainingPreview {
+            document = nil
+            citation = nil
+            generatedSummary = false
+            canGenerateSummary = false
+            categories = []; related = []; coverage = nil; warnings = []; authorProvider = nil
+        }
         error = nil
         guard let id else { loading = false; return }
-        loading = true
+        loading = !retainingPreview
         do {
             let loaded = try await store.document(id: id)
             var source: SourceCitation?
             var summary = false
             var eligible = false
+            var captured: CapturedDocument?
             if let captureID = try await store.captureID(for: id) {
                 let detail = try await store.captureDetail(id: captureID)
+                captured = detail.document
                 summary = detail.artifacts.contains {
                     $0.name == "Summary.md" && $0.kind == .markdown &&
                         $0.hash == ContentHash.of(loaded?.markdown ?? "")
@@ -37,17 +52,25 @@ import SwiftUI
                     section: nil, url: detail.document.sourceURL
                 )
             }
-            guard !Task.isCancelled, selectedID == id else { return }
+            let filing = try await store.categories(for: id)
+            let linked = try await store.relatedLibraryDocuments(to: id)
+            let provider = try await store.libraryAuthorProvider(for: id)
+            guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
             citation = source
             generatedSummary = summary
             canGenerateSummary = eligible
             document = loaded
+            categories = filing
+            related = linked
+            coverage = captured?.coverage
+            warnings = captured?.warnings ?? []
+            authorProvider = provider
             if loaded == nil {
                 selectedID = nil
             }
             loading = false
         } catch {
-            guard !Task.isCancelled, selectedID == id else { return }
+            guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
             self.error = "Could not load this document. Select it again to retry."
             loading = false
         }
@@ -61,6 +84,11 @@ struct DocumentPreview: View {
     var generatingSummary = false
     var generateSummary: (MarkdownDocument) -> Void = { _ in }
     var cancelSummary: () -> Void = {}
+    var showsLibraryDetails = false
+    var openDocument: (UUID) -> Void = { _ in }
+    var editDocument: ((MarkdownDocument) -> Void)?
+    var fileDocument: ((MarkdownDocument) -> Void)?
+    var showsSummaryActions = true
 
     var body: some View {
         if model.loading {
@@ -71,6 +99,9 @@ struct DocumentPreview: View {
                     Text(document.name).font(.title2.weight(.semibold))
                         .textSelection(.enabled)
                         .accessibilityAddTraits(.isHeader)
+                    if showsLibraryDetails {
+                        libraryMetadata(document)
+                    }
                     if model.citation != nil || model.canGenerateSummary || generatingSummary {
                         ViewThatFits(in: .horizontal) {
                             actions(for: document, compact: false)
@@ -80,10 +111,29 @@ struct DocumentPreview: View {
                         .controlSize(.small)
                     }
                     MarkdownPreview(markdown: document.markdown).textSelection(.enabled)
-                    if model.generatedSummary {
+                    if model.generatedSummary, !showsLibraryDetails {
                         Text("Generated with Apple Intelligence. Check the source for details.")
                             .font(.caption).foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                    }
+                    if showsLibraryDetails, !model.related.isEmpty {
+                        Divider().padding(.top, 8)
+                        Text("From the same sources").font(.headline)
+                        ForEach(model.related) { item in
+                            Button { openDocument(item.id) } label: {
+                                HStack(alignment: .top) {
+                                    Image(systemName: item
+                                        .kind == "source" ? "doc.text" : "note.text")
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.name).lineLimit(2)
+                                        Text(item.kindLabel).font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption)
+                                }
+                            }.buttonStyle(.borderless).padding(.vertical, 4)
+                        }
                     }
                 }
                 .frame(maxWidth: 640, alignment: .leading)
@@ -99,6 +149,40 @@ struct DocumentPreview: View {
                     .error ??
                     "Read a saved summary or note here. Your original sources stay in your library.")
             )
+        }
+    }
+
+    private func libraryMetadata(_ document: MarkdownDocument) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let coverage = model.coverage {
+                Text(coverage.label).font(.callout).foregroundStyle(.secondary)
+            }
+            if !model.categories.isEmpty {
+                Text(model.categories.map(\.label).joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if let provider = model.authorProvider, provider != "user" {
+                Text("Generated with \(provider)").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 12) {
+                if let editDocument {
+                    Button("Edit", systemImage: "pencil") { editDocument(document) }
+                }
+                if let fileDocument {
+                    Button(
+                        model.categories.isEmpty ? "File…" : "Change filing…",
+                        systemImage: "folder"
+                    ) { fileDocument(document) }
+                }
+            }.buttonStyle(.borderless).controlSize(.small)
+            if !model.warnings.isEmpty {
+                DisclosureGroup("Capture limitations") {
+                    ForEach(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
+                        Text(warning).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                }.font(.caption)
+            }
         }
     }
 
@@ -135,7 +219,7 @@ struct DocumentPreview: View {
                 .disabled(true)
                 .accessibilityLabel("Generating summary")
                 Button("Cancel", action: cancelSummary).buttonStyle(PreviewActionStyle())
-            } else if model.canGenerateSummary {
+            } else if model.canGenerateSummary, showsSummaryActions {
                 Button("Generate summary") { generateSummary(document) }
                     .buttonStyle(PreviewActionStyle(prominent: true))
                     .disabled(!summaryEnabled)
@@ -204,6 +288,23 @@ struct MarkdownPreview: View {
                         .joined(separator: "\n"))
                         .font(.body.monospaced()).frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12).background(Color(nsColor: .controlBackgroundColor))
+                } else if let rows = Self.tableRows(block) {
+                    ScrollView(.horizontal) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                                HStack(alignment: .top, spacing: 16) {
+                                    ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
+                                        Text(Self.inline(cell))
+                                            .fontWeight(index == 0 ? .semibold : .regular)
+                                            .frame(width: 150, alignment: .leading)
+                                    }
+                                }.padding(.vertical, 8)
+                                if index < rows.count - 1 {
+                                    Divider()
+                                }
+                            }
+                        }
+                    }
                 } else if block.hasPrefix("#") {
                     let heading = block.prefix(while: { $0 == "#" }).count
                     Text(Self
@@ -211,11 +312,25 @@ struct MarkdownPreview: View {
                             .trimmingCharacters(in: .whitespaces)))
                         .font(heading == 1 ? .title2.weight(.semibold) : .headline)
                         .padding(.top, 8).accessibilityAddTraits(.isHeader)
-                } else if block.hasPrefix("- ") || block.hasPrefix("* ") {
+                } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
                         Text("•").accessibilityHidden(true)
                         Text(Self.inline(String(block.dropFirst(2))))
                     }
+                } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
+                          let marker = block.firstIndex(of: ".")
+                {
+                    HStack(alignment: .top, spacing: 10) {
+                        Text(String(block[...marker])).foregroundStyle(.secondary)
+                        Text(Self
+                            .inline(String(block[block.index(after: marker)...])
+                                .trimmingCharacters(in: .whitespaces)))
+                    }
+                } else if let quote = Self.quoteText(block) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "quote.opening").font(.caption).accessibilityHidden(true)
+                        Text(Self.inline(quote)).lineSpacing(4)
+                    }.foregroundStyle(.secondary).padding(.leading, 12)
                 } else {
                     Text(Self.inline(block)).lineSpacing(4)
                 }
@@ -229,7 +344,8 @@ struct MarkdownPreview: View {
         var blocks: [String] = []
         var lines: [String] = []
         var code = false
-        for line in markdown.components(separatedBy: "\n") {
+        for rawLine in markdown.components(separatedBy: "\n") {
+            let line = code ? rawLine : normalizedBlockLine(rawLine)
             if line.hasPrefix("```") {
                 if code {
                     lines.append(line)
@@ -246,6 +362,11 @@ struct MarkdownPreview: View {
             } else if standalone(line) {
                 flush(&lines, into: &blocks)
                 blocks.append(line)
+            } else if isQuoteLine(line) {
+                if lines.first.map(isQuoteLine) != true {
+                    flush(&lines, into: &blocks)
+                }
+                lines.append(line)
             } else {
                 lines.append(line)
             }
@@ -264,7 +385,65 @@ struct MarkdownPreview: View {
     }
 
     private nonisolated static func standalone(_ line: String) -> Bool {
-        line.hasPrefix("#") || line.hasPrefix("- ") || line.hasPrefix("* ")
+        line.hasPrefix("#") || line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("+ ")
+            || line.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil
+    }
+
+    private nonisolated static func normalizedBlockLine(_ line: String) -> String {
+        let leading = line.prefix(while: { $0 == " " }).count
+        guard leading <= 3 else { return line }
+        let trimmed = String(line.dropFirst(leading))
+        return isQuoteLine(trimmed) || standalone(trimmed) || trimmed
+            .hasPrefix("```") ? trimmed : line
+    }
+
+    private nonisolated static func isQuoteLine(_ line: String) -> Bool {
+        line == ">" || line.hasPrefix("> ") || line.hasPrefix(">\t") || line.hasPrefix(">>")
+    }
+
+    nonisolated static func quoteText(_ block: String) -> String? {
+        guard let first = block.components(separatedBy: "\n").first,
+              isQuoteLine(normalizedBlockLine(first)) else { return nil }
+        return block.components(separatedBy: "\n").map { line in
+            var text = normalizedBlockLine(line)
+            while isQuoteLine(text) {
+                text.removeFirst()
+                if text.first == " " || text.first == "\t" {
+                    text.removeFirst()
+                }
+            }
+            return text
+        }.joined(separator: "\n")
+    }
+
+    nonisolated static func tableRows(_ block: String) -> [[String]]? {
+        let lines = block.components(separatedBy: "\n")
+        guard lines.count >= 2, lines[0].contains("|"),
+              lines[1].range(
+                  of: #"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"#,
+                  options: .regularExpression
+              ) != nil else { return nil }
+        return lines.enumerated().filter { $0.offset != 1 }.map { _, line in
+            var cells: [String] = []
+            var cell = ""
+            var escaped = false
+            for character in line {
+                if character == "|", !escaped {
+                    cells.append(cell); cell = ""
+                } else {
+                    cell.append(character)
+                }
+                escaped = character == "\\" && !escaped
+            }
+            cells.append(cell)
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("|") {
+                cells.removeFirst()
+            }
+            if line.trimmingCharacters(in: .whitespaces).hasSuffix("|") {
+                cells.removeLast()
+            }
+            return cells.map { $0.trimmingCharacters(in: .whitespaces) }
+        }
     }
 
     private static func inline(_ text: String) -> AttributedString {

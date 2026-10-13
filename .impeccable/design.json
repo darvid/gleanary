@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-13T00:00:00Z",
+  "title": "Design System: Infact Native Library",
+  "extensions": {
+    "nativePlatform": {
+      "shipping": "SwiftUI, macOS 26+",
+      "scope": "Native Library and compatible app controls only",
+      "portableSamples": "HTML/CSS illustrations only; not native control specifications. Browser system colors approximate semantic surfaces; no sampled raster palette or synthesized tonal ramp is normative."
+    },
+    "nativeBindings": {
+      "libraryBackground": "Color(nsColor: .windowBackgroundColor)",
+      "controlSurface": "Color(nsColor: .controlBackgroundColor)",
+      "text": "SwiftUI primary/secondary foreground styles",
+      "selection": "Native sidebar/inset List selection; neutral appearance and focus-dependent rendering",
+      "accent": "Color.accentColor; prominent PreviewActionStyle, not a Library-wide brand color",
+      "separator": "SwiftUI Divider",
+      "icons": "SF Symbols",
+      "conversationComposer": "User-approved ChatGPT-inspired native refinement: 24pt radius; 12pt horizontal/9pt vertical inset; 32pt attachment/send/stop controls; one-to-six-line input; semantic controlBackgroundColor; one-point primary border at 0.1 opacity. No microphone or reasoning selector. Scope does not replace the rest of the conversation UI."
+    },
+    "colorMeta": {
+      "ink": { "role": "neutral", "displayName": "Light-appearance explicit ink" },
+      "inverse-ink": { "role": "neutral", "displayName": "Dark/selected explicit ink" },
+      "action-light": { "role": "neutral", "displayName": "Light preview action" },
+      "action-light-pressed": { "role": "neutral", "displayName": "Pressed light preview action" },
+      "action-dark": { "role": "neutral", "displayName": "Dark preview action" },
+      "action-dark-pressed": { "role": "neutral", "displayName": "Pressed dark preview action" },
+      "action-border-light": { "role": "neutral", "displayName": "Light action border" },
+      "action-border-dark": { "role": "neutral", "displayName": "Dark action border" }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Native title", "purpose": "Document title: title2 semibold; list heading: title3 semibold. Sizes remain system-resolved." },
+      "row-title": { "displayName": "Saved item title", "purpose": "SwiftUI body medium, up to two lines." },
+      "body": { "displayName": "Reading", "purpose": "SwiftUI body; paragraphs add 4pt line spacing; code uses body.monospaced()." },
+      "metadata": { "displayName": "Quiet provenance", "purpose": "SwiftUI caption; coverage uses callout; counts use monospacedDigit()." }
+    },
+    "nativeLayout": {
+      "unit": "pt",
+      "window": { "minimum": [900, 600], "default": [1180, 780], "style": "hiddenTitleBar" },
+      "sidebar": { "min": 160, "ideal": 190, "max": 240 },
+      "documentList": { "min": 260, "ideal": 330, "max": 440 },
+      "captureList": { "min": 260, "ideal": 360, "max": 480 },
+      "detail": { "min": 320, "contentMax": 640, "alignment": "topLeading" },
+      "table": { "cellWidth": 150, "columnGap": 16, "overflow": "horizontal scroll" },
+      "adaptation": "Balanced NavigationSplitView and ViewThatFits action labels; no custom breakpoints."
+    },
+    "shadows": [],
+    "motion": [],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Captured source action",
+      "kind": "button",
+      "refersTo": "preview-action",
+      "description": "Portable light/dark translation of PreviewActionStyle; native press colors and one-point border. Browser focus outline is illustrative, not a new SwiftUI rule.",
+      "html": "<button class=\"ds-preview-action\">Captured source</button>",
+      "css": ".ds-preview-action{font:400 13px -apple-system,system-ui,sans-serif;padding:6px 10px;border-radius:6px;color:#000;background:rgb(94% 94% 94%);border:1px solid rgb(56% 56% 56%)}.ds-preview-action:hover{cursor:pointer}.ds-preview-action:focus-visible{outline:2px solid Highlight;outline-offset:2px}.ds-preview-action:active{background:rgb(85% 85% 85%)}.ds-preview-action:disabled{color:rgb(0 0 0 / .55)}@media(prefers-color-scheme:dark){.ds-preview-action{color:#fff;background:rgb(13% 13% 13%);border-color:rgb(42% 42% 42%)}.ds-preview-action:active{background:rgb(22% 22% 22%)}.ds-preview-action:disabled{color:rgb(255 255 255 / .55)}}"
+    },
+    {
+      "name": "Search this view",
+      "kind": "input",
+      "refersTo": "search",
+      "description": "Plain native search field; browser system-color illustration omits SF Symbols rather than substituting glyph icons.",
+      "html": "<div class=\"ds-search\"><input aria-label=\"Search library\" placeholder=\"Search this view\"></div>",
+      "css": ".ds-search{padding:8px;border-radius:7px;background:Field;color:FieldText}.ds-search input{font:13px -apple-system,system-ui,sans-serif;color:inherit;background:transparent;border:0;width:100%}.ds-search input:hover{cursor:text}.ds-search input:focus-visible{outline:2px solid Highlight;outline-offset:2px}"
+    },
+    {
+      "name": "Library navigation",
+      "kind": "nav",
+      "description": "Illustration of semantic navigation and selected-label ink, not a replacement for native sidebar List rendering.",
+      "html": "<nav class=\"ds-nav\" aria-label=\"Library navigation\"><button aria-current=\"page\">All items</button><button>Sources</button><button>Notes</button></nav>",
+      "css": ".ds-nav{display:grid;gap:2px;font:13px -apple-system,system-ui,sans-serif}.ds-nav button{text-align:left;font:inherit;border:0;padding:8px;background:Canvas;color:CanvasText}.ds-nav button[aria-current]{background:#000;color:#fff}.ds-nav button:hover{cursor:pointer}.ds-nav button:focus-visible{outline:2px solid Highlight;outline-offset:2px}"
+    },
+    {
+      "name": "Saved document row",
+      "kind": "custom",
+      "refersTo": "document-row",
+      "description": "Title/kind/filing hierarchy only; native inset List supplies actual selection, separators, and multi-selection.",
+      "html": "<button class=\"ds-row\"><strong>Typography and information density</strong><small>Note</small><small>31.04 Agent Architectures</small></button>",
+      "css": ".ds-row{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:7px 0;border:0;background:Canvas;color:CanvasText;text-align:left;font:13px -apple-system,system-ui,sans-serif}.ds-row strong{font-weight:500}.ds-row small{font-size:11px;color:GrayText}.ds-row:hover{cursor:pointer}.ds-row:focus-visible{outline:2px solid Highlight;outline-offset:2px}"
+    },
+    {
+      "name": "Markdown reading",
+      "kind": "custom",
+      "description": "Portable hierarchy illustration; title2/headline/body sizes are browser approximations, not fixed native tokens. Native text is selectable and contains no remote images or scripts.",
+      "html": "<article class=\"ds-reading\"><h2>Saved source</h2><p class=\"ds-provenance\">Partial extraction</p><p>Local-first tools keep your work available offline.</p><pre>retained source text</pre></article>",
+      "css": ".ds-reading{max-width:640px;padding:28px;color:CanvasText;background:Canvas;font:13px -apple-system,system-ui,sans-serif;user-select:text}.ds-reading h2{font-size:17px;font-weight:600;margin:0 0 20px}.ds-reading p{margin:14px 0;line-height:1.5}.ds-reading .ds-provenance{color:GrayText}.ds-reading pre{font:13px ui-monospace,monospace;padding:12px;background:Field;white-space:pre-wrap}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Saved evidence, ready for conversation",
+    "overview": "Apple design language with ChatGPT-inspired restraint: familiar controls, compact navigation, and a generous reading pane. This records the finished Library and compatible app controls, not a redesign of conversation, settings, Graph, or Mind Map. Deferred graph surfaces keep their existing code and data.\n\nThe product's platform posture is adaptive; the shipping surface is SwiftUI on macOS 26+ only. No web, iOS, or Android implementation is implied. Native system typography and SF Symbols are intentional here, including titles. There are no shipping raster assets in this Library world.",
+    "keyCharacteristics": [
+      "Semantic macOS surfaces and system light/dark appearance.",
+      "Native sidebar, searchable list, and selectable Markdown reading.",
+      "Quiet provenance and explicit handoff to #general."
+    ],
+    "rules": [{ "name": "The Semantic Surface Rule", "body": "Use native semantic surfaces for Library backgrounds; do not replace them with sampled screenshot colors.", "section": "colors" }],
+    "dos": [
+      "Do preserve native semantic colors, text styles, SF Symbols, and keyboard-accessible controls.",
+      "Do distinguish saved sources, generated summaries, and personal notes while keeping originals reachable.",
+      "Do keep Library browsing and reading independent of inference."
+    ],
+    "donts": [
+      "Don't replace this Library with decorative cards, branded status bars, or a visualization dashboard.",
+      "Don't add a second composer or send a request automatically on handoff.",
+      "Don't extend these Library decisions into unseen Graph, Mind Map, or settings redesigns."
+    ]
+  }
+}

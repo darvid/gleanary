@@ -63,7 +63,9 @@ extension DocumentStore {
             }
             try db.execute(sql: "DELETE FROM notes WHERE id = ?", arguments: [id])
             try db
-                .execute(sql: "DELETE FROM sources WHERE id NOT IN (SELECT sourceID FROM captures)")
+                .execute(
+                    sql: "DELETE FROM sources WHERE id NOT IN (SELECT sourceID FROM captures) AND id NOT IN (SELECT sourceID FROM note_sources)"
+                )
             try db.execute(
                 sql: "INSERT INTO purged_notes(noteID, deletionID, deletedAt) VALUES (?, ?, ?)",
                 arguments: [id, UUID().uuidString, Date().timeIntervalSince1970]
