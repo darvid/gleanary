@@ -289,6 +289,25 @@ extension DocumentStore {
     func saveCategory(id: UUID = UUID(), code: String, name: String) throws {
         try DecimalCategory.validate(code: code, name: name)
         try readyDatabase().write { db in
+            let current = try String.fetchOne(
+                db,
+                sql: "SELECT code FROM decimal_categories WHERE id = ?",
+                arguments: [id.uuidString]
+            )
+            if current == DecimalCategory.inboxCode, code != DecimalCategory.inboxCode {
+                throw ConversationError.inboxCategory
+            }
+            let taken = try Row.fetchAll(db, sql: "SELECT id, code, name FROM decimal_categories")
+                .contains {
+                    let other: String = $0["id"], otherCode: String = $0["code"]
+                    let otherName: String = $0["name"]
+                    return other != id.uuidString && (otherCode == code
+                        || DecimalCategory.normalized(otherName) == DecimalCategory
+                        .normalized(name))
+                }
+            if taken {
+                throw ConversationError.categoryTaken
+            }
             try db.execute(sql: """
             INSERT INTO decimal_categories(id, code, name) VALUES (?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET code = excluded.code, name = excluded.name
@@ -297,6 +316,112 @@ extension DocumentStore {
                 code,
                 name.trimmingCharacters(in: .whitespacesAndNewlines),
             ])
+        }
+    }
+
+    /// Adds categories in one transaction, skipping any whose code or name is already taken.
+    /// Returns the IDs actually created, for `removeUnusedCategories`.
+    func addCategories(_ categories: [(code: String, name: String)]) throws -> [UUID] {
+        for category in categories {
+            try DecimalCategory.validate(code: category.code, name: category.name)
+        }
+        return try readyDatabase().write { db in
+            var created: [UUID] = []
+            for category in categories {
+                let new = DecimalCategory(
+                    id: UUID(),
+                    code: category.code,
+                    name: category.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                guard try !Self.categoryExists(like: new, in: db) else { continue }
+                try db.execute(
+                    sql: "INSERT INTO decimal_categories(id, code, name) VALUES (?, ?, ?)",
+                    arguments: [new.id.uuidString, new.code, new.name]
+                )
+                created.append(new.id)
+            }
+            return created
+        }
+    }
+
+    /// Deletes the given categories unless something has been filed in them since.
+    /// Returns how many were kept because they are in use.
+    func removeUnusedCategories(_ ids: [UUID]) throws -> Int {
+        try readyDatabase().write { db in
+            var kept = 0
+            for id in ids {
+                try db.execute(sql: """
+                DELETE FROM decimal_categories WHERE id = ?1
+                AND NOT EXISTS (SELECT 1 FROM note_categories WHERE categoryID = ?1)
+                AND NOT EXISTS (SELECT 1 FROM source_categories WHERE categoryID = ?1)
+                """, arguments: [id.uuidString])
+                if db.changesCount == 0,
+                   try Bool.fetchOne(
+                       db,
+                       sql: "SELECT EXISTS(SELECT 1 FROM decimal_categories WHERE id = ?)",
+                       arguments: [id.uuidString]
+                   ) == true
+                {
+                    kept += 1
+                }
+            }
+            return kept
+        }
+    }
+
+    /// Live items filed in each category, as primary or secondary home.
+    func categoryItemCounts() throws -> [UUID: Int] {
+        try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT nc.categoryID, count(*) AS items FROM note_categories nc
+            JOIN notes n ON n.id = nc.noteID AND n.deletedAt IS NULL
+            GROUP BY nc.categoryID
+            """).reduce(into: [:]) { counts, row in
+                try counts[Self.uuid(row["categoryID"])] = row["items"]
+            }
+        }
+    }
+
+    /// Deletes a category and its memberships. An item whose primary home this was keeps its
+    /// lowest-coded remaining category as primary; items filed nowhere else become unfiled.
+    /// Pending proposals into this category go stale when reviewed.
+    func deleteCategory(_ id: UUID) throws {
+        try readyDatabase().write { db in
+            let code = try String.fetchOne(
+                db,
+                sql: "SELECT code FROM decimal_categories WHERE id = ?",
+                arguments: [id.uuidString]
+            )
+            if code == DecimalCategory.inboxCode {
+                throw ConversationError.inboxCategory
+            }
+            for (table, column) in [
+                ("note_categories", "noteID"),
+                ("source_categories", "sourceID"),
+            ] {
+                let homeless = try String.fetchAll(
+                    db,
+                    sql: "SELECT \(column) FROM \(table) WHERE categoryID = ? AND isPrimary = 1",
+                    arguments: [id.uuidString]
+                )
+                try db.execute(
+                    sql: "DELETE FROM \(table) WHERE categoryID = ?",
+                    arguments: [id.uuidString]
+                )
+                for item in homeless {
+                    try db.execute(sql: """
+                    UPDATE \(table) SET isPrimary = 1 WHERE \(column) = ?1 AND categoryID = (
+                        SELECT m.categoryID FROM \(table) m
+                        JOIN decimal_categories c ON c.id = m.categoryID
+                        WHERE m.\(column) = ?1 ORDER BY c.code LIMIT 1
+                    )
+                    """, arguments: [item])
+                }
+            }
+            try db.execute(
+                sql: "DELETE FROM decimal_categories WHERE id = ?",
+                arguments: [id.uuidString]
+            )
         }
     }
 

@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var preview = DocumentPreviewModel()
     @State private var source: SourceCitation?
     @AppStorage("libraryPresentation") private var presentation = LibraryPresentation.map
+    /// Area digits folded in the sidebar's Filing section, comma-separated.
+    @AppStorage("collapsedFilingAreas") private var collapsedAreas = ""
     @State private var atlas = KnowledgeAtlasModel()
     /// The item opened from the Atlas; the Atlas keeps its own state underneath.
     @State private var atlasItem: UUID?
@@ -220,7 +222,13 @@ struct ContentView: View {
                 } else {
                     documentList
                 }
-            }.frame(minWidth: 260, idealWidth: 330, maxWidth: 440)
+            }.frame(
+                minWidth: 260,
+                idealWidth: 330,
+                maxWidth: 440,
+                maxHeight: .infinity,
+                alignment: .top
+            )
             Group {
                 if scope == .captures {
                     ContentUnavailableView(
@@ -233,8 +241,10 @@ struct ContentView: View {
                 } else {
                     detail()
                 }
-            }.frame(minWidth: 320, maxWidth: .infinity)
+            }.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
+        // A split view centers columns shorter than itself, such as an empty list.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder private var atlasPane: some View {
@@ -325,24 +335,55 @@ struct ContentView: View {
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
             }
             Section("Filing") {
-                ForEach(categories) { category in
-                    Label {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(category.name).lineLimit(1)
-                            Text(category.code).font(.caption)
-                                .foregroundStyle(sidebarColor(.category(category.id)).opacity(0.72))
+                ForEach(CategoryArea.group(categories)) { area in
+                    let header = area.categories.first { $0.code == "\(area.digit)0" }
+                    let members = area.categories.filter { $0.id != header?.id }
+                    if let header, !members.isEmpty {
+                        DisclosureGroup(isExpanded: areaExpanded(area.digit)) {
+                            ForEach(members) { filingRow($0, icon: nil) }
+                        } label: {
+                            filingRow(header, icon: header.isInbox ? "tray" : "folder")
                         }
-                    } icon: { Image(systemName: "folder") }
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.category(category
-                                .id))))
-                        .tag(SidebarItem.library(.category(category.id)))
-                        .foregroundStyle(sidebarColor(.category(category.id)))
-                        .padding(.leading, category.code.contains(".") ? 10 : 0)
-                        .help(category.label)
+                    } else {
+                        ForEach(area.categories) { filingRow($0, icon: "folder") }
+                    }
                 }
             }
         }.listStyle(.sidebar).foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+            .environment(\.sidebarRowSize, .small)
             .accessibilityLabel("Library navigation")
+    }
+
+    /// One line per category: an area's `X0` row carries the icon and its members sit beneath it.
+    private func filingRow(_ category: DecimalCategory, icon: String?) -> some View {
+        let color = sidebarColor(.category(category.id))
+        return HStack(spacing: 8) {
+            if let icon {
+                Image(systemName: icon).foregroundStyle(color.opacity(0.72)).frame(width: 18)
+            }
+            Text(category.name).foregroundStyle(color).lineLimit(1)
+            Spacer(minLength: 4)
+            Text(category.code).font(.caption).monospacedDigit()
+                .foregroundStyle(color.opacity(0.5))
+        }
+        .padding(.leading, category.code.contains(".") ? 10 : 0)
+        .tag(SidebarItem.library(.category(category.id)))
+        .help(category.label)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func areaExpanded(_ digit: Int) -> Binding<Bool> {
+        Binding {
+            !collapsedAreas.split(separator: ",").contains(Substring(String(digit)))
+        } set: { expanded in
+            var collapsed = Set(collapsedAreas.split(separator: ",").map(String.init))
+            if expanded {
+                collapsed.remove(String(digit))
+            } else {
+                collapsed.insert(String(digit))
+            }
+            collapsedAreas = collapsed.sorted().joined(separator: ",")
+        }
     }
 
     /// Pass nil for the conversation row.
@@ -412,15 +453,13 @@ struct ContentView: View {
                     description: Text(error)
                 )
                 Button("Retry") { Task { await library.documentGrid.reload() } }.padding()
+                Spacer()
             } else if library.documentGrid.total == 0 {
                 ContentUnavailableView(
                     library.documentGrid.loading ? "Loading library…" : "No items here",
                     systemImage: "doc.text.magnifyingglass",
-                    description: Text(library.documentGrid.query
-                        .isEmpty ?
-                        "Save a source in #general or import a document. Unfiled items can be assigned a filing home." :
-                        "Try another term or choose All items to search more broadly.")
-                )
+                    description: Text(emptyListMessage)
+                ).frame(maxHeight: .infinity)
             } else {
                 List(selection: $selection) {
                     ForEach(pageRange, id: \.self) { index in
@@ -561,6 +600,16 @@ struct ContentView: View {
     private var pageRange: Range<Int> {
         let start = min(page * DocumentGridModel.pageSize, library.documentGrid.total)
         return start ..< min(start + DocumentGridModel.pageSize, library.documentGrid.total)
+    }
+
+    private var emptyListMessage: String {
+        if !library.documentGrid.query.isEmpty {
+            return "Try another term or choose All items to search more broadly."
+        }
+        if case .category = scope {
+            return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in #general."
+        }
+        return "Save a source in #general or import a document. Unfiled items can be assigned a filing home."
     }
 
     private var scopeTitle: String {

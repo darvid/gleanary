@@ -147,8 +147,13 @@ struct AtlasRenderer {
 
         // Layouts switch at fixed sizes because overlapping text cannot crossfade cleanly;
         // only detail that appears in empty space fades in.
-        let style: RegionLabelStyle = band >= 54 && width >= 110
-            ? .stacked : band >= 30 ? .compactWithCount : .compact
+        let style: RegionLabelStyle = if band >= 92, width >= 90, tile.node.code != nil {
+            .hero
+        } else if band >= 58, width >= 110 {
+            .stacked
+        } else {
+            band >= 30 ? .compactWithCount : .compact
+        }
         drawRegionLabel(
             style, tile: tile, at: position, origin: origin, width: width,
             countOpacity: Self.ramp(band, 30, 36), in: &label
@@ -156,6 +161,8 @@ struct AtlasRenderer {
     }
 
     private enum RegionLabelStyle {
+        /// The code set large above the name, for regions with room to spare.
+        case hero
         case compact, compactWithCount, stacked
     }
 
@@ -172,10 +179,34 @@ struct AtlasRenderer {
         let count = countText(tile, at: position)
         var y = origin.y
         switch style {
+        case .hero:
+            if let code = tile.node.code {
+                y += line(
+                    code,
+                    style: {
+                        $0.font(.system(size: 30, weight: .medium)).monospacedDigit()
+                            .foregroundStyle(ink)
+                    },
+                    x: origin.x, y: y, width: width, in: &context
+                )
+            }
+            y += line(
+                tile.node.title,
+                style: { $0.font(.system(size: 16, weight: .medium)).foregroundStyle(ink) },
+                x: origin.x, y: y, width: width, in: &context
+            )
+            _ = line(
+                count, style: { $0.font(.callout).foregroundStyle(.secondary) },
+                x: origin.x, y: y + 3, width: width, in: &context
+            )
         case .stacked:
             if let code = tile.node.code {
                 y += line(
-                    code, style: { $0.font(.title3.weight(.semibold)).foregroundStyle(ink) },
+                    code,
+                    style: {
+                        $0.font(.system(size: 21, weight: .medium)).monospacedDigit()
+                            .foregroundStyle(ink)
+                    },
                     x: origin.x, y: y, width: width, in: &context
                 )
             }

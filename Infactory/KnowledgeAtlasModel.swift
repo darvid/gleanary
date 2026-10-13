@@ -50,6 +50,17 @@ final class KnowledgeAtlasModel {
         }
     }
 
+    var hidesEmptyCategories = false {
+        didSet {
+            if hidesEmptyCategories != oldValue {
+                rebuild()
+            }
+        }
+    }
+
+    /// Categories with nothing filed in them, whether or not they are hidden.
+    private(set) var emptyCategoryCount = 0
+
     /// Item IDs matching the current search, or nil when no search is active.
     private(set) var matches: Set<UUID>?
     /// Matching items per tile, aligned with `layout.tiles`; empty without a search.
@@ -104,7 +115,9 @@ final class KnowledgeAtlasModel {
         case .sources: source.items = source.items.filter { $0.kind == "source" }
         case .notes: source.items = source.items.filter { $0.kind != "source" }
         }
-        root = AtlasHierarchy.project(source)
+        let projected = AtlasHierarchy.project(source)
+        emptyCategoryCount = AtlasHierarchy.emptyCategoryCount(projected)
+        root = hidesEmptyCategories ? AtlasHierarchy.withoutEmptyCategories(projected) : projected
         // Layouts depend only on the hierarchy and viewport, so unchanged regions stay put and
         // the camera can be kept as is.
         layout = AtlasLayout(root: root, bounds: CGRect(origin: .zero, size: viewport))

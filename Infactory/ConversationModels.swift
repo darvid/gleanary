@@ -92,6 +92,18 @@ struct DecimalCategory: Identifiable, Sendable, Equatable {
         "\(code) \(name)"
     }
 
+    /// The built-in fallback home; filing looks it up by this code.
+    var isInbox: Bool {
+        code == Self.inboxCode
+    }
+
+    static let inboxCode = "10"
+
+    /// The area digit: 3 for 30, 31 and 31.04.
+    var area: Int {
+        code.first?.wholeNumberValue ?? 0
+    }
+
     /// Comparison key for duplicate detection; codes keep their dots.
     static func normalized(_ text: String) -> String {
         let words = text.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "." }
@@ -136,7 +148,7 @@ struct ResearchSource: Sendable {
 enum ConversationError: LocalizedError {
     case invalidCategory, staleProposal, missingSource, invalidOutput, invalidReply, interrupted,
          busy,
-         multipleURLs, invalidPlan
+         multipleURLs, invalidPlan, categoryTaken, inboxCategory
     var errorDescription: String? {
         switch self {
         case .invalidCategory: "Use a Johnny Decimal code such as 31 or 31.04 and a nonempty name."
@@ -147,6 +159,8 @@ enum ConversationError: LocalizedError {
         case .interrupted: "Interrupted when Infactory closed. Retry to continue; saved sources are retained."
         case .busy: "Cancel the current conversation task before starting another."
         case .multipleURLs: "Save one URL per message. Select saved sources to compare them."
+        case .categoryTaken: "Another category already uses that code or name."
+        case .inboxCategory: "Inbox keeps code 10 because unfiled material falls back to it. It can be renamed but not renumbered or deleted."
         case .invalidPlan: "The request plan was incomplete or referenced unavailable records. No requested changes were applied. Try clarifying the request."
         }
     }

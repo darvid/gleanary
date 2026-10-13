@@ -32,7 +32,7 @@ struct AtlasLayout: Sendable {
     let bounds: CGRect
 
     /// Share of a region's height reserved for its label band.
-    static let labelBand = 0.24
+    static let labelBand = 0.3
     /// Smallest share of the parent's weight given to an empty or tiny category, so it stays
     /// discoverable without dominating.
     static let minimumShare = 0.015

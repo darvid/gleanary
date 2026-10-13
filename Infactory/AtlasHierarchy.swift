@@ -156,6 +156,24 @@ enum AtlasHierarchy {
         ))
     }
 
+    /// The tree without categories that hold no items in their subtree. Hues and counts are
+    /// unchanged, so the remaining regions keep their colors.
+    static func withoutEmptyCategories(_ node: AtlasNode) -> AtlasNode {
+        var node = node
+        node.children = node.children
+            .filter { $0.kind == .item || $0.itemCount > 0 }
+            .map(withoutEmptyCategories)
+        return node
+    }
+
+    /// Categories and unnamed groups with nothing placed in their subtree.
+    static func emptyCategoryCount(_ node: AtlasNode) -> Int {
+        node.children.reduce(0) { total, child in
+            total + emptyCategoryCount(child)
+                + ([.category, .group].contains(child.kind) && child.itemCount == 0 ? 1 : 0)
+        }
+    }
+
     /// Stable per-code palette slot. Consecutive codes (11, 12, 13) and decades (10, 20, 30)
     /// both land on distinct slots because the palette size is coprime with ten.
     static func hue(for code: String) -> Int {
