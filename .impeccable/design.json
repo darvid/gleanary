@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatedAt": "2026-10-13T00:00:00Z",
-  "title": "Design System: Infact Native Library",
+  "title": "Design System: Infactory Native Library",
   "extensions": {
     "nativePlatform": {
       "shipping": "SwiftUI, macOS 26+",

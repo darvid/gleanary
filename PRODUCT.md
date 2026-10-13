@@ -1,4 +1,4 @@
-# Infact
+# Infactory
 
 <!-- impeccable:product-schema 1 -->
 

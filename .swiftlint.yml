@@ -1,6 +1,6 @@
 included:
-  - Infact
-  - InfactTests
+  - Infactory
+  - InfactoryTests
   - Package.swift
 
 # SwiftFormat owns layout. Keep lint focused on code-quality checks.

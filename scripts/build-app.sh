@@ -17,34 +17,34 @@ if [[ "$configuration" != debug && "$configuration" != release ]]; then
     exit 1
 fi
 build_args=(--configuration "$configuration" --sdk "$sdk")
-swift build "${build_args[@]}" --product Infact
+swift build "${build_args[@]}" --product Infactory
 bin_dir="$(swift build "${build_args[@]}" --show-bin-path)"
 
-stage="$(mktemp -d "$project_dir/.build/infact-app.XXXXXX")"
+stage="$(mktemp -d "$project_dir/.build/infactory-app.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
-contents="$stage/Infact.app/Contents"
+contents="$stage/Infactory.app/Contents"
 mkdir -p "$contents/MacOS" "$contents/Resources"
-cp "$bin_dir/Infact" "$contents/MacOS/Infact"
+cp "$bin_dir/Infactory" "$contents/MacOS/Infactory"
 for resource in "$bin_dir"/*.bundle; do
     [[ -d "$resource" ]] || continue
     ditto "$resource" "$contents/Resources/$(basename "$resource")"
 done
 
 plist="$contents/Info.plist"
-cp Infact/Info.plist "$plist"
-plutil -replace CFBundleIdentifier -string app.getinfact "$plist"
-plutil -replace CFBundleExecutable -string Infact "$plist"
-plutil -replace CFBundleName -string Infact "$plist"
+cp Infactory/Info.plist "$plist"
+plutil -replace CFBundleIdentifier -string app.getinfactory "$plist"
+plutil -replace CFBundleExecutable -string Infactory "$plist"
+plutil -replace CFBundleName -string Infactory "$plist"
 plutil -replace CFBundlePackageType -string APPL "$plist"
 plutil -replace CFBundleVersion -string 1 "$plist"
 plutil -replace CFBundleShortVersionString -string 0.1 "$plist"
 plutil -replace LSMinimumSystemVersion -string 26.0 "$plist"
 plutil -replace NSHighResolutionCapable -bool YES "$plist"
 
-codesign --force --sign - --entitlements Infact/Infact.entitlements "$stage/Infact.app"
-codesign --verify --strict "$stage/Infact.app"
+codesign --force --sign - --entitlements Infactory/Infactory.entitlements "$stage/Infactory.app"
+codesign --verify --strict "$stage/Infactory.app"
 
 # Replace only the generated bundle; the sandboxed library is untouched.
-rm -rf "$project_dir/.build/Infact.app"
-mv "$stage/Infact.app" "$project_dir/.build/Infact.app"
-printf 'Built %s\n' "$project_dir/.build/Infact.app"
+rm -rf "$project_dir/.build/Infactory.app"
+mv "$stage/Infactory.app" "$project_dir/.build/Infactory.app"
+printf 'Built %s\n' "$project_dir/.build/Infactory.app"

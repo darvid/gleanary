@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Infact",
+    name: "Infactory",
     platforms: [.macOS(.v26)],
-    products: [.executable(name: "Infact", targets: ["Infact"])],
+    products: [.executable(name: "Infactory", targets: ["Infactory"])],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         .package(
@@ -23,7 +23,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Infact",
+            name: "Infactory",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "ForceSimulation", package: "Grape"),
@@ -31,14 +31,14 @@ let package = Package(
                 .product(name: "YouTubeTranscript", package: "swift-youtube-metadata"),
                 .product(name: "YouTubeKit", package: "YouTubeKit"),
             ],
-            path: "Infact",
-            exclude: ["Infact.entitlements", "Info.plist"],
+            path: "Infactory",
+            exclude: ["Infactory.entitlements", "Info.plist"],
             resources: [.process("Resources")]
         ),
         .testTarget(
-            name: "InfactTests",
-            dependencies: ["Infact", .product(name: "GRDB", package: "GRDB.swift")],
-            path: "InfactTests"
+            name: "InfactoryTests",
+            dependencies: ["Infactory", .product(name: "GRDB", package: "GRDB.swift")],
+            path: "InfactoryTests"
         ),
     ]
 )
