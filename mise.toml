@@ -5,19 +5,19 @@ swiftformat = "0.63.0"
 swiftlint = "0.65.1"
 
 [tasks.dev]
-description = "Build and open the native Sink app (quit it first to reload changes)"
+description = "Build and open the native Infact app (quit it first to reload changes)"
 depends = ["app:build"]
-run = 'open "$MISE_PROJECT_ROOT/.build/Sink.app"'
+run = 'open "$MISE_PROJECT_ROOT/.build/Infact.app"'
 
 [tasks."dev:release"]
-description = "Build an optimized Sink app for graph performance (quit it first)"
+description = "Build an optimized Infact app for graph performance (quit it first)"
 run = '''
 CONFIGURATION=release bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"
-open "$MISE_PROJECT_ROOT/.build/Sink.app"
+open "$MISE_PROJECT_ROOT/.build/Infact.app"
 '''
 
 [tasks."app:build"]
-description = "Build and sign a local sandboxed Sink.app bundle"
+description = "Build and sign a local sandboxed Infact.app bundle"
 run = 'bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
 
 [tasks.format]

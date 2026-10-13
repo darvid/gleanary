@@ -13,5 +13,5 @@ bash scripts/build-app.sh
 trap 'bash "$workspace/.superset/teardown.sh"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-open -n -W "$workspace/.build/Sink.app" &
+open -n -W "$workspace/.build/Infact.app" &
 wait "$!"
