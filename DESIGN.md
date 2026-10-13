@@ -64,7 +64,7 @@ components:
 
 Apple design language with ChatGPT-inspired restraint: familiar controls, compact navigation, and a generous reading pane. This records the finished Library and compatible app controls, not a redesign of conversation, settings, Graph, or Mind Map. Deferred graph surfaces keep their existing code and data.
 
-The product's platform posture is adaptive; the shipping surface is SwiftUI on macOS 26+ only. No web, iOS, or Android implementation is implied. Native system typography and SF Symbols are intentional here, including titles. There are no shipping raster assets in this Library world.
+The product's platform posture is adaptive; the shipping surface is SwiftUI on macOS 26+ only. No web, iOS, or Android implementation is implied. Native system typography and SF Symbols are intentional here, including titles. The only raster images in the Library are locally captured source previews.
 
 **Key Characteristics:**
 - Semantic macOS surfaces and system light/dark appearance.
@@ -119,6 +119,7 @@ Search and preview-action radii are the frontmatter's small, observed curves. Li
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
 - **Preview actions:** compact grayscale bordered buttons for captured source and original link; borderless small Edit/File actions. Press changes the grayscale fill. Enabled prominent actions elsewhere retain the system accent with brightness offsets of −0.12 at rest and −0.18 pressed. No custom hover or motion contract is implemented.
 - **Reading:** selectable native Markdown text with headings, lists, quotes, fenced code, and simple tables. No scripts or remote images load. Coverage, provider, filing, expandable capture limitations, and related source/artifact links accompany the text. Legacy summaries are classified by persisted Summary.md/Markdown/hash evidence, not filename alone; originals remain accessible through source relationships.
+- **Source previews:** link captures with a retained screenshot show it above the row title as a 96pt-tall, top-aligned crop (masthead and hero, like a link preview's image). Corners are 8pt continuous with a 0.5pt quaternary hairline so white pages hold an edge on light surfaces; dark appearance dims it by 14%. The image is local capture evidence, not a remote load, and is hidden from assistive technologies because the title repeats it. Rows without a screenshot keep the text-only layout; no placeholder art.
 - **Handoff:** pinned below list pagination; selected count, Clear, and Use in #general. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
 - **Recovery and mutation:** native empty/loading/error states, capture retry/stop actions, filing sheet, and confirmed deletion. Errors remain readable and actionable rather than decorative status theater.
 

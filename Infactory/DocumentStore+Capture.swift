@@ -178,7 +178,8 @@ extension DocumentStore {
         document: CapturedDocument,
         artifacts: [Artifact],
         favicon: StoredFavicon? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        previewImage: Data? = nil
     ) throws -> UUID {
         var document = document
         try document.validate()
@@ -246,11 +247,12 @@ extension DocumentStore {
             try db.execute(sql: """
             UPDATE notes SET sourceURL = coalesce(sourceURL, ?),
                 faviconURL = coalesce(?, faviconURL), faviconData = coalesce(?, faviconData),
-                faviconCheckedAt = coalesce(faviconCheckedAt, ?)
+                faviconCheckedAt = coalesce(faviconCheckedAt, ?),
+                previewImage = coalesce(?, previewImage)
             WHERE id = ?
             """, arguments: [document.sourceURL?.absoluteString ?? job.request.url?.absoluteString,
                              favicon?.url.absoluteString, favicon?.data,
-                             favicon == nil ? nil : now, noteID.uuidString])
+                             favicon == nil ? nil : now, previewImage, noteID.uuidString])
             try db.execute(
                 sql: "UPDATE ingestion_jobs SET state = 'ready', noteID = ?, error = NULL, progress = ?, updatedAt = ? WHERE id = ?",
                 arguments: [

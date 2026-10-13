@@ -185,7 +185,8 @@ final class DocumentGridModel {
                             faviconData: favicon?.data,
                             faviconChecked: true,
                             kind: entry.document.kind, filing: entry.document.filing,
-                            updatedAt: entry.document.updatedAt, coverage: entry.document.coverage
+                            updatedAt: entry.document.updatedAt, coverage: entry.document.coverage,
+                            previewImage: entry.document.previewImage
                         )
                         cache(updated, page: entry.page)
                     }

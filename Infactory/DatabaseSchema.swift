@@ -218,6 +218,9 @@ enum DatabaseSchema {
         migrator.registerMigration("reviewable-filing-v1") { db in
             try db.execute(sql: "ALTER TABLE knowledge_proposals ADD COLUMN filing BLOB")
         }
+        migrator.registerMigration("page-preview-v1") { db in
+            try db.execute(sql: "ALTER TABLE notes ADD COLUMN previewImage BLOB")
+        }
         try migrator.migrate(database)
     }
 }

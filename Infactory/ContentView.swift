@@ -689,6 +689,15 @@ private struct LibraryDocumentRow: View {
     let document: DocumentSummary
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let preview = document.previewImage {
+                PagePreviewHeader(id: document.id, data: preview)
+            }
+            details
+        }.padding(.vertical, 7).help(document.name)
+    }
+
+    private var details: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: document.kind == "source" ? "doc.text" : "note.text")
                 .foregroundStyle(.secondary).frame(width: 18).padding(.top, 2)
@@ -707,7 +716,44 @@ private struct LibraryDocumentRow: View {
                     Text(coverage.label).font(.caption).foregroundStyle(.secondary)
                 }
             }
-        }.padding(.vertical, 7).help(document.name)
+        }
+    }
+}
+
+/// A top-aligned crop of the page as it looked when captured, like a link preview's image.
+/// It repeats what the title already says, so assistive technologies skip it.
+private struct PagePreviewHeader: View {
+    static let height: CGFloat = 96
+    private static let decoded = NSCache<NSString, NSImage>()
+
+    let id: UUID
+    let data: Data
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if let image = Self.image(id: id, data: data) {
+            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+            Color.clear.frame(maxWidth: .infinity).frame(height: Self.height)
+                .overlay(alignment: .top) {
+                    Image(nsImage: image).resizable().interpolation(.high).scaledToFill()
+                }
+                // Screenshots are captured light; soften them so they do not glare in dark rows.
+                .overlay { Color.black.opacity(colorScheme == .dark ? 0.14 : 0) }
+                .clipShape(shape)
+                .overlay { shape.strokeBorder(.quaternary, lineWidth: 0.5) }
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Rows re-render on every cache arrival; decode each thumbnail once.
+    private static func image(id: UUID, data: Data) -> NSImage? {
+        let key = "\(id.uuidString)-\(data.count)" as NSString
+        if let cached = decoded.object(forKey: key) {
+            return cached
+        }
+        guard let image = NSImage(data: data) else { return nil }
+        decoded.setObject(image, forKey: key)
+        return image
     }
 }
 

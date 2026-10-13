@@ -8,6 +8,7 @@ actor IngestionEngine {
     let youtube: any YouTubeProviding
     let transcriber: any AudioTranscribing
     let summarizer: any LinkSummarizing
+    let screenshotter: (any PageScreenshotting)?
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -17,13 +18,15 @@ actor IngestionEngine {
         fetcher: any SourceFetching = SourceFetcher(),
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
         transcriber: any AudioTranscribing = LocalTranscriber(),
-        summarizer: any LinkSummarizing = AppleLinkSummarizer()
+        summarizer: any LinkSummarizing = AppleLinkSummarizer(),
+        screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
         self.fetcher = fetcher
         self.youtube = youtube
         self.transcriber = transcriber
         self.summarizer = summarizer
+        self.screenshotter = screenshotter
         artifacts = ArtifactStore(root: store.url.deletingLastPathComponent()
             .appending(path: "artifacts"))
     }
@@ -159,7 +162,7 @@ actor IngestionEngine {
                 CapturedDocument.self,
                 from: artifacts.data(for: snapshot)
             )
-        case .json:
+        case .json, .image:
             throw CaptureError.unsupported
         case .pdf:
             document = try await extractPDF(primary, job: job, acquired: acquired, changed: changed)
@@ -171,6 +174,7 @@ actor IngestionEngine {
                 faviconURL: &faviconURL,
                 changed: changed
             )
+            try await screenshot(primary, job: job, acquired: &acquired, changed: changed)
         case .text, .markdown:
             let text = try await Self.decodeText(
                 artifacts.data(for: primary),
@@ -201,13 +205,18 @@ actor IngestionEngine {
             source: primary.sourceURL ?? document.sourceURL ?? job.request.url,
             preferred: faviconURL
         )
+        var preview: Data?
+        if let screenshot = acquired.first(where: { $0.kind == .image }) {
+            preview = try? await PagePreview.thumbnail(artifacts.data(for: screenshot))
+        }
         try Task.checkCancellation()
         return try await store.publishCapture(
             job,
             document: document,
             artifacts: acquired,
             favicon: favicon,
-            summary: summary
+            summary: summary,
+            previewImage: preview
         )
     }
 
@@ -246,6 +255,34 @@ actor IngestionEngine {
             progress: "Summary retained locally"
         )
         return summary
+    }
+
+    /// Best effort: a page that will not render still yields its extracted text.
+    private func screenshot(
+        _ primary: Artifact,
+        job: CaptureJob,
+        acquired: inout [Artifact],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        guard let screenshotter, job.request.url != nil, let url = primary.sourceURL,
+              !acquired.contains(where: { $0.kind == .image }) else { return }
+        try await store.checkpoint(job, acquired: acquired, progress: "Capturing a page screenshot")
+        await changed()
+        let data: Data
+        do {
+            data = try await screenshotter.capture(url)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            return
+        }
+        try Task.checkCancellation()
+        let artifact = try await artifacts.retain(
+            data, kind: .image, name: "Screenshot.jpg", sourceURL: url
+        )
+        acquired.append(artifact)
+        try await store.checkpoint(job, acquired: acquired, progress: "Screenshot retained locally")
     }
 
     private func acquireOriginals(

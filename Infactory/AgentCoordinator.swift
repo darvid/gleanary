@@ -10,11 +10,12 @@ actor AgentCoordinator {
     init(
         store: DocumentStore,
         fetcher: any SourceFetching = SourceFetcher(),
-        inference: any ConversationInferring = AppleConversationInference()
+        inference: any ConversationInferring = AppleConversationInference(),
+        screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
         self.inference = inference
-        ingestion = IngestionEngine(store: store, fetcher: fetcher)
+        ingestion = IngestionEngine(store: store, fetcher: fetcher, screenshotter: screenshotter)
         search = SearchEngine(store: store)
     }
 

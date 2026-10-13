@@ -14,7 +14,7 @@ struct InfactoryApp: App {
                 return LibraryModel(store: DocumentStore(url: url))
             }
         #endif
-        return LibraryModel()
+        return LibraryModel(screenshotter: WebPageScreenshotter())
     }
 
     private static func makeConversation(store: DocumentStore) -> ConversationModel {

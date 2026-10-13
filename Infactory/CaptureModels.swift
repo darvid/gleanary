@@ -9,7 +9,7 @@ enum CaptureLimits {
 }
 
 enum ArtifactKind: String, Codable, Sendable {
-    case pdf, html, markdown, text, capture, json, audio
+    case pdf, html, markdown, text, capture, json, audio, image
 }
 
 struct Artifact: Codable, Sendable, Equatable {

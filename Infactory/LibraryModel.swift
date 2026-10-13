@@ -53,13 +53,18 @@ final class LibraryModel {
         store: DocumentStore = DocumentStore(),
         provider: any EmbeddingProviding = AppleEmbeddingProvider(),
         graphProvider: any GraphExtracting = AppleGraphExtractor(),
-        summarizer: any LinkSummarizing = AppleLinkSummarizer()
+        summarizer: any LinkSummarizing = AppleLinkSummarizer(),
+        screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
         documentGrid = DocumentGridModel(store: store)
         graph = KnowledgeGraphModel(store: store, provider: graphProvider)
         engine = SearchEngine(store: store, provider: provider)
-        ingestion = IngestionEngine(store: store, summarizer: summarizer)
+        ingestion = IngestionEngine(
+            store: store,
+            summarizer: summarizer,
+            screenshotter: screenshotter
+        )
     }
 
     /// File acquisition must be idle before permanently deleting content-addressed originals.
