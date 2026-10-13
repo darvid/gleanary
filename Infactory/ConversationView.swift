@@ -4,7 +4,6 @@ import UniformTypeIdentifiers
 struct ConversationView: View {
     @Bindable var model: ConversationModel
     @Bindable var library: LibraryModel
-    let showLibrary: () -> Void
     @State private var preview = DocumentPreviewModel()
     @State private var showingPreview = false
     @State private var source: SourceCitation?
@@ -17,8 +16,6 @@ struct ConversationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            Divider()
             HSplitView {
                 feed.frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity)
                 if showingPreview {
@@ -52,6 +49,7 @@ struct ConversationView: View {
             composer
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .toolbar { toolbar }
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "infactory", url.host == "note",
                let id = UUID(uuidString: url.lastPathComponent)
@@ -112,25 +110,24 @@ struct ConversationView: View {
         ))
     }
 
-    private var header: some View {
-        HStack(spacing: 16) {
-            Text("#general").font(.title2.weight(.semibold))
-            Text("Your shared knowledge workspace").font(.callout)
-                .foregroundStyle(Color.primary.opacity(0.72))
-            Spacer()
-            Label(
-                model.chatGPT
-                    .useChatGPT ? "Using ChatGPT plan" :
-                    (library.intelligenceAvailable ? "On-device" : "Local · model unavailable"),
-                systemImage: model.chatGPT.useChatGPT ? "cloud" : "lock.shield"
-            )
-            .font(.caption).help(library.intelligenceStatus)
-            Button("Library", systemImage: "books.vertical", action: showLibrary)
+    /// Two plain icon buttons; the window toolbar already shows the title.
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarSpacer(.flexible)
+        ToolbarItemGroup {
             Button("Clear conversation", systemImage: "trash") { confirmingClear = true }
                 .disabled(!model.ready || model.messages.isEmpty || model.clearingConversation)
+                .help("Clear conversation")
             Button("Settings", systemImage: "gearshape") { settings = true }
-                .labelStyle(.iconOnly).help("Filing scheme and inference availability")
-        }.padding(.horizontal, 24).padding(.vertical, 18)
+                .help("Settings · \(modelStatus)")
+        }
+        .sharedBackgroundVisibility(.hidden)
+    }
+
+    private var modelStatus: String {
+        if model.chatGPT.useChatGPT {
+            return "Using ChatGPT plan"
+        }
+        return library.intelligenceAvailable ? "On-device" : "Local · model unavailable"
     }
 
     private var feed: some View {
@@ -169,15 +166,19 @@ struct ConversationView: View {
                     proxy.scrollTo("latest", anchor: .bottom)
                 }
             }
-            .overlay(alignment: .bottomTrailing) {
+            .overlay(alignment: .bottom) {
                 if !followLatest {
                     Button("Latest messages", systemImage: "arrow.down") {
                         followLatest = true; proxy.scrollTo("latest", anchor: .bottom)
                     }
-                    .padding(.trailing, 32)
-                    .padding(.bottom, 20)
+                    .labelStyle(.iconOnly).font(.body.weight(.semibold))
+                    .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                    .help("Jump to the latest message")
+                    .padding(.bottom, 16)
+                    .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: 0.15), value: followLatest)
         }
     }
 
@@ -191,41 +192,46 @@ struct ConversationView: View {
 
     private func messageRow(_ message: ConversationMessage) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(message.author == "user" ? "You" : message.author.capitalized).font(.headline)
-                if let role = AgentRole(rawValue: message.author) {
-                    Text(role.responsibility).font(.caption)
-                        .foregroundStyle(Color.primary.opacity(0.72))
-                }
-                Spacer()
-                Text(message.createdAt, style: .time).font(.caption)
-                    .foregroundStyle(Color.primary.opacity(0.72))
-            }
-            MarkdownPreview(markdown: message.text).textSelection(.enabled)
-            ForEach(message.references, id: \.self) { id in
-                HStack {
-                    Button { open(id) } label: {
-                        Label(model.titles[id] ?? "Saved document", systemImage: "doc.text")
-                            .lineLimit(2).multilineTextAlignment(.leading)
-                    }.buttonStyle(.borderless).foregroundStyle(.primary)
-                    Spacer()
-                    Button(model.selectedSources.contains(id) ? "Selected" : "Use as source") {
-                        model.select(id)
+            if message.author == "user" {
+                userBubble(message)
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(message.author.capitalized).font(.headline)
+                    if let role = AgentRole(rawValue: message.author) {
+                        Text(role.responsibility).font(.caption)
+                            .foregroundStyle(Color.primary.opacity(0.72))
                     }
-                    .controlSize(.small).disabled(model.titles[id] == "Deleted document")
                 }
+                .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
+                MarkdownPreview(markdown: message.text).textSelection(.enabled)
+            }
+            ForEach(message.references, id: \.self) { id in
+                ReferenceChip(
+                    title: model.titles[id] ?? "Saved document",
+                    selected: model.selectedSources.contains(id),
+                    available: model.titles[id] != "Deleted document",
+                    open: { open(id) },
+                    toggleSource: { model.select(id) }
+                )
             }
             if let taskID = message.taskID, message.author == "user",
                let task = model.tasks.first(where: { $0.id == taskID }),
                ["failed", "cancelled"].contains(task.state)
             {
-                HStack(alignment: .top) {
-                    Text(task.progress).font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-                        .textSelection(.enabled)
-                    Spacer()
-                    Button("Retry") { Task { await model.send(retry: task) } }
-                        .disabled(model.running)
+                // Sits under the person's bubble, on the same trailing edge.
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+                    Text(task.progress).textSelection(.enabled).multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Retry", systemImage: "arrow.clockwise") {
+                        Task { await model.send(retry: task) }
+                    }
+                    .buttonStyle(.link).disabled(model.running)
                 }
+                .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+                .frame(maxWidth: 560, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 80).padding(.trailing, 4)
             }
             ForEach(model.proposals
                 .filter {
@@ -237,88 +243,116 @@ struct ConversationView: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// The person's own messages sit right-aligned in a bubble, as in ChatGPT, so the agents'
+    /// replies read as the main column. Times only show on hover, for every message.
+    private func userBubble(_ message: ConversationMessage) -> some View {
+        Text(message.text).textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(
+                Color.primary.opacity(0.09),
+                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+            )
+            .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
+            .frame(maxWidth: 560, alignment: .trailing)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 80)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "You, \(message.createdAt.formatted(date: .omitted, time: .shortened))"
+            )
+            .accessibilityValue(message.text)
+    }
+
     private func filingDetail(_ change: FilingChange) -> String {
         change.newCategory == nil
             ? "Changes the primary filing home. Secondary memberships and document text are preserved. Undo restores the previous filing."
             : "Creates this category and makes it the primary filing home. Document text is preserved. Undo restores the previous filing and removes the category if nothing else uses it."
     }
 
+    /// One header line (what, which document, state), the move itself, then the agent's reason.
+    /// The standing explanation of what applying does lives in help text to keep the card short.
     private func proposalCard(_ proposal: KnowledgeProposal) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            let creates = proposal.filing?.newCategory != nil
-            Label {
-                Text(
-                    proposal.filing == nil ? "Proposed connection"
-                        : creates ?
-                        (proposal
-                            .status == "pending" ? "Proposed new category" : "New category")
-                        : proposal.status == "pending" ? "Proposed filing" : "Filing"
-                )
-            } icon: {
-                Image(systemName: proposal.filing == nil ? "link" : creates ? "folder.badge.plus" :
-                    "folder")
-                    .foregroundStyle(creates ? Self.newCategoryTint : .primary)
-            }.font(.headline)
-            if let filing = proposal.filing {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.titles[proposal.left] ?? "Document")
+        let creates = proposal.filing?.newCategory != nil
+        let explanation = proposal.filing.map(filingDetail)
+            ?? "Adds a reversible cross-link. Neither document's text will change."
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: proposal
+                .filing == nil ? "link" : creates ? "folder.badge.plus" : "folder")
+                .foregroundStyle(creates ? Self.newCategoryTint : Color.primary.opacity(0.72))
+                .help(proposal.filing == nil ? "Connection" : creates ? "New category" : "Filing")
+                .accessibilityLabel(proposal
+                    .filing == nil ? "Connection" : creates ? "New category" : "Filing")
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Group {
+                        if proposal.filing == nil {
+                            Text(
+                                "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
+                            )
+                        } else {
+                            Text(model.titles[proposal.left] ?? "Document")
+                        }
+                    }.font(.callout.weight(.medium)).lineLimit(1)
+                    Spacer(minLength: 8)
+                    proposalStatus(proposal, explanation: explanation)
+                }
+                if let filing = proposal.filing {
                     HStack(spacing: 6) {
                         Text(filing.previousLabel).foregroundStyle(Color.primary.opacity(0.72))
-                        Image(systemName: "arrow.right").font(.caption)
+                            .lineLimit(1)
+                        Image(systemName: "arrow.right").font(.caption2)
                             .foregroundStyle(Color.primary.opacity(0.72)).accessibilityHidden(true)
                         categoryChip(filing.destinationLabel, isNew: creates)
                     }.font(.callout)
                 }
-            } else {
-                Text(
-                    "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
-                )
-            }
-            Text(proposal.filing.map(filingDetail)
-                ?? "Adds a reversible cross-link. Neither document's text will change.")
-                .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-            if !proposal.rationale.isEmpty {
-                Text(proposal.rationale).font(.callout).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            // macOS convention: secondary action leading, decision buttons trailing, primary last.
-            HStack {
-                if proposal.status == "pending" {
-                    Button("Review document") {
-                        open(proposal.filing == nil ? proposal.right : proposal.left)
-                    }
-                    Spacer()
-                    Button("Reject") { Task { await model.review(proposal, action: "reject") } }
-                    Button(proposal.filing == nil ? "Apply link" : "Apply filing") {
-                        Task { await model.review(
-                            proposal,
-                            action: "apply"
-                        ) }
-                    }.buttonStyle(.borderedProminent)
-                } else {
-                    Text(proposal.status.capitalized).font(.callout)
-                        .foregroundStyle(Color.primary.opacity(0.72))
-                    Spacer()
-                    if proposal.status == "applied" {
-                        Button(proposal.filing == nil ? "Undo link" : "Undo filing") {
-                            Task { await model.review(
-                                proposal,
-                                action: "undo"
-                            ) }
-                        }
-                    }
+                if !proposal.rationale.isEmpty {
+                    Text(proposal.rationale).font(.callout)
+                        .foregroundStyle(Color.primary.opacity(0.72)).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }.controlSize(.small)
+                if proposal.status == "pending" {
+                    // macOS convention: secondary action leading, decisions trailing, primary last.
+                    HStack {
+                        Button("Review document") {
+                            open(proposal.filing == nil ? proposal.right : proposal.left)
+                        }.buttonStyle(.link)
+                        Spacer()
+                        Button("Reject") { Task { await model.review(proposal, action: "reject") } }
+                        Button(proposal.filing == nil ? "Apply link" : "Apply filing") {
+                            Task { await model.review(proposal, action: "apply") }
+                        }
+                        .buttonStyle(.borderedProminent).help(explanation)
+                        .accessibilityHint(explanation)
+                    }.controlSize(.small).padding(.top, 2)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14).background(
-            Color(nsColor: .controlBackgroundColor),
-            in: RoundedRectangle(cornerRadius: 12)
-        )
-        .overlay {
-            if proposal.filing?.newCategory != nil {
-                RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Self.newCategoryTint.opacity(0.45), lineWidth: 1)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+    }
+
+    /// The decision state, with Undo beside it once applied.
+    @ViewBuilder private func proposalStatus(
+        _ proposal: KnowledgeProposal,
+        explanation: String
+    ) -> some View {
+        if proposal.status == "pending" {
+            Text("Proposed").font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+        } else {
+            HStack(spacing: 6) {
+                Text(proposal.status.capitalized).font(.caption)
+                    .foregroundStyle(Color.primary.opacity(0.72))
+                if proposal.status == "applied" {
+                    Text("·").font(.caption).foregroundStyle(.tertiary).accessibilityHidden(true)
+                    Button(proposal.filing == nil ? "Undo link" : "Undo filing") {
+                        Task { await model.review(proposal, action: "undo") }
+                    }
+                    .buttonStyle(.link).font(.caption).help(explanation)
+                    .accessibilityHint(explanation)
+                }
             }
         }
     }
@@ -349,13 +383,19 @@ struct ConversationView: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let error = model.error {
-                HStack {
-                    Text(error).font(.callout)
-                        .textSelection(.enabled); Spacer(); Button("Dismiss") { model.error = nil }
-                }
-            }
-            if !model.ready {
-                Button("Retry opening workspace") { Task { await model.load() } }
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(error).font(.callout).textSelection(.enabled)
+                    Spacer()
+                    // Opening sets `ready`; it is false while loading too, so offer a retry only
+                    // once opening has actually failed.
+                    if !model.ready {
+                        Button("Retry") { Task { await model.load() } }
+                    }
+                    Button("Dismiss", systemImage: "xmark") { model.error = nil }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                }.controlSize(.small)
             }
             if let task = model.activeTask {
                 HStack(spacing: 8) {
@@ -371,13 +411,6 @@ struct ConversationView: View {
                         .hidden().accessibilityHidden(true)
                 }
                 .padding(.horizontal, composerInset)
-            }
-            if !model.selectedSources.isEmpty {
-                HStack {
-                    Text("\(model.selectedSources.count) sources selected for this request")
-                        .font(.caption)
-                    Button("Clear") { model.selectedSources = [] }.buttonStyle(.borderless)
-                }
             }
             if ConversationRoute.mentionRange(in: model.composer) != nil {
                 VStack(alignment: .leading, spacing: 4) {
@@ -395,47 +428,52 @@ struct ConversationView: View {
                     }
                 }.controlSize(.small)
             }
-            HStack(alignment: .bottom, spacing: 12) {
-                Button { importing = true } label: {
-                    Image(systemName: "plus").font(.body.weight(.medium)).frame(
-                        width: 32,
-                        height: 32
-                    )
-                    .contentShape(Circle())
+            VStack(alignment: .leading, spacing: 8) {
+                if !model.selectedSources.isEmpty {
+                    sourceAttachments
                 }
-                .buttonStyle(.plain).disabled(!model.ready || model.running)
-                .accessibilityLabel("Attach document").help("Import a document")
-                TextField(
-                    "Ask Infactory or save something…",
-                    text: $model.composer,
-                    axis: .vertical
-                )
-                .lineLimit(1 ... 6).textFieldStyle(.plain).focused($composing)
-                .padding(.vertical, 7)
-                .accessibilityLabel("Message general").onSubmit { send() }
-                Button {
-                    if model.running, draftIsEmpty {
-                        Task { await model.cancel() }
-                    } else {
-                        send()
-                    }
-                } label: {
-                    Image(systemName: model.running && draftIsEmpty ? "stop.fill" : "arrow.up")
-                        .font(.body.weight(.semibold)).frame(width: 32, height: 32)
-                        .foregroundStyle(Color(nsColor: .controlBackgroundColor))
-                        .background(
-                            Color.primary
-                                .opacity(!model
-                                    .ready || (!model.running && draftIsEmpty) ? 0.3 : 0.9),
-                            in: Circle()
+                HStack(alignment: .bottom, spacing: 12) {
+                    Button { importing = true } label: {
+                        Image(systemName: "plus").font(.body.weight(.medium)).frame(
+                            width: 32,
+                            height: 32
                         )
+                        .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain).disabled(!model.ready || model.running)
+                    .accessibilityLabel("Attach document").help("Import a document")
+                    TextField(
+                        "Ask Infactory or save something…",
+                        text: $model.composer,
+                        axis: .vertical
+                    )
+                    .lineLimit(1 ... 6).textFieldStyle(.plain).focused($composing)
+                    .padding(.vertical, 7)
+                    .accessibilityLabel("Message general").onSubmit { send() }
+                    Button {
+                        if model.running, draftIsEmpty {
+                            Task { await model.cancel() }
+                        } else {
+                            send()
+                        }
+                    } label: {
+                        Image(systemName: model.running && draftIsEmpty ? "stop.fill" : "arrow.up")
+                            .font(.body.weight(.semibold)).frame(width: 32, height: 32)
+                            .foregroundStyle(Color(nsColor: .controlBackgroundColor))
+                            .background(
+                                Color.primary
+                                    .opacity(!model
+                                        .ready || (!model.running && draftIsEmpty) ? 0.3 : 0.9),
+                                in: Circle()
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(model.running && draftIsEmpty ? "Stop task" : model
+                        .running ? "Redirect task" : "Send message")
+                    .help(model
+                        .running && draftIsEmpty ? "Stop current task" : "Send message (⌘Return)")
+                    .disabled(!model.ready || (!model.running && draftIsEmpty))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(model.running && draftIsEmpty ? "Stop task" : model
-                    .running ? "Redirect task" : "Send message")
-                .help(model
-                    .running && draftIsEmpty ? "Stop current task" : "Send message (⌘Return)")
-                .disabled(!model.ready || (!model.running && draftIsEmpty))
             }.padding(.horizontal, 12).padding(.vertical, 9)
                 .background(
                     Color(nsColor: .controlBackgroundColor),
@@ -459,6 +497,31 @@ struct ConversationView: View {
                 .padding(.horizontal, composerInset)
         }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
             .frame(maxWidth: .infinity)
+    }
+
+    /// Documents pinned as context for the next message, shown like attachments in the composer.
+    private var sourceAttachments: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(model.selectedSources, id: \.self) { id in
+                    let title = model.titles[id] ?? "Saved document"
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text").foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text(title).lineLimit(1).frame(maxWidth: 220)
+                        Button("Remove \(title)", systemImage: "xmark") { model.select(id) }
+                            .labelStyle(.iconOnly).buttonStyle(.borderless)
+                            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                    .padding(.leading, 10).padding(.trailing, 8).padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                    .help("Used as a source for your next message")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Source: \(title)")
+                }
+            }.padding(.leading, 4)
+        }.scrollIndicators(.never)
     }
 
     /// Clears the composer's 24pt rounded corner so status text lines up with its flat edge.
@@ -675,5 +738,48 @@ private struct FilingSettings: View {
             editingID = id
             error = nil
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// A saved document mentioned in a message. Clicking opens it; the trailing control, shown on
+/// hover or once chosen, adds it to the sources for the next message.
+private struct ReferenceChip: View {
+    let title: String
+    let selected: Bool
+    let available: Bool
+    let open: () -> Void
+    let toggleSource: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: open) {
+                Label(title, systemImage: "doc.text").lineLimit(1)
+            }
+            .buttonStyle(.plain).help("Open \(title)")
+            Button(
+                selected ? "Remove from sources" : "Use as source",
+                systemImage: selected ? "checkmark.circle.fill" : "plus.circle",
+                action: toggleSource
+            )
+            .labelStyle(.iconOnly).buttonStyle(.borderless)
+            .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.72))
+            .help(selected ? "Remove from sources for the next message"
+                : "Use as a source for the next message")
+            .disabled(!available)
+            .opacity(selected || hovering ? 1 : 0)
+        }
+        .font(.callout)
+        .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, 4)
+        .background(
+            selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.06),
+            in: Capsule()
+        )
+        .onHover { hovering = $0 }
+        .contextMenu {
+            Button("Open", action: open)
+            Button(selected ? "Remove from sources" : "Use as source", action: toggleSource)
+                .disabled(!available)
+        }
     }
 }

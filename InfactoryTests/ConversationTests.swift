@@ -1859,8 +1859,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         for dark in [true, false] {
             let view = NSHostingView(rootView: ConversationView(
                 model: model,
-                library: library,
-                showLibrary: {}
+                library: library
             )
             .environment(\.colorScheme, dark ? .dark : .light))
             view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -1891,8 +1890,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
             model.composer = draft
             let view = NSHostingView(rootView: ConversationView(
                 model: model,
-                library: library,
-                showLibrary: {}
+                library: library
             ).environment(\.colorScheme, .dark))
             view.appearance = NSAppearance(named: .darkAqua)
             view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
@@ -1975,8 +1973,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let library = LibraryModel(store: store)
         let view = NSHostingView(rootView: ConversationView(
             model: model,
-            library: library,
-            showLibrary: {}
+            library: library
         ))
         view.frame = NSRect(x: 0, y: 0, width: 1180, height: 780)
         view.layoutSubtreeIfNeeded()
@@ -1993,8 +1990,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         }
         let narrow = NSHostingView(rootView: ConversationView(
             model: model,
-            library: library,
-            showLibrary: {}
+            library: library
         ).environment(\.colorScheme, .light))
         narrow.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
         narrow.layoutSubtreeIfNeeded()

@@ -3,11 +3,12 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Bindable var library: LibraryModel
-    var returnToConversation: () -> Void = {}
-    var useInConversation: ([UUID]) -> Void = { _ in }
+    /// The #general conversation shown beside the shared sidebar; nil in library-only hosts.
+    var conversation: ConversationModel?
+    @State private var chatting: Bool
     var initialSelection: UUID?
     @State private var scope: LibraryScope? = .all
-    @State private var columns = NavigationSplitViewVisibility.all
+    @State private var sidebarVisible = true
     @State private var selection: Set<UUID> = []
     @State private var page = 0
     @State private var categories: [DecimalCategory] = []
@@ -25,35 +26,37 @@ struct ContentView: View {
 
     init(
         library: LibraryModel,
-        returnToConversation: @escaping () -> Void = {},
-        useInConversation: @escaping ([UUID]) -> Void = { _ in },
+        conversation: ConversationModel? = nil,
         initialSelection: UUID? = nil,
         previewModel: DocumentPreviewModel? = nil
     ) {
         self.library = library
-        self.returnToConversation = returnToConversation
-        self.useInConversation = useInConversation
+        self.conversation = conversation
+        _chatting = State(initialValue: conversation != nil && initialSelection == nil)
         self.initialSelection = initialSelection
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider()
-            if let error = library.error ?? library.indexingError {
-                errorNotice(error)
+        // Like ChatGPT: one toolbar spans the window, with the sidebar and content below it, so the
+        // sidebar toggle never moves and content never scrolls into the titlebar.
+        HStack(spacing: 0) {
+            if sidebarVisible {
+                sidebar.frame(width: Self.sidebarWidth)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Divider()
             }
-            if presentation == .map, scope != .captures {
-                NavigationSplitView(columnVisibility: $columns) {
-                    sidebar.navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
-                } detail: {
-                    atlasPane
-                }
-            } else {
-                libraryColumns
+            main.frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaInset(edge: .top, spacing: 0) { notice }
+        }
+        // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            Divider().background(alignment: .bottom) {
+                Color(nsColor: .windowBackgroundColor).ignoresSafeArea(edges: .top)
             }
         }
+        .toolbar { toolbar }
+        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(\.openURL, OpenURLAction { url in
             if url.scheme == "infactory", url.host == "note",
@@ -64,7 +67,8 @@ struct ContentView: View {
             }
             return .systemAction
         })
-        .focusedSceneValue(\.infactoryActions, InfactoryActions(
+        // The conversation publishes its own actions while it is showing.
+        .focusedSceneValue(\.infactoryActions, chatting ? nil : InfactoryActions(
             enabled: library.ready && !library.busy,
             newNote: { editing = MarkdownDocument(name: "Untitled", markdown: "") },
             attach: { importing = true }, focus: { searchFocused = true }
@@ -79,6 +83,7 @@ struct ContentView: View {
             }
         }
         .dropDestination(for: URL.self) { urls, _ in
+            guard !chatting else { return false }
             let files = urls.filter(\.isFileURL)
             if !files.isEmpty {
                 Task { await library.importFiles(files) }
@@ -149,50 +154,87 @@ struct ContentView: View {
         .onExitCommand { library.documentGrid.query = "" }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 14) {
-            Button(action: returnToConversation) { Label("#general", systemImage: "chevron.left") }
-                .buttonStyle(.borderless).help("Return to the conversation")
-            Divider().frame(height: 18)
-            Text("Library").font(.headline)
-            Picker("Presentation", selection: $presentation) {
-                Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
-                Label("List", systemImage: "list.bullet").tag(LibraryPresentation.list)
+    static let sidebarWidth: CGFloat = 220
+
+    @ViewBuilder private var main: some View {
+        if chatting, let conversation {
+            ConversationView(model: conversation, library: library)
+        } else if presentation == .list || scope == .captures {
+            libraryColumns
+        } else {
+            atlasPane
+        }
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            HStack(spacing: 0) {
+                Button("Toggle Sidebar", systemImage: "sidebar.left") {
+                    withAnimation(.snappy(duration: 0.25)) { sidebarVisible.toggle() }
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                .keyboardShortcut("s", modifiers: [.command, .control])
+                .help(sidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)")
+                if sidebarVisible {
+                    // Continues the sidebar's edge through the toolbar, as ChatGPT does.
+                    Spacer().frame(width: Self.titleIndent)
+                    Divider().frame(height: 22)
+                }
+                Spacer().frame(width: 14)
+                Text(chatting ? "#general" : scopeTitle).font(.headline).lineLimit(1)
             }
-            .pickerStyle(.segmented).labelsHidden().fixedSize()
-            .help("Browse the library as a map or a list")
-            Spacer()
-            Button("New note", systemImage: "square.and.pencil") {
-                editing = MarkdownDocument(name: "Untitled", markdown: "")
-            }.disabled(!library.ready || library.busy)
-            Button("Import…", systemImage: "square.and.arrow.down") { importing = true }
-                .disabled(!library.ready || library.busy)
-        }.controlSize(.small).padding(.horizontal, 20).padding(.vertical, 14)
+        }
+        .sharedBackgroundVisibility(.hidden)
+        if !chatting {
+            ToolbarSpacer(.flexible)
+            ToolbarItem {
+                Picker("Presentation", selection: $presentation) {
+                    Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
+                    Label("List", systemImage: "list.bullet").tag(LibraryPresentation.list)
+                }
+                .pickerStyle(.segmented).labelStyle(.iconOnly).fixedSize()
+                .help("Browse the library as a map or a list")
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+    }
+
+    /// Gap from the toggle to the sidebar's edge, given the toggle's place beside the traffic
+    /// lights.
+    static let titleIndent: CGFloat = 105
+
+    @ViewBuilder private var notice: some View {
+        if let error = library.error ?? library.indexingError {
+            VStack(spacing: 0) {
+                errorNotice(error)
+                Divider()
+            }
+        }
     }
 
     private var libraryColumns: some View {
-        NavigationSplitView(columnVisibility: $columns) {
-            sidebar.navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
-        } content: {
-            if scope == .captures {
-                captureList
-            } else {
-                documentList
-            }
-        } detail: {
-            if scope == .captures {
-                ContentUnavailableView(
-                    "Capture recovery",
-                    systemImage: "tray.and.arrow.down",
-                    description: Text(
-                        "Retry failed captures or inspect their saved documents. Retained originals are reused where available."
+        HSplitView {
+            Group {
+                if scope == .captures {
+                    captureList
+                } else {
+                    documentList
+                }
+            }.frame(minWidth: 260, idealWidth: 330, maxWidth: 440)
+            Group {
+                if scope == .captures {
+                    ContentUnavailableView(
+                        "Capture recovery",
+                        systemImage: "tray.and.arrow.down",
+                        description: Text(
+                            "Retry failed captures or inspect their saved documents. Retained originals are reused where available."
+                        )
                     )
-                )
-            } else {
-                detail()
-            }
+                } else {
+                    detail()
+                }
+            }.frame(minWidth: 320, maxWidth: .infinity)
         }
-        .navigationSplitViewStyle(.balanced)
     }
 
     @ViewBuilder private var atlasPane: some View {
@@ -251,20 +293,25 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
-        List(selection: $scope) {
+        List(selection: sidebarSelection) {
+            if conversation != nil {
+                Label("#general", systemImage: "bubble.left.and.text.bubble.right")
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
+                    .tag(SidebarItem.conversation)
+            }
             Section("Library") {
                 Label("All items", systemImage: "tray.full")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
-                    .tag(LibraryScope.all)
+                    .tag(SidebarItem.library(.all))
                 Label("Sources", systemImage: "doc.text")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.sources)))
-                    .tag(LibraryScope.sources)
+                    .tag(SidebarItem.library(.sources))
                 Label("Notes", systemImage: "note.text")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.notes)))
-                    .tag(LibraryScope.notes)
+                    .tag(SidebarItem.library(.notes))
                 Label("Unfiled", systemImage: "folder.badge.questionmark")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.unfiled)))
-                    .tag(LibraryScope.unfiled)
+                    .tag(SidebarItem.library(.unfiled))
                 HStack {
                     Label("Captures", systemImage: "tray.and.arrow.down")
                         .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.captures)))
@@ -275,7 +322,7 @@ struct ContentView: View {
                     {
                         Text(issues.formatted()).font(.caption).foregroundStyle(.secondary)
                     }
-                }.foregroundStyle(sidebarColor(.captures)).tag(LibraryScope.captures)
+                }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
             }
             Section("Filing") {
                 ForEach(categories) { category in
@@ -288,7 +335,7 @@ struct ContentView: View {
                     } icon: { Image(systemName: "folder") }
                         .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.category(category
                                 .id))))
-                        .tag(LibraryScope.category(category.id))
+                        .tag(SidebarItem.library(.category(category.id)))
                         .foregroundStyle(sidebarColor(.category(category.id)))
                         .padding(.leading, category.code.contains(".") ? 10 : 0)
                         .help(category.label)
@@ -298,8 +345,35 @@ struct ContentView: View {
             .accessibilityLabel("Library navigation")
     }
 
-    private func sidebarColor(_ item: LibraryScope) -> Color {
-        colorScheme == .dark || scope == item ? .white : .black
+    /// Pass nil for the conversation row.
+    private func sidebarColor(_ item: LibraryScope?) -> Color {
+        let selected = item.map { !chatting && scope == $0 } ?? chatting
+        return colorScheme == .dark || selected ? .white : .black
+    }
+
+    private var sidebarSelection: Binding<SidebarItem?> {
+        Binding {
+            chatting ? .conversation : scope.map(SidebarItem.library)
+        } set: { item in
+            switch item {
+            case .conversation: chatting = true
+            case let .library(scope):
+                chatting = false
+                self.scope = scope
+            case nil: break
+            }
+        }
+    }
+
+    private func useInConversation(_ ids: [UUID]) {
+        guard let conversation else { return }
+        Task {
+            if await conversation.prepareSources(ids) {
+                chatting = true
+            } else {
+                library.error = conversation.error ?? "Choose up to four available items, then try again."
+            }
+        }
     }
 
     private var documentList: some View {
@@ -597,4 +671,9 @@ private struct LibrarySidebarLabelStyle: LabelStyle {
             configuration.title.foregroundStyle(color)
         }
     }
+}
+
+private enum SidebarItem: Hashable {
+    case conversation
+    case library(LibraryScope)
 }

@@ -34,6 +34,8 @@ struct AtlasRenderer {
     let dark: Bool
     let highContrast: Bool
     let keyboardFocused: Bool
+    /// Device pixels per point, used to keep edges on the pixel grid.
+    var displayScale: CGFloat = 2
 
     /// Item grids below this cell width are filled in batches without labels or strokes.
     private static let batchedItemWidth: CGFloat = 26
@@ -47,7 +49,7 @@ struct AtlasRenderer {
         var position = 1
         while position < layout.tiles.count {
             let tile = layout.tiles[position]
-            let screen = camera.screen(tile.rect)
+            let screen = snapped(camera.screen(tile.rect))
             guard screen.intersects(viewport), min(screen.width, screen.height) >= 1.5 else {
                 position = tile.end
                 continue
@@ -60,12 +62,19 @@ struct AtlasRenderer {
             drawRegion(tile, at: position, screen: screen, in: &context)
             if tile.hasItemChildren {
                 let cell = camera.screen(layout.tiles[position + 1].rect)
-                if min(cell.width, cell.height) < KnowledgeAtlasModel.minimumItemSize {
+                // Items fade in over a short size range while a count stands in for them.
+                let shown = Self.itemReveal(cell)
+                if shown < 1 {
+                    drawHiddenItems(tile, at: position, opacity: 1 - shown, in: &context)
+                }
+                if shown == 0 {
                     position = tile.end
                     continue
                 }
                 if cell.width < Self.batchedItemWidth {
-                    drawBatchedItems(of: position, viewport: viewport, in: &context)
+                    var faded = context
+                    faded.opacity = shown
+                    drawBatchedItems(of: position, viewport: viewport, in: &faded)
                     position = tile.end
                     continue
                 }
@@ -83,13 +92,17 @@ struct AtlasRenderer {
         screen: CGRect,
         in context: inout GraphicsContext
     ) {
-        let radius = min(10, min(screen.width, screen.height) * 0.06)
-        let shape = Path(roundedRect: screen, cornerRadius: radius, style: .continuous)
+        let shape = Path(
+            roundedRect: screen,
+            cornerRadius: Self.cornerRadius(tile, screen: screen),
+            style: .continuous
+        )
         let ink = AtlasPalette.ink(tile.node.hue, dark: dark)
         let dimmed = searching && matchCounts[position] == 0
         if tile.node.itemCount == 0, tile.childCount == 0 {
             context.stroke(
-                shape, with: .color(ink.opacity(dimmed ? 0.15 : 0.4)),
+                border(tile, screen, width: 1, inside: true),
+                with: .color(ink.opacity(dimmed ? 0.15 : 0.4)),
                 style: StrokeStyle(lineWidth: 1, dash: [3, 3])
             )
         } else {
@@ -99,10 +112,11 @@ struct AtlasRenderer {
                 with: .color(AtlasPalette.fill(tile.node.hue, dark: dark)
                     .opacity(dimmed ? base * 0.3 : base))
             )
+            let hairline = highContrast ? 1 : 1 / displayScale
             context.stroke(
-                shape,
+                border(tile, screen, width: hairline, inside: true),
                 with: .color(ink.opacity(highContrast ? 0.45 : 0.12)),
-                lineWidth: highContrast ? 1 : 0.5
+                lineWidth: hairline
             )
         }
         if !focusPath.contains(position) {
@@ -121,64 +135,102 @@ struct AtlasRenderer {
         let band = tile.childCount == 0 ? screen.height : content.minY - screen.minY
         let inset = min(14, max(4, screen.width * 0.045))
         let width = screen.width - inset * 2
-        guard width >= 28, band >= 13 else { return }
-        let ink = AtlasPalette.ink(tile.node.hue, dark: dark)
+        let visible = Self.ramp(band, 13, 19) * Self.ramp(width, 28, 40)
+        guard visible > 0 else { return }
         var label = context
         label.clip(to: Path(screen))
-        label.opacity = dimmed ? 0.45 : 1
-        var y = screen.minY + min(inset, max(2, band * 0.12))
-        let count = countText(tile, at: position)
-        let name = tile.node.title
+        label.opacity = (dimmed ? 0.45 : 1) * visible
+        let origin = CGPoint(
+            x: screen.minX + inset,
+            y: screen.minY + min(inset, max(2, band * 0.12))
+        )
 
-        if band >= 54, width >= 110 {
+        // Layouts switch at fixed sizes because overlapping text cannot crossfade cleanly;
+        // only detail that appears in empty space fades in.
+        let style: RegionLabelStyle = band >= 54 && width >= 110
+            ? .stacked : band >= 30 ? .compactWithCount : .compact
+        drawRegionLabel(
+            style, tile: tile, at: position, origin: origin, width: width,
+            countOpacity: Self.ramp(band, 30, 36), in: &label
+        )
+    }
+
+    private enum RegionLabelStyle {
+        case compact, compactWithCount, stacked
+    }
+
+    private func drawRegionLabel(
+        _ style: RegionLabelStyle,
+        tile: AtlasTile,
+        at position: Int,
+        origin: CGPoint,
+        width: CGFloat,
+        countOpacity: Double,
+        in context: inout GraphicsContext
+    ) {
+        let ink = AtlasPalette.ink(tile.node.hue, dark: dark)
+        let count = countText(tile, at: position)
+        var y = origin.y
+        switch style {
+        case .stacked:
             if let code = tile.node.code {
                 y += line(
-                    code,
-                    style: { $0.font(.title3.weight(.semibold)).foregroundStyle(ink) },
-                    x: screen.minX + inset,
-                    y: y,
-                    width: width,
-                    in: &label
+                    code, style: { $0.font(.title3.weight(.semibold)).foregroundStyle(ink) },
+                    x: origin.x, y: y, width: width, in: &context
                 )
             }
             y += line(
-                name,
-                style: { $0.font(.headline).foregroundStyle(ink) },
-                x: screen.minX + inset,
-                y: y,
-                width: width,
-                in: &label
+                tile.node.title, style: { $0.font(.headline).foregroundStyle(ink) },
+                x: origin.x, y: y, width: width, in: &context
             )
             _ = line(
-                count,
-                style: { $0.font(.caption).foregroundStyle(.secondary) },
-                x: screen.minX + inset,
-                y: y + 1,
-                width: width,
-                in: &label
+                count, style: { $0.font(.caption).foregroundStyle(.secondary) },
+                x: origin.x, y: y + 1, width: width, in: &context
             )
-        } else {
-            let title = [tile.node.code, name].compactMap(\.self).joined(separator: " ")
-            let font: Font = band >= 30 ? .callout.weight(.semibold) : .caption.weight(.semibold)
+        case .compact, .compactWithCount:
+            let title = [tile.node.code, tile.node.title].compactMap(\.self).joined(separator: " ")
+            let font: Font = style == .compact
+                ? .caption.weight(.semibold) : .callout.weight(.semibold)
             y += line(
-                title,
-                style: { $0.font(font).foregroundStyle(ink) },
-                x: screen.minX + inset,
-                y: y,
-                width: width,
-                in: &label
+                title, style: { $0.font(font).foregroundStyle(ink) },
+                x: origin.x, y: y, width: width, in: &context
             )
-            if band >= 30 {
+            if style == .compactWithCount {
+                var layer = context
+                layer.opacity *= countOpacity
                 _ = line(
-                    count,
-                    style: { $0.font(.caption2).foregroundStyle(.secondary) },
-                    x: screen.minX + inset,
-                    y: y,
-                    width: width,
-                    in: &label
+                    count, style: { $0.font(.caption2).foregroundStyle(.secondary) },
+                    x: origin.x, y: y, width: width, in: &layer
                 )
             }
         }
+    }
+
+    /// Stands in for item tiles too small to draw: a denser fill and, where it fits, the count.
+    private func drawHiddenItems(
+        _ tile: AtlasTile,
+        at position: Int,
+        opacity: Double,
+        in context: inout GraphicsContext
+    ) {
+        let content = camera.screen(tile.contentRect)
+        guard content.width >= 2, content.height >= 2 else { return }
+        var layer = context
+        layer.opacity = opacity * (searching && matchCounts[position] == 0 ? 0.3 : 1)
+        let radius = min(6, min(content.width, content.height) * 0.12)
+        layer.fill(
+            Path(roundedRect: content, cornerRadius: radius, style: .continuous),
+            with: .color(AtlasPalette.fill(tile.node.hue, dark: dark).opacity(dark ? 0.3 : 0.4))
+        )
+        let total = searching ? matchCounts[position] : tile.node.itemCount
+        let text = layer.resolve(
+            Text(total.formatted()).font(.caption2.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(AtlasPalette.ink(tile.node.hue, dark: dark))
+        )
+        let size = text.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+        guard size.width + 8 <= content.width, size.height + 2 <= content.height else { return }
+        layer.opacity *= Self.ramp(content.width - size.width, 8, 16)
+        layer.draw(text, at: CGPoint(x: content.midX, y: content.midY), anchor: .center)
     }
 
     private func countText(_ tile: AtlasTile, at position: Int) -> String {
@@ -238,72 +290,90 @@ struct AtlasRenderer {
         in context: inout GraphicsContext
     ) {
         let node = tile.node
-        let radius = min(6, min(screen.width, screen.height) * 0.16)
-        let shape = Path(roundedRect: screen, cornerRadius: radius, style: .continuous)
+        let shape = Path(
+            roundedRect: screen,
+            cornerRadius: Self.cornerRadius(tile, screen: screen),
+            style: .continuous
+        )
         let fill = AtlasPalette.fill(node.hue, dark: dark)
         let ink = AtlasPalette.ink(node.hue, dark: dark)
         let opacity = itemOpacity(node, at: position)
         let source = node.item?.kind == "source"
+        var tileLayer = context
+        tileLayer.opacity = Self.itemReveal(screen)
         // Sources are solid; notes and generated artifacts are lighter with an outline, so type
         // reads without relying on colour.
-        context.fill(shape, with: .color(fill.opacity(source ? opacity : opacity * 0.5)))
+        tileLayer.fill(shape, with: .color(fill.opacity(source ? opacity : opacity * 0.5)))
         if !source || highContrast {
-            context.stroke(shape, with: .color(ink.opacity(0.35 * opacity + 0.1)), lineWidth: 1)
+            tileLayer.stroke(
+                border(tile, screen, width: 1, inside: true),
+                with: .color(ink.opacity(0.35 * opacity + 0.1)),
+                lineWidth: 1
+            )
         }
-        guard screen.width >= 60, screen.height >= 24, let item = node.item else { return }
+        let titled = Self.ramp(screen.width, 60, 72) * Self.ramp(screen.height, 24, 30)
+        guard titled > 0, let item = node.item else { return }
         var label = context
         label.clip(to: Path(screen))
-        if searching, matchCounts[position] == 0 {
-            label.opacity = 0.4
-        }
+        label.opacity = titled * (searching && matchCounts[position] == 0 ? 0.4 : 1)
+        drawItemLabel(
+            item, title: node.title, ink: ink, screen: screen,
+            large: screen.width >= 200 && screen.height >= 80, in: &label
+        )
+    }
+
+    private func drawItemLabel(
+        _ item: AtlasItem,
+        title: String,
+        ink: Color,
+        screen: CGRect,
+        large: Bool,
+        in context: inout GraphicsContext
+    ) {
         let inset = min(10, max(5, screen.width * 0.06))
-        let large = screen.width >= 200 && screen.height >= 80
         let width = screen.width - inset * 2
+        let top = screen.minY + min(inset, screen.height * 0.18)
         // Symbols are drawn as text so they keep their own proportions and baseline.
-        let glyph = screen.width >= 96 && screen.height >= 34
-            ? label.resolve(Text(Image(systemName: Self.symbol(for: item.kind)))
+        let glyphShown = Self.ramp(screen.width, 96, 108) * Self.ramp(screen.height, 34, 40)
+        let glyph = glyphShown > 0
+            ? context.resolve(Text(Image(systemName: Self.symbol(for: item.kind)))
                 .font(large ? .callout : .caption).foregroundStyle(ink.opacity(0.8)))
             : nil
         let glyphWidth = glyph.map {
             $0.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity)).width + 4
         } ?? 0
-        var y = screen.minY + min(inset, screen.height * 0.18)
+        var y = top
         y += line(
-            node.title,
+            title,
             style: {
                 $0.font(large ? .callout.weight(.medium) : .caption.weight(.medium))
                     .foregroundStyle(.primary)
             },
-            x: screen.minX + inset, y: y,
-            width: width - glyphWidth, in: &label
+            x: screen.minX + inset, y: y, width: width - glyphWidth, in: &context
         )
-        if screen.height >= 42 {
+        let detailShown = Self.ramp(screen.height, 42, 50)
+        if detailShown > 0 {
+            var layer = context
+            layer.opacity *= detailShown
             let detail = [item.kindLabel, item.host].compactMap(\.self).joined(separator: " · ")
             y += line(
-                detail,
-                style: { $0.font(.caption2).foregroundStyle(.secondary) },
-                x: screen.minX + inset,
-                y: y + 1,
-                width: width,
-                in: &label
+                detail, style: { $0.font(.caption2).foregroundStyle(.secondary) },
+                x: screen.minX + inset, y: y + 1, width: width, in: &layer
             )
         }
         if large {
+            var layer = context
+            layer.opacity *= Self.ramp(screen.height, 80, 92)
             _ = line(
                 item.updatedAt.formatted(.dateTime.month(.abbreviated).day().year()),
                 style: { $0.font(.caption2).foregroundStyle(.secondary) },
-                x: screen.minX + inset, y: y + 1, width: width, in: &label
+                x: screen.minX + inset, y: y + 1, width: width, in: &layer
             )
         }
         if let glyph {
-            label.draw(
-                glyph,
-                at: CGPoint(
-                    x: screen.maxX - inset,
-                    y: screen.minY + min(inset, screen.height * 0.18)
-                ),
-                anchor: .topTrailing
-            )
+            var layer = context
+            layer.opacity *= glyphShown
+            layer.draw(glyph, at: CGPoint(x: screen.maxX - inset, y: top), anchor: .topTrailing)
         }
     }
 
@@ -349,25 +419,84 @@ struct AtlasRenderer {
         }
     }
 
+    // MARK: Level of detail
+
+    /// 0 below `start`, 1 above `end`, eased in between, so detail fades rather than pops.
+    static func ramp(_ value: CGFloat, _ start: CGFloat, _ end: CGFloat) -> Double {
+        let t = Double(min(1, max(0, (value - start) / (end - start))))
+        return t * t * (3 - 2 * t)
+    }
+
+    /// How visible item tiles of this on-screen size are; hit testing uses the same lower bound.
+    static func itemReveal(_ screen: CGRect) -> Double {
+        let side = min(screen.width, screen.height)
+        return ramp(
+            side,
+            KnowledgeAtlasModel.minimumItemSize,
+            KnowledgeAtlasModel.minimumItemSize * 2
+        )
+    }
+
     // MARK: Hover, selection and focus
+
+    /// Rounds a view-space rectangle to whole device pixels so straight edges render as crisply
+    /// as the curved corners instead of smearing across two pixel rows.
+    private func snapped(_ rect: CGRect) -> CGRect {
+        let scale = max(1, displayScale)
+        func round(_ value: CGFloat) -> CGFloat {
+            (value * scale).rounded() / scale
+        }
+        let minX = round(rect.minX)
+        let minY = round(rect.minY)
+        return CGRect(
+            x: minX,
+            y: minY,
+            width: round(rect.maxX) - minX,
+            height: round(rect.maxY) - minY
+        )
+    }
+
+    /// A border drawn entirely inside or outside a tile. Centred strokes straddle the edge and
+    /// leave a seam against the fill at the corners; offsetting the path by half the line width,
+    /// and the radius by the same amount, keeps the border concentric with the tile.
+    private func border(
+        _ tile: AtlasTile,
+        _ screen: CGRect,
+        width: CGFloat,
+        inside: Bool
+    ) -> Path {
+        let offset = inside ? width / 2 : -width / 2
+        let radius = max(0, Self.cornerRadius(tile, screen: screen) - offset)
+        return Path(
+            roundedRect: screen.insetBy(dx: offset, dy: offset),
+            cornerRadius: radius,
+            style: .continuous
+        )
+    }
+
+    /// One radius per tile, shared by its fill and every outline drawn around it.
+    private static func cornerRadius(_ tile: AtlasTile, screen: CGRect) -> CGFloat {
+        let side = min(screen.width, screen.height)
+        return tile.node.kind == .item ? min(6, side * 0.16) : min(10, side * 0.06)
+    }
 
     private func drawEmphasis(in context: inout GraphicsContext, viewport: CGRect) {
         if let hoveredID, hoveredID != selectedID, let tile = layout.tile(hoveredID) {
-            let screen = camera.screen(tile.rect)
-            let radius = min(10, min(screen.width, screen.height) * 0.08)
+            let screen = snapped(camera.screen(tile.rect))
             context.stroke(
-                Path(roundedRect: screen, cornerRadius: radius, style: .continuous),
+                border(tile, screen, width: 1, inside: true),
                 with: .color(AtlasPalette.ink(tile.node.hue, dark: dark).opacity(0.55)),
                 lineWidth: 1
             )
         }
         if let selectedID, let tile = layout.tile(selectedID) {
-            let screen = camera.screen(tile.rect).insetBy(dx: -1, dy: -1)
-            let radius = min(10, min(screen.width, screen.height) * 0.08)
+            let screen = snapped(camera.screen(tile.rect))
+            let width: CGFloat = keyboardFocused ? 2.5 : 2
+            // Outside the tile, so selection never covers its content or its own border.
             context.stroke(
-                Path(roundedRect: screen, cornerRadius: radius, style: .continuous),
+                border(tile, screen, width: width, inside: false),
                 with: .color(.accentColor),
-                lineWidth: keyboardFocused ? 2.5 : 2
+                lineWidth: width
             )
         } else if keyboardFocused {
             context.stroke(

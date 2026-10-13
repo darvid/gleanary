@@ -691,7 +691,8 @@ struct DocumentLibraryTests {
         host.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
-        #expect(Self.descendant(NSSplitView.self, in: host) != nil)
+        // The shell draws its own sidebar beside the content; the sidebar is a native list.
+        #expect(Self.descendant(NSTableView.self, in: host) != nil)
         #expect(Self.descendant(NSCollectionView.self, in: host) == nil)
         try Self.screenshot(host, name: "infactory-library-wide")
         window.setContentSize(NSSize(width: 900, height: 600))
