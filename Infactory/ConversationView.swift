@@ -245,19 +245,35 @@ struct ConversationView: View {
 
     private func proposalCard(_ proposal: KnowledgeProposal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(
-                proposal.filing == nil ? "Proposed connection"
-                    : proposal.status == "pending" ? "Proposed filing" : "Filing",
-                systemImage: proposal.filing == nil ? "link" : "folder"
-            ).font(.headline)
-            Text(
-                proposal.filing
-                    .map {
-                        "\(model.titles[proposal.left] ?? "Document"): \($0.previousLabel) → \($0.destinationLabel)" +
-                            ($0.newCategory == nil ? "" : " (new category)")
-                    }
-                    ?? "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
-            )
+            let creates = proposal.filing?.newCategory != nil
+            Label {
+                Text(
+                    proposal.filing == nil ? "Proposed connection"
+                        : creates ?
+                        (proposal
+                            .status == "pending" ? "Proposed new category" : "New category")
+                        : proposal.status == "pending" ? "Proposed filing" : "Filing"
+                )
+            } icon: {
+                Image(systemName: proposal.filing == nil ? "link" : creates ? "folder.badge.plus" :
+                    "folder")
+                    .foregroundStyle(creates ? Self.newCategoryTint : .primary)
+            }.font(.headline)
+            if let filing = proposal.filing {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.titles[proposal.left] ?? "Document")
+                    HStack(spacing: 6) {
+                        Text(filing.previousLabel).foregroundStyle(Color.primary.opacity(0.72))
+                        Image(systemName: "arrow.right").font(.caption)
+                            .foregroundStyle(Color.primary.opacity(0.72)).accessibilityHidden(true)
+                        categoryChip(filing.destinationLabel, isNew: creates)
+                    }.font(.callout)
+                }
+            } else {
+                Text(
+                    "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
+                )
+            }
             Text(proposal.filing.map(filingDetail)
                 ?? "Adds a reversible cross-link. Neither document's text will change.")
                 .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
@@ -293,6 +309,35 @@ struct ConversationView: View {
             Color(nsColor: .controlBackgroundColor),
             in: RoundedRectangle(cornerRadius: 12)
         )
+        .overlay {
+            if proposal.filing?.newCategory != nil {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Self.newCategoryTint.opacity(0.45), lineWidth: 1)
+            }
+        }
+    }
+
+    /// New categories read differently from existing ones by icon, text and color, not color alone.
+    private static let newCategoryTint = Color.green
+
+    private func categoryChip(_ label: String, isNew: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: isNew ? "folder.badge.plus" : "folder").accessibilityHidden(true)
+                .foregroundStyle(isNew ? Self.newCategoryTint : .primary)
+            Text(label)
+            if isNew {
+                Text("New").font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Self.newCategoryTint.opacity(0.25), in: Capsule())
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .background(
+            isNew ? Self.newCategoryTint.opacity(0.14) : Color.primary.opacity(0.08),
+            in: Capsule()
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(isNew ? "New category \(label)" : "Existing category \(label)")
     }
 
     private var composer: some View {
