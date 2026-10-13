@@ -460,22 +460,30 @@ extension DocumentStore {
         }
     }
 
+    /// With `creating`, `category` is a new home that applying the proposal will create.
     func proposeFiling(
         noteID: UUID,
         category: DecimalCategory,
         rationale: String,
-        taskID: UUID
+        taskID: UUID,
+        creating: Bool = false
     ) throws -> UUID {
         try readyDatabase().write { db in
             try Self.requireConversationTask(taskID, in: db)
             let note = try Self.liveNote(noteID, in: db)
             guard let revision = note.revision else { throw ConversationError.staleProposal }
-            guard try String.fetchOne(
-                db,
-                sql: "SELECT code || ' ' || name FROM decimal_categories WHERE id = ?",
-                arguments: [category.id.uuidString]
-            ) == category.label
-            else { throw ConversationError.invalidCategory }
+            if creating {
+                try DecimalCategory.validate(code: category.code, name: category.name)
+                guard try !Self.categoryExists(like: category, in: db)
+                else { throw ConversationError.invalidCategory }
+            } else {
+                guard try String.fetchOne(
+                    db,
+                    sql: "SELECT code || ' ' || name FROM decimal_categories WHERE id = ?",
+                    arguments: [category.id.uuidString]
+                ) == category.label
+                else { throw ConversationError.invalidCategory }
+            }
             let before = try Self.filingMemberships(
                 table: "note_categories",
                 column: "noteID",
@@ -508,7 +516,8 @@ extension DocumentStore {
                 previousLabel: labels.isEmpty ? "Unfiled" : labels
                     .joined(separator: "; "),
                 before: before,
-                sources: sources
+                sources: sources,
+                newCategory: creating ? .init(code: category.code, name: category.name) : nil
             )
             let id = UUID()
             try db.execute(sql: """
@@ -604,11 +613,21 @@ extension DocumentStore {
             id: id,
             in: db
         ) == expected
-        valid = try valid && String.fetchOne(
+        let destinationExists = try String.fetchOne(
             db,
             sql: "SELECT code || ' ' || name FROM decimal_categories WHERE id = ?",
             arguments: [change.destination.uuidString]
         ) == change.destinationLabel
+        // A sibling proposal from the same request may already have created this home.
+        let creating = destinationExists ? nil : change.newCategory.map {
+            DecimalCategory(id: change.destination, code: $0.code, name: $0.name)
+        }
+        if let creating, !undo {
+            // A manual edit may have created an equivalent home meanwhile.
+            valid = try valid && !categoryExists(like: creating, in: db)
+        } else {
+            valid = valid && destinationExists
+        }
         for (source, before) in change.sources {
             let expected = undo ? filedMemberships(before, destination: change.destination) : before
             valid = try valid && filingMemberships(
@@ -630,6 +649,12 @@ extension DocumentStore {
             }
             return true
         }
+        if let creating, !undo {
+            try db.execute(
+                sql: "INSERT INTO decimal_categories(id, code, name) VALUES (?, ?, ?)",
+                arguments: [creating.id.uuidString, creating.code, creating.name]
+            )
+        }
         try replaceMemberships(
             undo ? change.before : filedMemberships(change.before, destination: change.destination),
             table: "note_categories",
@@ -646,11 +671,31 @@ extension DocumentStore {
                 in: db
             )
         }
+        if change.newCategory != nil, undo {
+            // Undo removes a category this proposal created, unless something else now uses it.
+            try db.execute(sql: """
+            DELETE FROM decimal_categories WHERE id = ?1
+            AND NOT EXISTS (SELECT 1 FROM note_categories WHERE categoryID = ?1)
+            AND NOT EXISTS (SELECT 1 FROM source_categories WHERE categoryID = ?1)
+            """, arguments: [change.destination.uuidString])
+        }
         try db.execute(
             sql: "UPDATE knowledge_proposals SET status = ? WHERE id = ?",
             arguments: [undo ? "undone" : "applied", proposal]
         )
         return false
+    }
+
+    /// True when the code, id or normalized name is already taken.
+    private static func categoryExists(
+        like category: DecimalCategory,
+        in db: Database
+    ) throws -> Bool {
+        try Row.fetchAll(db, sql: "SELECT id, code, name FROM decimal_categories").contains {
+            let code: String = $0["code"], name: String = $0["name"], id: String = $0["id"]
+            return id == category.id.uuidString || code == category.code
+                || DecimalCategory.normalized(name) == DecimalCategory.normalized(category.name)
+        }
     }
 
     private static func liveNote(_ id: UUID, in db: Database) throws -> MarkdownDocument {

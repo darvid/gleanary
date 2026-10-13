@@ -237,6 +237,12 @@ struct ConversationView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private func filingDetail(_ change: FilingChange) -> String {
+        change.newCategory == nil
+            ? "Changes the primary filing home. Secondary memberships and document text are preserved. Undo restores the previous filing."
+            : "Creates this category and makes it the primary filing home. Document text is preserved. Undo restores the previous filing and removes the category if nothing else uses it."
+    }
+
     private func proposalCard(_ proposal: KnowledgeProposal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
@@ -247,14 +253,13 @@ struct ConversationView: View {
             Text(
                 proposal.filing
                     .map {
-                        "\(model.titles[proposal.left] ?? "Document"): \($0.previousLabel) → \($0.destinationLabel)"
+                        "\(model.titles[proposal.left] ?? "Document"): \($0.previousLabel) → \($0.destinationLabel)" +
+                            ($0.newCategory == nil ? "" : " (new category)")
                     }
                     ?? "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
             )
-            Text(proposal
-                .filing == nil ?
-                "Adds a reversible cross-link. Neither document's text will change." :
-                "Changes the primary filing home. Secondary memberships and document text are preserved. Undo restores the previous filing.")
+            Text(proposal.filing.map(filingDetail)
+                ?? "Adds a reversible cross-link. Neither document's text will change.")
                 .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
             if !proposal.rationale.isEmpty {
                 Text(proposal.rationale).font(.callout).textSelection(.enabled)
