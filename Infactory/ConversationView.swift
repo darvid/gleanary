@@ -297,18 +297,18 @@ struct ConversationView: View {
                 Button("Retry opening workspace") { Task { await model.load() } }
             }
             if let task = model.activeTask {
-                HStack {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
                     Text(task.progress.isEmpty ? "Working…" : task.progress)
                         .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Stop", systemImage: "stop.fill") { Task { await model.cancel() } }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless)
-                        .help("Stop current task")
-                        .keyboardShortcut(
-                            .escape,
-                            modifiers: []
-                        )
                 }
+                // The composer's send button doubles as Stop; keep Escape without a second control.
+                .background {
+                    Button("Stop current task") { Task { await model.cancel() } }
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .hidden().accessibilityHidden(true)
+                }
+                .padding(.horizontal, composerInset)
             }
             if !model.selectedSources.isEmpty {
                 HStack {
@@ -394,9 +394,13 @@ struct ConversationView: View {
                 ? "Messages, recent history and selected excerpts are sent to OpenAI. ⌘Return to send."
                 : "Saved on this Mac. ⌘Return to send.")
                 .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+                .padding(.horizontal, composerInset)
         }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
             .frame(maxWidth: .infinity)
     }
+
+    /// Clears the composer's 24pt rounded corner so status text lines up with its flat edge.
+    private let composerInset: CGFloat = 16
 
     private var draftIsEmpty: Bool {
         model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
