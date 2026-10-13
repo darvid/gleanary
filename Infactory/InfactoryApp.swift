@@ -4,7 +4,6 @@ import SwiftUI
 struct InfactoryApp: App {
     @State private var library = Self.makeLibrary()
     @State private var conversation: ConversationModel?
-    @State private var showingLibrary = false
 
     private static func makeLibrary() -> LibraryModel {
         #if DEBUG
@@ -31,28 +30,8 @@ struct InfactoryApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if showingLibrary {
-                    ContentView(
-                        library: library,
-                        returnToConversation: { showingLibrary = false },
-                        useInConversation: { ids in
-                            Task {
-                                if await conversation?
-                                    .prepareSources(ids) == true
-                                {
-                                    showingLibrary = false
-                                } else {
-                                    library.error = conversation?.error ?? "Choose up to four available items, then try again."
-                                }
-                            }
-                        }
-                    )
-                } else if let conversation {
-                    ConversationView(
-                        model: conversation,
-                        library: library,
-                        showLibrary: { showingLibrary = true }
-                    )
+                if let conversation {
+                    ContentView(library: library, conversation: conversation)
                 } else {
                     ProgressView("Opening workspace…")
                         .task { conversation = Self.makeConversation(store: library.store) }
