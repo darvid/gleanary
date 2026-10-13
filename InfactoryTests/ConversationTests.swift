@@ -11,6 +11,7 @@ private struct ConversationFixtureInference: ConversationInferring {
     var wait = false
     var intent = ConversationPlan(steps: [.init(action: .chat)])
     var classificationCode: String? = "31.04"
+    var classificationAlternatives: [String] = []
     var script: [String: ConversationPlan] = [:]
     var planningUnavailable = false
     var planningDelay: Duration?
@@ -33,11 +34,15 @@ private struct ConversationFixtureInference: ConversationInferring {
         }
         // Scripted provider outputs; semantic decisions are supplied by each scenario.
         if context.purpose == "classification" {
-            let category = context.categories.first { $0.code == classificationCode }
-            return ConversationPlan(steps: [.init(
-                action: .file,
-                categoryID: category?.id.uuidString ?? ""
-            )])
+            let result: [String: Any] = [
+                "categoryCode": classificationCode ?? "",
+                "rationale": "Fixture rationale.",
+                "alternatives": classificationAlternatives,
+            ]
+            return try ConversationPlan.decode(
+                JSONSerialization.data(withJSONObject: result),
+                context: context
+            )
         }
         if let plan = script[request] {
             return plan
@@ -598,6 +603,92 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await store.categories(for: id).first?.code == "10")
     }
 
+    @Test func automaticCaptureFilingShowsRationaleAndCanBeUndone() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = "https://example.org/article"
+        let coordinator = AgentCoordinator(
+            store: store,
+            fetcher: FilingContentFetcher(text: "Agent architectures plan with memory."),
+            inference: ConversationFixtureInference()
+        )
+        let task = try await store.beginConversation(request, owner: .assistant)
+        try await coordinator.execute(taskID: task, request: request, selected: [], changed: {})
+        let messages = try await store.conversationMessages()
+        let saved = try #require(messages.first { $0.author == "librarian" })
+        let id = try #require(saved.references.first)
+        let proposal = try #require(await store.proposals().first { $0.left == id })
+        #expect(proposal.status == "applied")
+        #expect(proposal.rationale == "Fixture rationale.")
+        #expect(proposal.filing?.destinationLabel == "31.04 Agent Architectures")
+        #expect(proposal.appears(in: saved, history: messages))
+        try await store.reviewProposal(proposal.id, action: "undo")
+        #expect(try await store.categories(for: id).isEmpty)
+    }
+
+    @Test func uncertainCaptureStaysInInboxAndOffersAlternativeHomes() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = "https://example.org/article"
+        let coordinator = AgentCoordinator(
+            store: store,
+            fetcher: FilingContentFetcher(text: "Testing harnesses for autonomous workers."),
+            inference: ConversationFixtureInference(
+                classificationCode: nil,
+                classificationAlternatives: ["31.04", "31.01"]
+            )
+        )
+        let task = try await store.beginConversation(request, owner: .assistant)
+        try await coordinator.execute(taskID: task, request: request, selected: [], changed: {})
+        let saved = try #require(await store.conversationMessages()
+            .first { $0.author == "librarian" })
+        let id = try #require(saved.references.first)
+        #expect(try await store.categories(for: id).map(\.code) == ["10"])
+        #expect(saved.text.contains("apply one of the suggested homes"))
+        let pending = try await store.proposals().filter { $0.left == id }
+        #expect(pending.allSatisfy { $0.status == "pending" })
+        #expect(Set(pending.compactMap(\.filing?.destinationLabel)) == [
+            "31.01 Distributed Systems",
+            "31.04 Agent Architectures",
+        ])
+    }
+
+    @Test func classificationAlternativesAreValidatedDedupedAndCapped() throws {
+        let categories = ["10", "31", "31.01", "31.04"].map {
+            DecimalCategory(id: UUID(), code: $0, name: "Fixture \($0)")
+        }
+        let context = ConversationPlanningContext(
+            purpose: "classification",
+            history: [],
+            records: [],
+            categories: categories
+        )
+        let plan = try ConversationPlan.decode(Data("""
+        {"categoryCode": "31", "rationale": "Broad fit.",
+         "alternatives": ["31", "99.99", "31.04", "31.04", "31.01", "10"]}
+        """.utf8), context: context)
+        #expect(plan.steps.map(\.categoryID) == [categories[1], categories[3], categories[2]]
+            .map(\.id.uuidString))
+        let legacy = try ConversationPlan.decode(
+            Data(#"{"categoryCode": "", "rationale": "Unsure."}"#.utf8),
+            context: context
+        )
+        #expect(legacy.steps.count == 1)
+        #expect(ConversationPlan.jsonSchema(context: context)["required"] as? [String] == [
+            "alternatives",
+            "categoryCode",
+            "rationale",
+        ])
+    }
+
+    @Test func newLibrariesStartWithOnlyTheInboxCategory() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        #expect(try await store.categories().map(\.label) == ["10 Inbox"])
+    }
+
     @Test(arguments: AgentRole
         .allCases) func everyTeammateCanConverseWithoutSavedSources(role: AgentRole) async throws
     {
@@ -1025,7 +1116,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await reopened.document(id: original.id) == original)
         #expect(try await reopened.history(for: original.id).count == 1)
         #expect(try await reopened.researchSource(noteID: original.id).sourceIDs.count == 1)
-        #expect(try await reopened.categories().count == 4)
+        #expect(try await reopened.categories().map(\.code) == ["10"])
     }
 
     @Test func researchPublicationRollsBackAndCannotClobberEditedSources() async throws {
@@ -1202,6 +1293,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
         _ = try await store.open()
+        try await store.seedExampleCategories()
         return (root, store)
     }
 
@@ -1683,5 +1775,14 @@ private extension [String] {
             )))
         }
         return notes
+    }
+}
+
+extension DocumentStore {
+    /// Fixture categories from the spec's example scheme; new libraries only include Inbox.
+    func seedExampleCategories() throws {
+        try saveCategory(code: "31", name: "Computing")
+        try saveCategory(code: "31.01", name: "Distributed Systems")
+        try saveCategory(code: "31.04", name: "Agent Architectures")
     }
 }

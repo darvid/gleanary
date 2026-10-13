@@ -434,7 +434,7 @@ struct AppleConversationInference: ConversationInferring {
 extension ConversationPlan {
     static func appleSchema(context: ConversationPlanningContext) throws -> GenerationSchema {
         if context.purpose == "classification" {
-            return try GenerationSchema(root: .init(name: "FilingDecision", properties: [
+            var properties: [DynamicGenerationSchema.Property] = [
                 .init(
                     name: "categoryCode",
                     description: "Choose the numbered category whose supplied name best fits the subject. Empty means uncertain.",
@@ -444,7 +444,25 @@ extension ConversationPlan {
                     )
                 ),
                 .init(name: "rationale", schema: .init(type: String.self)),
-            ]), dependencies: [])
+            ]
+            if !context.categories.isEmpty {
+                properties.append(.init(
+                    name: "alternatives",
+                    description: "Up to two other plausible category codes, most likely first.",
+                    schema: .init(
+                        arrayOf: .init(
+                            name: "AlternativeCode",
+                            anyOf: context.categories.map(\.code)
+                        ),
+                        minimumElements: 0,
+                        maximumElements: 2
+                    )
+                ))
+            }
+            return try GenerationSchema(
+                root: .init(name: "FilingDecision", properties: properties),
+                dependencies: []
+            )
         }
         var properties: [DynamicGenerationSchema.Property] = [
             .init(
@@ -481,17 +499,26 @@ extension ConversationPlan {
 
     static func jsonSchema(context: ConversationPlanningContext) -> [String: Any] {
         if context.purpose == "classification" {
+            var properties: [String: Any] = [
+                "categoryCode": [
+                    "type": "string",
+                    "enum": [""] + context.categories.map(\.code),
+                ],
+                "rationale": ["type": "string"],
+            ]
+            // An empty enum is invalid JSON Schema, so alternatives need at least one home.
+            if !context.categories.isEmpty {
+                properties["alternatives"] = [
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": ["type": "string", "enum": context.categories.map(\.code)],
+                ]
+            }
             return [
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["categoryCode", "rationale"],
-                "properties": [
-                    "categoryCode": [
-                        "type": "string",
-                        "enum": [""] + context.categories.map(\.code),
-                    ],
-                    "rationale": ["type": "string"],
-                ],
+                "required": properties.keys.sorted(),
+                "properties": properties,
             ]
         }
         return [

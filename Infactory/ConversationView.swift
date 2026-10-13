@@ -240,7 +240,8 @@ struct ConversationView: View {
     private func proposalCard(_ proposal: KnowledgeProposal) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(
-                proposal.filing == nil ? "Proposed connection" : "Proposed filing",
+                proposal.filing == nil ? "Proposed connection"
+                    : proposal.status == "pending" ? "Proposed filing" : "Filing",
                 systemImage: proposal.filing == nil ? "link" : "folder"
             ).font(.headline)
             Text(
@@ -255,6 +256,10 @@ struct ConversationView: View {
                 "Adds a reversible cross-link. Neither document's text will change." :
                 "Changes the primary filing home. Secondary memberships and document text are preserved. Undo restores the previous filing.")
                 .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
+            if !proposal.rationale.isEmpty {
+                Text(proposal.rationale).font(.callout).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 if proposal.status == "pending" {
                     Button("Review document") {
