@@ -1692,8 +1692,13 @@ private struct NoTranscriptProvider: YouTubeProviding {
         try await store.fileNote(note.id, categoryID: categories[0].id)
         try await store.fileNote(note.id, categoryID: categories[1].id, primary: false)
         #expect(try await store.categories(for: note.id).count == 2)
-        try await store.saveCategory(id: categories[0].id, code: "11", name: "Reading inbox")
+        try await store.saveCategory(id: categories[0].id, code: "10", name: "Reading inbox")
         #expect(try await store.categories(for: note.id).first?.name == "Reading inbox")
+        await #expect(throws: ConversationError.self) { try await store.saveCategory(
+            id: categories[0].id,
+            code: "11",
+            name: "Reading inbox"
+        ) }
         await #expect(throws: ConversationError.self) { try await store.saveCategory(
             code: "bad",
             name: "No"

@@ -15,6 +15,7 @@ struct KnowledgeAtlasView: View {
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.displayScale) private var displayScale
     @State private var query = ""
+    @AppStorage("atlasHidesEmptyCategories") private var hidesEmpty = false
     @State private var hoverPoint: CGPoint?
     @State private var dragStart: AtlasCamera?
     @State private var pinchStart: AtlasCamera?
@@ -55,6 +56,7 @@ struct KnowledgeAtlasView: View {
             await atlas.search(query, in: store)
         }
         .onChange(of: reduceMotion, initial: true) { atlas.reduceMotion = reduceMotion }
+        .onChange(of: hidesEmpty, initial: true) { atlas.hidesEmptyCategories = hidesEmpty }
     }
 
     // MARK: Header and footer
@@ -72,6 +74,7 @@ struct KnowledgeAtlasView: View {
                 }
             }
             Spacer(minLength: 12)
+            emptyToggle
             searchField
         }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
     }
@@ -93,6 +96,33 @@ struct KnowledgeAtlasView: View {
                     .accessibilityHidden(true)
             }
         }.accessibilityElement(children: .contain).accessibilityLabel("Atlas location")
+    }
+
+    /// Empty categories draw as dashed outlines, so the toggle uses the same shape.
+    private var emptyToggle: some View {
+        let count = atlas.emptyCategoryCount
+        return Toggle(isOn: $hidesEmpty) {
+            Label(
+                hidesEmpty && count > 0 ? "\(count) hidden" : "Hide empty",
+                systemImage: "rectangle.dashed"
+            )
+            .monospacedDigit()
+        }
+        .toggleStyle(.button).buttonStyle(.borderless).controlSize(.regular)
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(
+            hidesEmpty ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .foregroundStyle(hidesEmpty ? Color.accentColor : Color.primary.opacity(0.8))
+        .disabled(count == 0 && !hidesEmpty)
+        .help(hidesEmpty
+            ? "Show \(count == 1 ? "1 empty category" : "\(count) empty categories")"
+            : count == 0 ? "No empty categories"
+            : "Hide \(count == 1 ? "1 category" : "\(count) categories") with nothing filed")
+        .accessibilityLabel("Hide empty categories")
+        .accessibilityValue(hidesEmpty ? "\(count) hidden" : "Off")
+        .animation(.snappy(duration: 0.2), value: hidesEmpty)
     }
 
     private var searchField: some View {

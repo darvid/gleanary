@@ -10,6 +10,8 @@ struct ConversationView: View {
     @State private var settings = false
     @State private var importing = false
     @State private var confirmingClear = false
+    @State private var starterCategories = false
+    @AppStorage("starterCategoriesOffered") private var starterCategoriesOffered = false
     @State private var followLatest = true
     @FocusState private var composing: Bool
     @Environment(\.scenePhase) private var scenePhase
@@ -63,11 +65,22 @@ struct ConversationView: View {
             await library.load()
             model.didMutate = { await library.refreshConversationChanges() }
             await model.load()
+            // Offer a starter scheme once, while filing has nothing beyond the built-in Inbox.
+            if model.ready, !starterCategoriesOffered, model.categories.count <= 1 {
+                starterCategoriesOffered = true
+                starterCategories = true
+            }
             composing = true
         }
         .task(id: preview.selectedID) { await preview.load(from: model.store) }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
         .sheet(isPresented: $settings) { ConversationSettings(model: model, library: library) }
+        .sheet(isPresented: $starterCategories) {
+            StarterCategoriesView(store: model.store, existing: model.categories) {
+                await model.refresh()
+                await model.didMutate?()
+            }
+        }
         .confirmationDialog(
             "Clear conversation?",
             isPresented: $confirmingClear,
@@ -596,9 +609,6 @@ struct ConversationSettings: View {
     let library: LibraryModel
     @Environment(\.dismiss) private var dismiss
     @State private var page: KnowledgeSettingsPage
-    @State private var filingCode = ""
-    @State private var filingName = ""
-    @State private var editingCategoryID: UUID?
 
     init(
         model: ConversationModel,
@@ -660,84 +670,13 @@ struct ConversationSettings: View {
                             }.padding(.horizontal, 28).padding(.bottom, 24)
                         }
                     case .filing:
-                        FilingSettings(
-                            model: model,
-                            code: $filingCode,
-                            name: $filingName,
-                            editingID: $editingCategoryID
-                        )
-                        .padding(.horizontal, 28).padding(.bottom, 24)
+                        FilingSettings(model: model)
+                            .padding(.horizontal, 28).padding(.bottom, 24)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }.frame(width: 780, height: 600)
             .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
-
-private struct FilingSettings: View {
-    @Bindable var model: ConversationModel
-    @Binding var code: String
-    @Binding var name: String
-    @Binding var editingID: UUID?
-    @State private var saving = false
-    @State private var error: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Organize saved material with Johnny Decimal categories.")
-                .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-            HStack {
-                Text("Categories").font(.headline)
-                Spacer()
-                Button("New category", systemImage: "plus") {
-                    editingID = nil; code = ""; name = ""; error = nil
-                }
-            }
-            Table(model.categories, selection: $editingID) {
-                TableColumn("Code") { Text($0.code).monospacedDigit() }.width(70)
-                TableColumn("Name", value: \.name)
-            }.frame(minHeight: 160, maxHeight: .infinity)
-                .onChange(of: editingID) {
-                    guard let category = model.categories.first(where: { $0.id == editingID })
-                    else { return }
-                    code = category.code; name = category.name; error = nil
-                }
-            Divider()
-            Text(editingID == nil ? "New category" : "Edit category").font(.headline)
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
-                GridRow {
-                    Text("Code")
-                    TextField("e.g. 31.04", text: $code).frame(width: 110)
-                        .accessibilityLabel("Category code")
-                }
-                GridRow {
-                    Text("Name")
-                    TextField("Category name", text: $name).accessibilityLabel("Category name")
-                }
-            }.disabled(saving)
-            HStack {
-                if let error {
-                    Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                }
-                Spacer()
-                Button(editingID == nil ? "Add category" : "Save changes") { Task { await save() } }
-                    .disabled(saving || code.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-    }
-
-    private func save() async {
-        saving = true
-        defer { saving = false }
-        let id = editingID ?? UUID()
-        do {
-            try await model.store.saveCategory(id: id, code: code, name: name)
-            await model.refresh()
-            editingID = id
-            error = nil
-        } catch { self.error = error.localizedDescription }
     }
 }
 
