@@ -16,6 +16,10 @@ struct ContentView: View {
     @State private var filing: MarkdownDocument?
     @State private var preview = DocumentPreviewModel()
     @State private var source: SourceCitation?
+    @AppStorage("libraryPresentation") private var presentation = LibraryPresentation.map
+    @State private var atlas = KnowledgeAtlasModel()
+    /// The item opened from the Atlas; the Atlas keeps its own state underneath.
+    @State private var atlasItem: UUID?
     @FocusState private var searchFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
@@ -40,28 +44,15 @@ struct ContentView: View {
             if let error = library.error ?? library.indexingError {
                 errorNotice(error)
             }
-            NavigationSplitView(columnVisibility: $columns) {
-                sidebar.navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
-            } content: {
-                if scope == .captures {
-                    captureList
-                } else {
-                    documentList
+            if presentation == .map, scope != .captures {
+                NavigationSplitView(columnVisibility: $columns) {
+                    sidebar.navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
+                } detail: {
+                    atlasPane
                 }
-            } detail: {
-                if scope == .captures {
-                    ContentUnavailableView(
-                        "Capture recovery",
-                        systemImage: "tray.and.arrow.down",
-                        description: Text(
-                            "Retry failed captures or inspect their saved documents. Retained originals are reused where available."
-                        )
-                    )
-                } else {
-                    detail
-                }
+            } else {
+                libraryColumns
             }
-            .navigationSplitViewStyle(.balanced)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(\.openURL, OpenURLAction { url in
@@ -113,6 +104,9 @@ struct ContentView: View {
             await library.documentGrid.reloadIfNeeded()
             if let initialSelection {
                 selection = [initialSelection]; preview.selectedID = initialSelection
+                if presentation == .map {
+                    atlasItem = initialSelection
+                }
             }
             await loadCategories()
             await library.refreshCaptures()
@@ -130,7 +124,18 @@ struct ContentView: View {
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
             library.documentGrid.scope = scope ?? .all
+            if presentation == .map {
+                showInAtlas(scope ?? .all)
+            }
             Task { await library.documentGrid.reload(); await library.refreshCaptures() }
+        }
+        .onChange(of: presentation) {
+            atlasItem = nil
+            if presentation == .map {
+                showInAtlas(scope ?? .all)
+            } else if let id = selection.first {
+                preview.selectedID = id
+            }
         }
         .onChange(of: selection) { old, new in
             if let id = new.subtracting(old).first ?? new.first {
@@ -150,6 +155,12 @@ struct ContentView: View {
                 .buttonStyle(.borderless).help("Return to the conversation")
             Divider().frame(height: 18)
             Text("Library").font(.headline)
+            Picker("Presentation", selection: $presentation) {
+                Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
+                Label("List", systemImage: "list.bullet").tag(LibraryPresentation.list)
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .help("Browse the library as a map or a list")
             Spacer()
             Button("New note", systemImage: "square.and.pencil") {
                 editing = MarkdownDocument(name: "Untitled", markdown: "")
@@ -157,6 +168,86 @@ struct ContentView: View {
             Button("Import…", systemImage: "square.and.arrow.down") { importing = true }
                 .disabled(!library.ready || library.busy)
         }.controlSize(.small).padding(.horizontal, 20).padding(.vertical, 14)
+    }
+
+    private var libraryColumns: some View {
+        NavigationSplitView(columnVisibility: $columns) {
+            sidebar.navigationSplitViewColumnWidth(min: 160, ideal: 190, max: 240)
+        } content: {
+            if scope == .captures {
+                captureList
+            } else {
+                documentList
+            }
+        } detail: {
+            if scope == .captures {
+                ContentUnavailableView(
+                    "Capture recovery",
+                    systemImage: "tray.and.arrow.down",
+                    description: Text(
+                        "Retry failed captures or inspect their saved documents. Retained originals are reused where available."
+                    )
+                )
+            } else {
+                detail()
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    @ViewBuilder private var atlasPane: some View {
+        if let atlasItem {
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Button("Atlas", systemImage: "chevron.left") { self.atlasItem = nil }
+                        .buttonStyle(.borderless).keyboardShortcut("[", modifiers: .command)
+                        .help("Return to the Atlas (⌘[)")
+                    ForEach(atlasLocation(of: atlasItem), id: \.self) { label in
+                        Image(systemName: "chevron.right").font(.caption2)
+                            .foregroundStyle(.tertiary).accessibilityHidden(true)
+                        Text(label).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer()
+                }.font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
+                Divider()
+                detail(openDocument: openFromAtlas)
+            }
+            .onExitCommand { self.atlasItem = nil }
+        } else {
+            KnowledgeAtlasView(
+                atlas: atlas, store: library.store,
+                refreshToken: library.documentGrid.generation, openItem: openFromAtlas
+            )
+        }
+    }
+
+    private func openFromAtlas(_ id: UUID) {
+        atlas.selectedID = .item(id)
+        preview.selectedID = id
+        atlasItem = id
+    }
+
+    /// Category labels from the Library down to the item's placement in the Atlas.
+    private func atlasLocation(of id: UUID) -> [String] {
+        guard let position = atlas.layout.index[.item(id)] else { return [] }
+        return atlas.layout.path(to: position).dropFirst().dropLast()
+            .map { atlas.layout.tiles[$0].node.label }
+    }
+
+    /// Sidebar choices act as shortcuts into the Atlas instead of filtering a list.
+    private func showInAtlas(_ scope: LibraryScope) {
+        atlasItem = nil
+        atlas.kindFilter = switch scope {
+        case .sources: .sources
+        case .notes: .notes
+        default: .all
+        }
+        switch scope {
+        case .unfiled: atlas.focus(.uncategorized)
+        case let .category(id): atlas.focus(.category(id))
+        case .captures: break
+        default: atlas.reset()
+        }
     }
 
     private var sidebar: some View {
@@ -325,7 +416,7 @@ struct ContentView: View {
         }.padding(.horizontal, 18).padding(.bottom, 16)
     }
 
-    private var detail: some View {
+    private func detail(openDocument: ((UUID) -> Void)? = nil) -> some View {
         DocumentPreview(
             model: preview,
             openSource: { source = $0 },
@@ -334,7 +425,7 @@ struct ContentView: View {
             generateSummary: { library.generateSummary(for: $0) },
             cancelSummary: library.cancelSummary,
             showsLibraryDetails: true,
-            openDocument: { id in selection = [id]; preview.selectedID = id },
+            openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
             fileDocument: { filing = $0 }, showsSummaryActions: false
         )
@@ -465,6 +556,10 @@ struct ContentView: View {
             HStack { Spacer(); Button("Cancel") { filing = nil }.keyboardShortcut(.cancelAction) }
         }.padding(24).frame(width: 420, height: 380)
     }
+}
+
+enum LibraryPresentation: String {
+    case map, list
 }
 
 private struct LibraryDocumentRow: View {
