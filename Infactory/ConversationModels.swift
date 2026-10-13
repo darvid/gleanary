@@ -92,6 +92,13 @@ struct DecimalCategory: Identifiable, Sendable, Equatable {
         "\(code) \(name)"
     }
 
+    /// Comparison key for duplicate detection; codes keep their dots.
+    static func normalized(_ text: String) -> String {
+        let words = text.lowercased().split { !$0.isLetter && !$0.isNumber && $0 != "." }
+            .map { $0.count > 3 && $0.hasSuffix("s") && !$0.hasSuffix("ss") ? $0.dropLast() : $0 }
+        return words.joined(separator: " ")
+    }
+
     static func validate(code: String, name: String) throws {
         guard code.range(of: #"^[1-9][0-9](?:\.[0-9]{2})?$"#, options: .regularExpression) != nil,
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -208,6 +215,13 @@ struct ConversationPlan: Codable, Sendable {
         var targets: [UUID] = []
         var argument = ""
         var categoryID = ""
+        /// A user-requested home that doesn't exist yet; only filing proposals may carry one.
+        var newCategory: NewCategory?
+    }
+
+    struct NewCategory: Codable, Sendable, Equatable {
+        let code: String
+        let name: String
     }
 
     let steps: [Step]
@@ -247,6 +261,44 @@ struct ConversationPlan: Codable, Sendable {
         let rationale: String
         /// Other plausible homes, most likely first. Optional so older outputs still decode.
         let alternatives: [String]?
+        /// The destination the user explicitly named, verbatim; matched by application code.
+        let requestedHome: String?
+        /// A suggested free code for requestedHome when it doesn't exist yet.
+        let newCategoryCode: String?
+        /// An existing code the model judges to be the same home as requestedHome.
+        let requestedHomeMatch: String?
+    }
+
+    /// Uses a code the user wrote ("32.01 Testing"), else the model's suggestion, else the next
+    /// free two-digit category. Nil only when every candidate is invalid or taken.
+    static func newCategory(
+        requested: String,
+        suggestedCode: String,
+        existing: [DecimalCategory]
+    ) -> NewCategory? {
+        var name = requested
+        var candidates = [suggestedCode.trimmingCharacters(in: .whitespaces)]
+        if let match = requested.firstMatch(of: /^([1-9][0-9](?:\.[0-9]{2})?)\s+(.+)$/) {
+            candidates.insert(String(match.1), at: 0)
+            name = String(match.2)
+        }
+        let used = Set(existing.map(\.code))
+        let topLevel = existing.compactMap { Int($0.code.prefix(2)) }.max() ?? 10
+        candidates += (topLevel + 1 ..< 100).map(String.init)
+        name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(100))
+        return candidates.first {
+            !used.contains($0) && (try? DecimalCategory.validate(code: $0, name: name)) != nil
+        }.map { NewCategory(code: $0, name: name) }
+    }
+
+    /// Matches a user-named destination by code, name or label, ignoring case, punctuation and
+    /// a trailing plural "s".
+    static func category(named name: String, in categories: [DecimalCategory]) -> DecimalCategory? {
+        let wanted = DecimalCategory.normalized(name)
+        return categories.first {
+            [$0.code, DecimalCategory.normalized($0.name), DecimalCategory.normalized($0.label)]
+                .contains(wanted)
+        }
     }
 
     static func decode(
@@ -256,9 +308,31 @@ struct ConversationPlan: Codable, Sendable {
         do {
             if context.purpose == "classification" {
                 let result = try JSONDecoder().decode(Classification.self, from: data)
-                let category = context.categories.first { $0.code == result.categoryCode }
-                guard result.categoryCode.isEmpty || category != nil
+                let requested = result.requestedHome?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                // Exact or normalized names first, then the model's judged equivalent, so
+                // "Agent architecture" or a synonym reuses a home instead of duplicating it.
+                let named = requested.isEmpty ? nil : category(
+                    named: requested,
+                    in: context.categories
+                ) ?? context.categories.first { $0.code == result.requestedHomeMatch }
+                // A named home that doesn't exist is proposed as a new category, never swapped
+                // for a different existing one.
+                if !requested.isEmpty, named == nil {
+                    return ConversationPlan(steps: [.init(
+                        action: .file,
+                        argument: result.rationale,
+                        newCategory: newCategory(
+                            requested: requested,
+                            suggestedCode: result.newCategoryCode ?? "",
+                            existing: context.categories
+                        )
+                    )])
+                }
+                let suggested = context.categories.first { $0.code == result.categoryCode }
+                guard result.categoryCode.isEmpty || suggested != nil
                 else { throw ConversationError.invalidPlan }
+                let category = named ?? suggested
                 // The first step is the decision; any further steps are alternative homes.
                 var seen: Set<UUID> = category.map { [$0.id] } ?? []
                 let alternatives = (result.alternatives ?? []).compactMap { code in
@@ -283,6 +357,13 @@ struct ConversationPlan: Codable, Sendable {
                   step.categoryID.isEmpty || context.categories
                   .contains(where: { $0.id.uuidString == step.categoryID })
             else { throw ConversationError.invalidPlan }
+            if let draft = step.newCategory {
+                guard step.action == .file, step.categoryID.isEmpty,
+                      !context.categories.contains(where: { $0.code == draft.code }),
+                      ConversationPlan.category(named: draft.name, in: context.categories) == nil,
+                      (try? DecimalCategory.validate(code: draft.code, name: draft.name)) != nil
+                else { throw ConversationError.invalidPlan }
+            }
             if step.action == .ingest, !hasURL {
                 throw ConversationError.invalidPlan
             }
@@ -317,10 +398,12 @@ struct ConversationPlan: Codable, Sendable {
     is a concise local query, no conversational filler); inspect (read records and provenance);
     research (grounded summary/comparison/analysis, argument is the question); saveNote (explicitly
     requested new personal note, argument is ONLY its content, never the user's instruction);
-    filingScheme (inspect/list the real filing taxonomy); file (suggest a real existing home, never apply a move);
+    filingScheme (inspect/list the real filing taxonomy); file (suggest a home for saved items, never apply
+    a move; when the user names a home that doesn't exist, still use file with empty categoryCode and the
+    app will propose creating it);
     related (find overlaps and propose connections); link (propose a connection between two records);
     review (show pending changes, never approve/reject/undo from model output); unsupported (requested
-    mutation/tool not implemented: edits, merges, deletes, taxonomy changes, web research).
+    mutation/tool not implemented: edits, merges, deletes, renaming or deleting categories, web research).
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.
@@ -348,6 +431,13 @@ struct ConversationPlan: Codable, Sendable {
         alternatives lists up to two other existing codes that could plausibly fit, most likely
         first, especially when categoryCode is empty; leave it empty when nothing else fits.
         An explicit user choice of an existing home takes precedence over your topic suggestion.
+        requestedHome copies the destination the user explicitly asked for (a code or name),
+        exactly as written, even if it isn't supplied; leave it empty when they named none.
+        requestedHomeMatch: the supplied code that means the same home as requestedHome (same
+        subject under a synonym, abbreviation, plural or different wording), else empty. Reuse an
+        equivalent home; never create a duplicate of an existing category.
+        newCategoryCode: only when no supplied category matches requestedHome, suggest an unused
+        code for it beside related categories (for example 31.05 under 31); otherwise leave it empty.
         Existing filing is context, not proof that a placeholder home is appropriate. Use Inbox
         only when no topical category fits. Never invent a category, hierarchy, tags or permission.
         This is a suggestion only, not an applied mutation. The application owns review and writes.
@@ -439,4 +529,6 @@ struct FilingChange: Codable, Sendable {
     let previousLabel: String
     let before: [FilingMembership]
     let sources: [UUID: [FilingMembership]]
+    /// Set when applying also creates the destination; undo removes it again if unused.
+    var newCategory: ConversationPlan.NewCategory?
 }

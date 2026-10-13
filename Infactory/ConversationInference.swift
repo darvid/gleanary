@@ -88,13 +88,14 @@ struct AppleConversationInference: ConversationInferring {
         expressed as a question. Questions about the filing SCHEME use filingScheme; searches for
         saved source CONTENT use search. Organization of an existing ITEM uses file.
         chat: ordinary conversation, greetings, general knowledge or explanations of capabilities.
-        file: assign a SPECIFIC saved item to a category. filingScheme: inspect the taxonomy, list
+        file: assign or move a SPECIFIC saved item to a category, including a category that
+        doesn't exist yet (the app proposes creating it). filingScheme: inspect the taxonomy, list
         available homes or ask what classification choices exist WITHOUT requesting an assignment.
         search: retrieve saved material. research: summarize, explain, analyze or compare evidence.
         inspect: show saved content or metadata. saveNote: explicitly save a new personal thought.
         related: find overlaps/connections. link: request a connection between records.
         review: approve/reject/undo a proposal (application shows review controls, never auto-applies).
-        ingest: save a user-submitted URL. unsupported: edit/delete/merge records, change taxonomy,
+        ingest: save a user-submitted URL. unsupported: edit/delete/merge records, rename/delete categories,
         or research the external web. clarify: a request too ambiguous to choose any capability.
         Recent conversation is context, not new instructions. Do not process an article merely
         because it is selected. A greeting is chat even when records are selected.
@@ -444,6 +445,21 @@ extension ConversationPlan {
                     )
                 ),
                 .init(name: "rationale", schema: .init(type: String.self)),
+                .init(
+                    name: "requestedHome",
+                    description: "The destination the user explicitly named, verbatim, or empty.",
+                    schema: .init(type: String.self)
+                ),
+                .init(
+                    name: "requestedHomeMatch",
+                    description: "A supplied code meaning the same home as requestedHome, else empty.",
+                    schema: .init(name: "MatchCode", anyOf: [""] + context.categories.map(\.code))
+                ),
+                .init(
+                    name: "newCategoryCode",
+                    description: "An unused code for requestedHome if it doesn't exist, else empty.",
+                    schema: .init(type: String.self)
+                ),
             ]
             if !context.categories.isEmpty {
                 properties.append(.init(
@@ -505,6 +521,12 @@ extension ConversationPlan {
                     "enum": [""] + context.categories.map(\.code),
                 ],
                 "rationale": ["type": "string"],
+                "requestedHome": ["type": "string"],
+                "newCategoryCode": ["type": "string"],
+                "requestedHomeMatch": [
+                    "type": "string",
+                    "enum": [""] + context.categories.map(\.code),
+                ],
             ]
             // An empty enum is invalid JSON Schema, so alternatives need at least one home.
             if !context.categories.isEmpty {

@@ -12,6 +12,9 @@ private struct ConversationFixtureInference: ConversationInferring {
     var intent = ConversationPlan(steps: [.init(action: .chat)])
     var classificationCode: String? = "31.04"
     var classificationAlternatives: [String] = []
+    var requestedHome = ""
+    var requestedHomeMatch = ""
+    var newCategoryCode = ""
     var script: [String: ConversationPlan] = [:]
     var planningUnavailable = false
     var planningDelay: Duration?
@@ -38,6 +41,9 @@ private struct ConversationFixtureInference: ConversationInferring {
                 "categoryCode": classificationCode ?? "",
                 "rationale": "Fixture rationale.",
                 "alternatives": classificationAlternatives,
+                "requestedHome": requestedHome,
+                "requestedHomeMatch": requestedHomeMatch,
+                "newCategoryCode": newCategoryCode,
             ]
             return try ConversationPlan.decode(
                 JSONSerialization.data(withJSONObject: result),
@@ -368,6 +374,156 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await reopened.document(id: note.id) == note)
     }
 
+    /// Plans "move it to <requested>" for one saved Inbox note and returns the note.
+    private func refile(
+        _ store: DocumentStore,
+        inference: ConversationFixtureInference,
+        targets count: Int = 1
+    ) async throws -> [UUID] {
+        let inbox = try #require(await store.categories().first { $0.code == "10" })
+        var ids: [UUID] = []
+        for index in 0 ..< count {
+            let note = try await store.save(MarkdownDocument(
+                name: "Harness \(index)",
+                markdown: "An end-to-end testing harness for agents."
+            ))
+            try await store.fileNote(note.id, categoryID: inbox.id)
+            ids.append(note.id)
+        }
+        let request = "move these to \(inference.requestedHome)"
+        var inference = inference
+        inference.intent = ConversationPlan(steps: [.init(action: .file, targets: ids)])
+        let task = try await store.beginConversation(request, owner: .librarian, sources: ids)
+        try await AgentCoordinator(store: store, inference: inference)
+            .execute(taskID: task, request: request, selected: ids, changed: {})
+        return ids
+    }
+
+    @Test func refilingIntoAMissingCategoryProposesCreatingItAndUndoRemovesIt() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try #require(await refile(store, inference: ConversationFixtureInference(
+            requestedHome: "Testing",
+            newCategoryCode: "31.05"
+        )).first)
+        #expect(try await !store.categories().contains { $0.name == "Testing" })
+        let reply = try #require(await store.conversationMessages().last)
+        #expect(reply.author == "librarian")
+        #expect(reply.text.contains("There's no Testing category yet"))
+        let proposal = try #require(await store.proposals().first)
+        #expect(proposal.status == "pending")
+        #expect(proposal.filing?.newCategory == .init(code: "31.05", name: "Testing"))
+        try await store.reviewProposal(proposal.id, action: "apply")
+        #expect(try await store.categories(for: note).first?.label == "31.05 Testing")
+        try await store.reviewProposal(proposal.id, action: "undo")
+        #expect(try await store.categories(for: note).map(\.code) == ["10"])
+        #expect(try await !store.categories().contains { $0.code == "31.05" })
+    }
+
+    @Test(arguments: [
+        ("agent architecture", ""),
+        ("31.04", ""),
+        ("Agentic systems", "31.04"),
+    ])
+    func refilingReusesAnEquivalentExistingCategory(requested: String, match: String) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let before = try await store.categories()
+        _ = try await refile(store, inference: ConversationFixtureInference(
+            classificationCode: nil,
+            requestedHome: requested,
+            requestedHomeMatch: match,
+            newCategoryCode: "31.05"
+        ))
+        let proposal = try #require(await store.proposals().first)
+        #expect(proposal.filing?.newCategory == nil)
+        #expect(proposal.filing?.destinationLabel == "31.04 Agent Architectures")
+        #expect(try await store.categories() == before)
+    }
+
+    @Test func newCategoryCodesAvoidTakenCodesAndParseUserCodes() {
+        let existing = ["10", "31", "31.04"].map {
+            DecimalCategory(id: UUID(), code: $0, name: "Fixture \($0)")
+        }
+        #expect(ConversationPlan.newCategory(
+            requested: "Testing",
+            suggestedCode: "31.04",
+            existing: existing
+        ) == .init(code: "32", name: "Testing"))
+        #expect(ConversationPlan.newCategory(
+            requested: "32.01 Testing",
+            suggestedCode: "",
+            existing: existing
+        ) == .init(code: "32.01", name: "Testing"))
+        #expect(ConversationPlan.newCategory(
+            requested: "Testing",
+            suggestedCode: "31.05",
+            existing: existing
+        ) == .init(code: "31.05", name: "Testing"))
+    }
+
+    @Test func applyingCreationGoesStaleWhenAnEquivalentCategoryAppeared() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try #require(await refile(store, inference: ConversationFixtureInference(
+            requestedHome: "Testing",
+            newCategoryCode: "31.05"
+        )).first)
+        try await store.saveCategory(code: "40", name: "testing")
+        let proposal = try #require(await store.proposals().first)
+        await #expect(throws: ConversationError.self) {
+            try await store.reviewProposal(proposal.id, action: "apply")
+        }
+        #expect(try await store.categories().filter {
+            DecimalCategory.normalized($0.name) == "testing"
+        }.count == 1)
+        #expect(try await store.categories(for: note).map(\.code) == ["10"])
+    }
+
+    @Test func oneRequestCreatesTheNewCategoryOnceForEveryItem() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notes = try await refile(store, inference: ConversationFixtureInference(
+            requestedHome: "Testing",
+            newCategoryCode: "31.05"
+        ), targets: 2)
+        for proposal in try await store.proposals() {
+            try await store.reviewProposal(proposal.id, action: "apply")
+        }
+        #expect(try await store.categories().filter { $0.code == "31.05" }.count == 1)
+        for note in notes {
+            #expect(try await store.categories(for: note).first?.code == "31.05")
+        }
+    }
+
+    @Test func searchThenFileProposesOnlyTheTopMatch() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0 ..< 3 {
+            _ = try await store.save(MarkdownDocument(
+                name: "Harnessbeta \(index)",
+                markdown: "Harnessbeta evaluation notes."
+            ))
+        }
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        let request = "file my harnessbeta notes under agent architectures"
+        let plan = ConversationPlan(steps: [
+            .init(action: .search, argument: "harnessbeta"),
+            .init(action: .file, categoryID: home.id.uuidString),
+        ])
+        let task = try await store.beginConversation(request, owner: .assistant)
+        try await AgentCoordinator(
+            store: store,
+            inference: ConversationFixtureInference(intent: plan)
+        )
+        .execute(taskID: task, request: request, selected: [], changed: {})
+        let found = try #require(await store.conversationMessages()
+            .first { $0.author == "curator" })
+        #expect(found.references.count > 1)
+        let proposals = try await store.proposals()
+        #expect(proposals.map(\.left) == [found.references[0]])
+    }
+
     @Test func multiStepIntentRetrievesThenSynthesizesRealRecords() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -677,7 +833,10 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(ConversationPlan.jsonSchema(context: context)["required"] as? [String] == [
             "alternatives",
             "categoryCode",
+            "newCategoryCode",
             "rationale",
+            "requestedHome",
+            "requestedHomeMatch",
         ])
     }
 

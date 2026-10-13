@@ -85,6 +85,8 @@ Verified OpenAI's official `https://developers.openai.com/siwc/token-sharing-ope
 - New captures are filed through an immediately applied filing proposal, so the card shows the classifier's rationale and Undo restores the previous filing (spec §4.4: automatic only if reversible and visible).
 - Classification returns up to two alternative existing homes. When no confident home exists, the capture stays in Inbox and the alternatives appear as pending filing proposals (spec §5.5).
 - New libraries seed only `10 Inbox`; the spec's example categories are no longer created. Existing libraries keep their categories. Tests create the example categories explicitly.
+- Chat refiling into a home that doesn't exist proposes creating it: the classifier echoes the requested home, application code matches it against the real taxonomy (code, normalized name, or a model-judged equivalent from the supplied codes) and only otherwise drafts a new category with a validated, unused code. Applying creates the category and files the item; Undo removes it if unused. A proposal goes stale if an equivalent category appeared before Apply. Renaming or deleting categories from chat remains unsupported.
+- Search-then-file proposes filing only the top search match.
 
 ## Delivered vertical slice
 

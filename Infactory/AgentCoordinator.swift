@@ -59,10 +59,13 @@ actor AgentCoordinator {
             )
         } else {
             var references = selected
-            for step in plan.steps {
+            for (index, step) in plan.steps.enumerated() {
                 try Task.checkCancellation()
                 if !step.targets.isEmpty {
                     references = step.targets
+                } else if step.action == .file, index > 0, plan.steps[index - 1].action == .search {
+                    // "File my X under Y" files the best match, not every search hit.
+                    references = Array(references.prefix(1))
                 }
                 try await dispatch(
                     step,
@@ -162,9 +165,20 @@ actor AgentCoordinator {
                         taskID: taskID
                     )
                 }
-                filingExplanation = options.isEmpty
-                    ? " No confident filing home was identified; review the filing categories to choose one."
-                    : " No confident filing home was identified; apply one of the suggested homes below or keep it in Inbox."
+                if let created = suggestion?.newCategory {
+                    _ = try await store.proposeFiling(
+                        noteID: noteID,
+                        category: created,
+                        rationale: suggestion?.rationale ?? "",
+                        taskID: taskID,
+                        creating: true
+                    )
+                    filingExplanation = " There's no \(created.name) category yet; apply the card below to create \(created.label) and file it there."
+                } else {
+                    filingExplanation = options.isEmpty
+                        ? " No confident filing home was identified; review the filing categories to choose one."
+                        : " No confident filing home was identified; apply one of the suggested homes below or keep it in Inbox."
+                }
             }
         }
         let filed = try await store.categories(for: noteID).first?.label ?? "Unfiled"
@@ -408,6 +422,8 @@ actor AgentCoordinator {
         let category: DecimalCategory?
         let rationale: String
         let alternatives: [DecimalCategory]
+        /// A user-named home that doesn't exist yet; only ever proposed, never created directly.
+        let newCategory: DecimalCategory?
     }
 
     /// Nil when no model is available; otherwise a validated decision plus alternative homes.
@@ -433,7 +449,10 @@ actor AgentCoordinator {
         return FilingSuggestion(
             category: home(step.categoryID),
             rationale: step.argument.trimmingCharacters(in: .whitespacesAndNewlines),
-            alternatives: plan.steps.dropFirst().compactMap { home($0.categoryID) }
+            alternatives: plan.steps.dropFirst().compactMap { home($0.categoryID) },
+            newCategory: step.newCategory.map {
+                DecimalCategory(id: UUID(), code: $0.code, name: $0.name)
+            }
         )
     }
 
@@ -445,10 +464,28 @@ actor AgentCoordinator {
     ) async throws {
         guard !references.isEmpty else { try await askForTargets(taskID: taskID); return }
         let categories = try await store.categories()
-        let destination: DecimalCategory? = if step.categoryID.isEmpty {
-            try await suggestedFiling(taskID: taskID, ids: references, request: request)?.category
-        } else {
-            categories.first { $0.id.uuidString == step.categoryID }
+        let suggestion = step.categoryID.isEmpty
+            ? try await suggestedFiling(taskID: taskID, ids: references, request: request) : nil
+        if let created = suggestion?.newCategory {
+            for id in references {
+                _ = try await store.proposeFiling(
+                    noteID: id,
+                    category: created,
+                    rationale: suggestion?.rationale ?? step.argument,
+                    taskID: taskID,
+                    creating: true
+                )
+            }
+            try await store.postConversation(
+                author: .librarian,
+                text: "There's no \(created.name) category yet. Proposed creating \(created.label) and filing there. Review and apply below; nothing has changed yet.",
+                references: references,
+                taskID: taskID
+            )
+            return
+        }
+        let destination = suggestion?.category ?? categories.first {
+            $0.id.uuidString == step.categoryID
         }
         guard let destination else {
             try await store.postConversation(
