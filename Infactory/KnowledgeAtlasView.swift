@@ -13,6 +13,7 @@ struct KnowledgeAtlasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.displayScale) private var displayScale
     @State private var query = ""
     @State private var hoverPoint: CGPoint?
     @State private var dragStart: AtlasCamera?
@@ -58,47 +59,38 @@ struct KnowledgeAtlasView: View {
 
     // MARK: Header and footer
 
+    /// One row: the path to the focused region, its title and counts, then search.
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+        HStack(spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
                 breadcrumb
-                Spacer(minLength: 12)
-                searchField
-            }
-            if let focus = atlas.focusTile {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(focus.node.label).font(.title2.weight(.semibold)).lineLimit(1)
+                if let focus = atlas.focusTile {
+                    Text(focus.node.label).font(.title3.weight(.semibold)).lineLimit(1)
                         .accessibilityAddTraits(.isHeader)
                     Text(summary(of: focus)).font(.callout).foregroundStyle(.secondary)
                         .monospacedDigit().lineLimit(1)
                 }
             }
+            Spacer(minLength: 12)
+            searchField
         }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
     }
 
+    /// Enclosing regions above the focused one, which the header titles itself.
     private var breadcrumb: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if atlas.canGoBack {
                 Button("Back", systemImage: "chevron.left") { atlas.back() }
                     .labelStyle(.iconOnly).buttonStyle(.borderless)
                     .keyboardShortcut("[", modifiers: .command)
                     .help("Back to the enclosing category (⌘[)")
             }
-            ForEach(
-                Array(atlas.breadcrumb.enumerated().dropFirst(atlas.canGoBack ? 0 : 1)),
-                id: \.offset
-            ) { offset, tile in
-                if offset > 0 {
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                }
-                if offset == atlas.breadcrumb.count - 1 {
-                    Text(tile.node.label).font(.callout.weight(.medium)).lineLimit(1)
-                } else {
-                    Button(tile.node.label) { atlas.focus(tile.id) }
-                        .buttonStyle(.borderless).font(.callout).foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+            ForEach(Array(atlas.breadcrumb.dropLast().enumerated()), id: \.offset) { _, tile in
+                Button(tile.node.label) { atlas.focus(tile.id) }
+                    .buttonStyle(.borderless).font(.callout).foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
         }.accessibilityElement(children: .contain).accessibilityLabel("Atlas location")
     }
@@ -176,7 +168,7 @@ struct KnowledgeAtlasView: View {
                         selectedID: atlas.selectedID,
                         hoveredID: atlas.hoveredID, matchCounts: atlas.matchCounts,
                         dark: colorScheme == .dark, highContrast: contrast == .increased,
-                        keyboardFocused: canvasFocused
+                        keyboardFocused: canvasFocused, displayScale: displayScale
                     ).draw(in: &context, size: size)
                 }
             }

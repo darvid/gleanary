@@ -245,6 +245,30 @@ struct KnowledgeAtlasLayoutTests {
     }
 }
 
+struct KnowledgeAtlasDetailTests {
+    @Test func rampFadesSmoothlyBetweenItsBounds() {
+        #expect(AtlasRenderer.ramp(5, 10, 20) == 0)
+        #expect(AtlasRenderer.ramp(25, 10, 20) == 1)
+        #expect(abs(AtlasRenderer.ramp(15, 10, 20) - 0.5) < 0.001)
+        var previous = 0.0
+        for value in stride(from: CGFloat(10), through: 20, by: 0.5) {
+            let next = AtlasRenderer.ramp(value, 10, 20)
+            #expect(next >= previous)
+            previous = next
+        }
+    }
+
+    @Test func itemsStartFadingInWhereTheyBecomeHittable() {
+        let minimum = KnowledgeAtlasModel.minimumItemSize
+        let hidden = CGRect(x: 0, y: 0, width: minimum - 0.5, height: 40)
+        let half = CGRect(x: 0, y: 0, width: minimum * 1.5, height: 40)
+        let shown = CGRect(x: 0, y: 0, width: minimum * 2, height: 40)
+        #expect(AtlasRenderer.itemReveal(hidden) == 0)
+        #expect(AtlasRenderer.itemReveal(half) > 0 && AtlasRenderer.itemReveal(half) < 1)
+        #expect(AtlasRenderer.itemReveal(shown) == 1)
+    }
+}
+
 struct KnowledgeAtlasCameraTests {
     let viewport = CGSize(width: 800, height: 500)
 
@@ -462,8 +486,21 @@ struct KnowledgeAtlasCameraTests {
         let technology = try #require(snapshot.categories.first { $0.code == "50" })
         let ai = try #require(snapshot.categories.first { $0.code == "50.02" })
         for dark in [false, true] {
-            for stage in ["overview", "category", "contents", "zoomed"] {
-                let atlas = KnowledgeAtlasModel(snapshot: snapshot)
+            for stage in ["overview", "category", "contents", "zoomed", "dense"] {
+                var source = snapshot
+                if stage == "dense" {
+                    // About 9,000 items, so most item tiles start below the drawable size.
+                    source.items = (0 ..< 12).flatMap { copy in
+                        snapshot.items.map { item in
+                            AtlasItem(
+                                id: UUID(), title: item.title, kind: item.kind, host: item.host,
+                                updatedAt: item.updatedAt.addingTimeInterval(Double(copy)),
+                                categoryIDs: item.categoryIDs
+                            )
+                        }
+                    }
+                }
+                let atlas = KnowledgeAtlasModel(snapshot: source)
                 atlas.reduceMotion = true
                 let host = NSHostingView(rootView: KnowledgeAtlasView(
                     atlas: atlas, store: nil, openItem: { _ in }
