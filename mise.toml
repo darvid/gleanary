@@ -5,19 +5,19 @@ swiftformat = "0.63.0"
 swiftlint = "0.65.1"
 
 [tasks.dev]
-description = "Build and open the native Infact app (quit it first to reload changes)"
+description = "Build and open the native Infactory app (quit it first to reload changes)"
 depends = ["app:build"]
-run = 'open "$MISE_PROJECT_ROOT/.build/Infact.app"'
+run = 'open "$MISE_PROJECT_ROOT/.build/Infactory.app"'
 
 [tasks."dev:release"]
-description = "Build an optimized Infact app for graph performance (quit it first)"
+description = "Build an optimized Infactory app for graph performance (quit it first)"
 run = '''
 CONFIGURATION=release bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"
-open "$MISE_PROJECT_ROOT/.build/Infact.app"
+open "$MISE_PROJECT_ROOT/.build/Infactory.app"
 '''
 
 [tasks."app:build"]
-description = "Build and sign a local sandboxed Infact.app bundle"
+description = "Build and sign a local sandboxed Infactory.app bundle"
 run = 'bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
 
 [tasks.format]

@@ -1,4 +1,4 @@
-# Infact agent guidance
+# Infactory agent guidance
 
 ## Version control
 
@@ -24,4 +24,4 @@ git rev-parse --path-format=absolute --git-dir --git-common-dir
 ```
 
 Different paths indicate a linked worktree. Equal paths indicate the
-main checkout. Keep this exception scoped to Infact.
+main checkout. Keep this exception scoped to Infactory.

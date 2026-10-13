@@ -1,5 +1,5 @@
 ---
-name: Infact Native Library
+name: Infactory Native Library
 description: Saved evidence, ready for conversation; a quiet native macOS Library.
 colors:
   ink: "#000000"
@@ -56,7 +56,7 @@ components:
     padding: "7pt 0"
 ---
 
-# Design System: Infact Native Library
+# Design System: Infactory Native Library
 
 ## Overview
 
@@ -140,4 +140,4 @@ The user supplied ChatGPT's compact input as inspiration. The native composer no
 - **Don't** add a second composer or send a request automatically on handoff.
 - **Don't** extend these Library decisions into unseen Graph, Mind Map, or settings redesigns.
 
-Evidence: `Infact/ContentView.swift`, `Infact/DocumentPreview.swift`, `Infact/InfactApp.swift`, and read-only supporting model/store code. Synthetic offscreen captures: `.build/library-redesign/infact-library-{wide,narrow,light,source,summary}.png`. Independent fix review reports cache observation and legacy-summary classification resolved, with ship disposition at fix-review scope only; this is not external GUI or VoiceOver certification. No user database was accessed for this documentation.
+Evidence: `Infactory/ContentView.swift`, `Infactory/DocumentPreview.swift`, `Infactory/InfactoryApp.swift`, and read-only supporting model/store code. Synthetic offscreen captures: `.build/library-redesign/infactory-library-{wide,narrow,light,source,summary}.png`. Independent fix review reports cache observation and legacy-summary classification resolved, with ship disposition at fix-review scope only; this is not external GUI or VoiceOver certification. No user database was accessed for this documentation.
