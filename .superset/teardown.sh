@@ -2,7 +2,7 @@
 set -euo pipefail
 
 workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-executable="$workspace/.build/Sink.app/Contents/MacOS/Sink"
+executable="$workspace/.build/Infact.app/Contents/MacOS/Infact"
 
 # Match the executable path, never the shared app name or bundle ID.
 while read -r pid command; do
@@ -14,7 +14,7 @@ while read -r pid command; do
         sleep 0.2
     done
     if [[ "$current" == "$executable" ]]; then
-        printf 'Sink did not stop. Quit this workspace app and retry.\n' >&2
+        printf 'Infact did not stop. Quit this workspace app and retry.\n' >&2
         exit 1
     fi
 done < <(ps -axww -o pid=,comm=)
