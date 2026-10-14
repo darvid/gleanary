@@ -1,15 +1,15 @@
-# Infact: Agent-Native Personal Knowledge System
+# Infactory: Agent-Native Personal Knowledge System
 
 **Status:** Implementation specification for an existing application  
 **Last updated:** 2026-10-12  
-**Primary audience:** Codex working in the Infact repository  
+**Primary audience:** Codex working in the Infactory repository  
 **Directive:** Build and validate a working vertical slice. Prefer running software and measured user experience over speculative abstractions.
 
 ---
 
 ## 0. Codex: Read This First
 
-You are the lead engineer and product-minded implementer of **Infact**, an existing **Swift application backed by SQLite that already uses Apple Intelligence**. Your job is to evolve the real application into a compelling, local-first, agent-native second brain, **not** to bootstrap a replacement project.
+You are the lead engineer and product-minded implementer of **Infactory**, an existing **Swift application backed by SQLite that already uses Apple Intelligence**. Your job is to evolve the real application into a compelling, local-first, agent-native second brain, **not** to bootstrap a replacement project.
 
 **Operating instructions:**
 
@@ -34,14 +34,14 @@ You are the lead engineer and product-minded implementer of **Infact**, an exist
 
 ## 1. Product Thesis
 
-**Infact is a local-first personal information factory.** It helps a person acquire, organize, find, evaluate, connect, and synthesize information through a **single persistent, shared conversation** with a small team of specialized agents.
+**Infactory is a local-first personal information factory.** It helps a person acquire, organize, find, evaluate, connect, and synthesize information through a **single persistent, shared conversation** with a small team of specialized agents.
 
-The user should not need to know whether their request is technically ingestion, retrieval, metadata normalization, research, synthesis, or curation. They express an intent, optionally `@mention` a specialist, and Infact handles the underlying work.
+The user should not need to know whether their request is technically ingestion, retrieval, metadata normalization, research, synthesis, or curation. They express an intent, optionally `@mention` a specialist, and Infactory handles the underlying work.
 
 ### North-star experience
 
-1. Open Infact and see one conversation, `#general`.
-2. Paste an article or arXiv URL and ask Infact to save and summarize it.
+1. Open Infactory and see one conversation, `#general`.
+2. Paste an article or arXiv URL and ask Infactory to save and summarize it.
 3. The librarian records the canonical source and files it in the current Johnny Decimal scheme.
 4. The researcher produces a useful, grounded summary, not just a generic restatement.
 5. The curator notices relevant existing material and offers a meaningful connection or consolidation.
@@ -52,7 +52,7 @@ The user should not need to know whether their request is technically ingestion,
 ### Product principles
 
 - **Local-first:** knowledge and conversation are owned by the application, not a model provider.
-- **One room:** a natural chat-first workspace, not four independent chatbots or a dashboard maze.
+- **One room:** a natural chat-first workspace, not a set of independent chatbots or a dashboard maze.
 - **Agent teamwork without theater:** meaningful conversation, spontaneous relevant participation, visible handoffs, minimal robotic status chatter.
 - **Bring existing knowledge:** preserve existing notes and SQLite content; support import/adaptation rather than forcing a new system.
 - **Source-grounded output:** keep traceable links from generated material to the original source(s).
@@ -63,11 +63,11 @@ The user should not need to know whether their request is technically ingestion,
 ### Explicit non-goals for MVP
 
 - A full research graph or claim-level epistemic ontology.
-- Fully autonomous unattended research loops or continuous web crawling.
+- Fully autonomous unattended research loops or continuous web crawling. Scheduled maintenance of the user's own library (§7.4) is in scope: bounded batches over saved items, with the same permission policy as chat.
 - Perfect support for every PKM convention; **Johnny Decimal first**.
 - A hosted multi-user SaaS, sync server, organizations, collaboration accounts, or multiple channels.
 - Building a separate CLI, web app, or Pi-based runtime as the primary user interface.
-- A universal plugin architecture, tool marketplace, generic workflow DSL, or agent voting system.
+- A universal plugin architecture, tool marketplace, generic workflow DSL, or agent voting system. Automation recipes (§7.4) are a fixed, typed structure, not a scripting language.
 - A mandatory ChatGPT account or assumption that a ChatGPT subscription provides unrestricted API access.
 
 ---
@@ -96,11 +96,11 @@ Do not create duplicate models, tables, search indexes, or services before check
 
 ---
 
-## 3. MVP Experience: One Channel, Four Agents
+## 3. MVP Experience: One Channel, Five Agents
 
 ### 3.1 Unified conversation
 
-The principal interface is `#general`, a persistent chronological feed of messages from the **user** and these **four agents**:
+The principal interface is `#general`, a persistent chronological feed of messages from the **user** and these **five agents**:
 
 | Agent | Handle | Responsibility | Domain authority |
 |---|---|---|---|
@@ -108,6 +108,7 @@ The principal interface is `#general`, a persistent chronological feed of messag
 | Researcher | `@researcher` | Read, compare, analyze, summarize, synthesize information | Findings and evidence |
 | Curator | `@curator` | Retrieve, connect, identify gaps/duplicates/conflicts and improve knowledge quality | Relevance and curation recommendations |
 | Librarian | `@librarian` | Ingest, identify, normalize metadata, categorize, file, ensure structural integrity | Persistence and organization |
+| Writer | `@writer` | Turn gathered evidence into finished documents in the user's chosen writing style (§7.6) | Structure, voice and readability of composed documents |
 
 These are **task-scoped roles with real tools**, not permanently running LLM personas. Their differences must arise from their instructions, tools, responsibilities, and mutation authority.
 
@@ -149,7 +150,7 @@ Use current app design language. The target experience should feel like a refine
 - Structured proposal cards for classification, new artifacts, cross-links, and edits. `Review`, `Apply`, `Reject`, or `Undo` as applicable.
 - Selecting an artifact/source opens native detail/preview UI or the app's existing equivalent, without replacing the conversation.
 - Respect system appearance, Dynamic Type, VoiceOver, reduced motion, narrow layouts, and platform human-interface conventions.
-- Empty state teaches the product through examples, not a four-agent tutorial wall.
+- Empty state teaches the product through examples, not an agent-by-agent tutorial wall.
 - Maintain conversational scroll position while streaming; do not constantly jump away when the user is reading history.
 - Error, offline, cancellation, and unavailable-model states must be understandable and recoverable.
 
@@ -172,7 +173,8 @@ SwiftUI #general
           ├── Assistant
           ├── Researcher
           ├── Curator
-          └── Librarian
+          ├── Librarian
+          └── Writer
                   │
         ┌─────────┴──────────────┐
         ▼                        ▼
@@ -419,6 +421,146 @@ A proposal should minimally include: target IDs, operation kind, human-readable 
 - Do not let an agent apply another agent's destructive proposal by “agreeing” in conversation without user approval.
 - Clearly distinguish a proposed change from a persisted change in the channel.
 
+### 7.4 Automations: scheduled library maintenance
+
+Automations run repetitive library upkeep on a schedule, using the same agents, tools, permission policy (§4.4) and change proposals (§7.3) as chat. They work only on items already in the library; they never research or crawl on their own.
+
+**Recipe.** An automation is a typed record, not a script:
+
+| Field | Meaning | Example |
+|---|---|---|
+| Trigger | Interval, daily/weekly at a time, or an event (capture finished; a category's item count exceeds N) | Every 10 minutes |
+| Selection | A deterministic, parameterized query over the library, chosen from built-in selectors. The model never chooses the items. | Inbox sources with full text and no summary, oldest first |
+| Batch limit | Maximum items per run | 10 |
+| Agent | The role that makes judgment calls | Researcher |
+| Action | One built-in action: summarize, fetch, check access, propose links, propose filing, retitle, digest | Summarize |
+| Output policy | `apply` (reversible, with Undo), `propose` (a changeset for review), or `report` (findings only) | Apply |
+| Budget | Local-only or cloud allowed; maximum model calls per day; quiet hours; pause on battery | Cloud allowed, 200 calls/day |
+
+**Output policy follows §4.4, enforced in code, not prompts:**
+
+- Summaries, drafts, fetching unfetched bookmarks and retrying failed captures may `apply`.
+- Linking, retitling, refiling or editing existing content defaults to `propose`. The user may promote an individual automation to `apply` for title and filing changes only, and every applied change keeps its Undo.
+- Archive proposals are always `propose` (§7.5). Automations never trash or delete.
+- Cloud inference requires the existing ChatGPT enablement and consent; an automation set to local-only never sends content off the Mac.
+
+**Progress markers.** Selections that walk the library ("oldest first") must not revisit the same items every run. Store per-item, per-check timestamps (for example `accessCheckedAt` and `linksCheckedAt`), and select items that were never checked or were checked longer ago than the automation's interval.
+
+**Runs.** Each run is persisted with its automation, start/end, items examined, items changed, items skipped with reasons, model calls used, and status (`succeeded`, `partial`, `failed`, `cancelled`). Proposed changes from one run form one changeset in the existing review sheet, and Undo applies per run. Runs are cancellable. Retrying a run never duplicates artifacts (§8).
+
+**Scheduling.**
+
+- Runs happen in-process while the app is open, scheduled with `NSBackgroundActivityScheduler` so macOS can defer them under load or on battery.
+- A run missed while the app was closed runs once on next launch, not once per missed interval.
+- Automations run one at a time and share a single lock with user-started ingestion and summaries.
+- User-started work always comes first, and an automation run yields between items.
+- Running with the app closed (a login-item helper via `SMAppService`) is a later, opt-in step, not part of the first version.
+
+**Built-in automations.** Ship as templates with these defaults:
+
+| Automation | Agent | Selection → action | Policy |
+|---|---|---|---|
+| Inbox summarizer | Researcher | Inbox items with full text and no summary → summarize | Apply |
+| Bookmark fetcher | Librarian | Imported bookmarks never fetched, a few per run → fetch page | Apply |
+| Link checker | Librarian | Sources by oldest `accessCheckedAt` → check the original URL | Report; propose URL updates and archives |
+| Cross-linker | Curator | Items with no links, by oldest `linksCheckedAt` → propose links with a one-line rationale | Propose |
+| Unfiled filer | Librarian | Unfiled items → propose a primary category | Propose |
+| Failed-capture retry | Librarian | Failed captures with a retryable error → retry with backoff (1 hour, 1 day, 1 week), then leave in Needs Attention | Apply |
+| Weekly digest | Assistant | Items saved in the last 7 days → a digest note grouped by category | Apply (new note) |
+
+**Link checker rules.** Most checks need no model; classify the response:
+
+| Result | Handling |
+|---|---|
+| 2xx, page still matches the capture | Record `accessCheckedAt` |
+| Permanent redirect (301/308) | Propose updating the source URL |
+| 404, 410, or a domain that no longer resolves | Mark the source unreachable |
+| 401/403, login wall or paywall | Mark restricted; never propose archiving for this alone |
+| Timeout or 5xx | Transient; check again later |
+
+- Propose archiving only after the source has been unreachable on at least three checks spanning at least seven days.
+- When proposing, look up the Internet Archive's Wayback Machine availability API and attach the nearest snapshot's link if one exists.
+- The UI must state that the original link is gone but the locally captured copy is intact; "unreachable" does not mean the item's content is lost.
+- Checks go through the existing URL policy and fetcher (no cookies or credentials, private and local addresses blocked) and are rate-limited per host.
+
+**Pipelines (later).** A pipeline chains automations, each stage selecting only items the previous stage completed (for example: fetch → summarize → propose links → propose filing). Each stage keeps its own output policy, so links stay proposals even inside a pipeline.
+
+**Creating from chat (later).** "Every morning, summarize anything new in Reading queue" makes the Assistant draft a recipe and show it as a card (trigger, selection, agent, action, policy, budget) with **Create Automation**. Nothing is scheduled without that confirmation, and the draft can only use the built-in selectors and actions.
+
+**UI.**
+
+- An **Automations** list, in the sidebar or Settings. Each row has an on/off toggle, schedule, last run (succeeded / needs attention), next run and **Run Now**.
+- New automations start from the templates above.
+- An automation's detail view shows its recipe and its run history; each run expands to its report and changeset.
+- Pending proposals from all automations appear in one review queue with a badge, like Captures.
+- Status text and counts follow the shared text motion in DESIGN.md.
+
+### 7.5 Archive and trash
+
+Two states, because they mean different things:
+
+- **Archive** means keep the item but put it out of the way.
+  - Archived items stay complete and are hidden by default from the library, Atlas, search and chat retrieval.
+  - They're listed under **Archive** in the sidebar with their reason (for example "Original link unreachable since 2 Oct 2026") and the date archived.
+  - **Unarchive** restores the item exactly.
+  - Search offers "Include archived".
+  - Automations may propose archiving; only the user applies it.
+- **Trash** means the user is deleting the item.
+  - Trashed items are hidden everywhere, listed under **Trash**, restorable for 30 days, then purged through the existing permanent-removal path, which already cleans up artifacts.
+  - Only the user can trash an item, never an automation or agent.
+
+**Implementation notes.**
+
+- Add `archivedAt` and `archiveReason` to `notes` in a versioned migration.
+- Filter archived items in the library, Atlas, search and retrieval queries, and keep their passages so unarchiving needs no reindex.
+- `notes.deletedAt` already exists. Today deleting records a revision, sets `deletedAt`, and drops the item's passages and index jobs. Trash should build on that path rather than add a parallel flag.
+- Restoring from trash must re-queue indexing.
+
+### 7.6 Writer and writing styles
+
+The Writer turns evidence the other agents gather into a finished document: a guide, comparison, overview or digest. It doesn't research, ingest or file. The Researcher stays close to sources (quotes, hedging, citations), while the Writer is responsible for structure, voice and readability. Keeping the two roles apart keeps each one good at its job.
+
+**Writing styles.** A style is a named, structured profile chosen per request ("in Plain style") or set as the default:
+
+| Field | Examples |
+|---|---|
+| Tone | Neutral, conversational, opinionated, technical |
+| Reading level | Plain language (ISO 24495-1), general, expert |
+| Structure | Summary first, tables first, short sections, bullets or prose |
+| Conventions | US or UK spelling, units, currency, date format |
+| Avoid | Banned words and phrases, marketing tone, emoji |
+| Citations | Inline links, footnotes, or a sources section |
+| Instructions | Free text, for example "explain jargon on first use" or "say when sources disagree" |
+
+- Ship a few presets (for example Plain, Reference guide, Blog) so a new style never starts blank.
+- Styles are user settings stored locally.
+- A style's instructions shape wording only; they cannot widen the Writer's tools or permissions, and source content cannot change the active style (§8).
+
+**Compose workflow.** Composing a document from many sources runs in stages, so no stage needs the whole library in one context:
+
+1. **Gather (Curator).** Select candidates by category, search and semantic similarity, then show the list with suspected off-topic items marked. The user confirms or edits the scope before anything else runs.
+2. **Extract (Researcher).** For each item, extract the facts the request asks for as structured records with a supporting quote and source reference. A fact the source doesn't state is recorded as "not covered", never inferred.
+3. **Write (Writer).**
+   - Compose the document from the extracted records in the chosen style.
+   - Any grade or rating uses a stated scale, and the document defines it.
+   - Every claim is traceable to its record's source, and conflicting sources are called out rather than averaged.
+4. **Save.** Save the result as a new note linked to every source it used. It's editable like any note.
+
+For example, "read my audio sources and write a hi-fi page organized by budget, split into IEMs, headphones and speakers, graded by bass response":
+- gathers the audio sources and confirms the list;
+- extracts product, type, price and what each source says about bass;
+- writes sections by type, with budget tiers and a bass-response scale, and marks products whose sources don't discuss bass.
+
+**Grounding.** Composed documents draw only on the user's saved sources by default. The model's general knowledge can be allowed per request, and anything drawn from it is marked as such in the document.
+
+**Refresh.** A composed document records its request, style and source selection.
+- **Refresh** re-runs the request: it gathers again, re-extracts only new or changed sources, rewrites the document, and shows what changed before saving a new revision.
+- Refresh can also be scheduled as an automation (§7.4), with output policy `propose`.
+
+**Providers.** Extraction can run on-device, one item at a time. Composing documents across many sources realistically needs ChatGPT's larger context; without it, the Writer should say so and offer to compose from a smaller selection.
+
+**Progress and control.** Composing runs as a normal task with stage progress ("Extracting 12 of 37"), cancellation at any stage, and no partial document saved on cancel.
+
 ---
 
 ## 8. Security, Privacy, Reliability
@@ -448,7 +590,7 @@ Implement **in order of user-visible value**, adjusting sequence when repo archi
 ### Phase 1 — Chat as the primary workflow
 
 **Build:** persistent `#general`, composer, messages, mentions, conversation history, message authors, streaming status, minimal task/event persistence. Route explicit mentions even if initially the agents are single-agent executions.  
-**Done when:** all four roles are addressable, messages persist across restart, and user can view/cancel an active task.
+**Done when:** every role is addressable, messages persist across restart, and user can view/cancel an active task.
 
 ### Phase 2 — Make the knowledge flow real
 
@@ -475,6 +617,27 @@ Implement **in order of user-visible value**, adjusting sequence when repo archi
 **Build:** native interaction polish, loading/error/offline states, keyboard and accessibility support, diagnostics, tests and representative scripted demo scenarios.  
 **Done when:** a real user can perform core scenarios without debugging tools, and the app builds/tests on the supported targets.
 
+### Phase 7 — Automations
+
+**Build:** archive and unarchive (§7.5); a persisted automation recipe and run log; an in-app scheduler; and the Inbox summarizer, Link checker (report and propose only) and Cross-linker (propose only) built-ins, with an Automations list and Run Now. Chat-created automations, pipelines and running with the app closed come later.
+**Done when:**
+- An enabled automation runs on schedule and catches up once after a missed run.
+- Its changes are either applied with Undo or reviewable as one changeset.
+- It never revisits checked items early, never exceeds its budget, and never changes anything outside its output policy.
+
+### Phase 8 — Writer
+
+**Build:**
+- The Writer role and a Writing style setting with presets.
+- The compose workflow (gather → confirm → extract → write → save as a linked note) on the existing ChatGPT tool loop, with a final `write_document` tool.
+- Refresh with a reviewable diff.
+- Multiple custom styles and scheduled refresh come later.
+
+**Done when:**
+- A request across dozens of sources produces a styled document after the user confirms the scope.
+- Every graded or factual statement traces to a saved source, and uncovered facts are marked rather than invented.
+- Refresh shows what changed before saving.
+
 **Sequencing note:** If ChatGPT availability is critical to demonstrating research quality, prove a minimal auth + streaming spike sooner, but do not let pending external consent stall the local-first product.
 
 ---
@@ -493,6 +656,15 @@ Prefer deterministic unit tests and integration tests with test databases and mo
 6. **Agent routing:** direct `@mentions`, unmentioned default, irrelevant-agent suppression, handoff budget, no infinite delegation, failure of a child task, cancellation while another agent speaks.
 7. **Persistence and UX state:** chat/references/task status across restart; stale proposal cannot clobber a changed artifact; reject and accepted changes are accurately reflected.
 8. **Security:** prompt injection in an ingested article cannot execute prohibited tools, request private local files or turn a draft into a committed destructive operation.
+9. **Automations:**
+   - Schedules and missed-run catch-up are tested with an injected clock.
+   - Selections respect batch limits and progress markers.
+   - Output policy is enforced in code, e.g. a `propose` automation cannot apply.
+   - Budgets and local-only mode hold.
+   - Cancellation and retry leave no partial changes.
+   - The link checker classifies synthetic responses correctly and proposes archiving only after its failure threshold.
+   - Archive and unarchive round-trip, and trash restores within its window.
+10. **Writer:** the gathered scope is confirmed before extraction runs; extraction marks uncovered facts instead of inferring them; composed claims carry source references; style instructions change wording but cannot add tools or permissions; source text cannot change the active style; cancelling saves no partial document; refresh re-extracts only new or changed sources.
 
 ### Live smoke scenarios
 
@@ -521,7 +693,7 @@ Instrument unobtrusively and locally first:
 - Return usage: can a user find and reuse something they saved earlier?
 - Local vs cloud task quality and latency on the same representative fixture set.
 
-**Critical hypothesis to test:** Does collaborative agent behavior make real work more effective than a single assistant using the same tools? Design the architecture so that simple single-agent comparisons are possible; don't bake in obligatory four-agent participation.
+**Critical hypothesis to test:** Does collaborative agent behavior make real work more effective than a single assistant using the same tools? Design the architecture so that simple single-agent comparisons are possible; don't bake in obligatory participation by every agent.
 
 ---
 
@@ -531,7 +703,7 @@ The MVP is acceptable when all statements below are true (or clearly documented 
 
 - [ ] Existing Swift app and database still work; current user records and Apple Intelligence functionality are preserved.
 - [ ] A persistent, polished, accessible native `#general` conversation exists.
-- [ ] All four specialists have meaningfully distinct responsibilities and support explicit `@mentions`.
+- [ ] All specialists have meaningfully distinct responsibilities and support explicit `@mentions`.
 - [ ] A user can ingest at least one real URL-based source and inspect stored canonical metadata/content.
 - [ ] A librarian can assign a valid Johnny Decimal category using real persisted category data.
 - [ ] A researcher can generate and persist a grounded summary linked to the ingested source.
@@ -596,4 +768,4 @@ The following references guide integration. They do not supersede current SDK do
 
 ## Final Instruction
 
-**Go build the smallest real Infact experience that demonstrates the promise:** one conversation, four useful specialists, genuine source ingestion, Johnny Decimal filing, source-grounded synthesis, local persistence, meaningful collaboration, and retrieval. Preserve the working Swift/SQLite/Apple Intelligence application. Make optional ChatGPT integration compliant and testable. Ship a cohesive, delightful prototype, measure it with users, and let actual friction determine the next architectural abstraction.
+**Go build the smallest real Infactory experience that demonstrates the promise:** one conversation, a few useful specialists, genuine source ingestion, Johnny Decimal filing, source-grounded synthesis, local persistence, meaningful collaboration, and retrieval. Preserve the working Swift/SQLite/Apple Intelligence application. Make optional ChatGPT integration compliant and testable. Ship a cohesive, delightful prototype, measure it with users, and let actual friction determine the next architectural abstraction.
