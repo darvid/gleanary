@@ -37,6 +37,8 @@ final class KnowledgeAtlasModel {
     private(set) var camera = AtlasCamera()
     private(set) var transition: Transition?
     private(set) var focusID: AtlasNodeID = .library
+    /// Counts deliberate moves between regions, which free zooming and panning don't make.
+    private(set) var navigations = 0
     var selectedID: AtlasNodeID?
     var hoveredID: AtlasNodeID?
     private(set) var snapshot: AtlasSnapshot?
@@ -344,6 +346,7 @@ final class KnowledgeAtlasModel {
     func focus(_ id: AtlasNodeID, animated: Bool = true) {
         guard let tile = layout.tile(id), tile.node.kind != .item else { return }
         focusID = id
+        navigations += 1
         fit(id, animated: animated)
     }
 

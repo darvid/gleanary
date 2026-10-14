@@ -689,6 +689,49 @@ extension LinkSummaryTests {
 }
 
 extension LinkSummaryTests {
+    @Test func capturesWaitForTheProvidersSummarizer() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        // The default engine until the provider setting loads, which must not be used.
+        let placeholder = SummaryProbe()
+        let engine = IngestionEngine(
+            store: store, fetcher: SummaryFetcher(), summarizer: placeholder,
+            summarizerChosen: false
+        )
+        _ = try await engine.enqueue("https://example.org/article")
+        let running = Task { try await engine.run() }
+        try await Task.sleep(for: .milliseconds(300))
+        await engine.useSummarizer(FixtureLinkSummarizer())
+        try await running.value
+        let job = try #require(await store.captureJobs().first)
+        let noteID = try #require(job.noteID)
+        let note = try #require(await store.document(id: noteID))
+        #expect(note.markdown.hasPrefix("A brief synthetic summary."))
+        #expect(await placeholder.documents.isEmpty)
+    }
+
+    @Test func anUnusableChosenEngineFailsWithItsReason() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(
+            store: store, fetcher: SummaryFetcher(),
+            summarizer: UnavailableSummarizer(
+                engineName: "ChatGPT", error: ChatGPTError.modelDenied
+            )
+        )
+        _ = try await engine.enqueue("https://example.org/article")
+        try await engine.run()
+        let job = try #require(await store.captureJobs().first)
+        #expect(job.state == .ready)
+        #expect(job.progress.contains("without a summary"))
+        #expect(job.progress.contains(ChatGPTError.modelDenied.localizedDescription))
+        #expect(!job.progress.contains("Apple Intelligence"))
+    }
+
     @Test func summaryFailuresNameTheirEngineOnce() {
         let checked = SummaryFailure(engine: "ChatGPT", underlying: .unsupportedSummary)
         #expect(checked

@@ -87,8 +87,7 @@ struct KnowledgeAtlasView: View {
             if atlas.canGoBack {
                 Button("Back", systemImage: "chevron.left") { atlas.back() }
                     .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    .keyboardShortcut("[", modifiers: .command)
-                    .help("Back to the enclosing category (⌘[)")
+                    .help("Back to the enclosing category")
             }
             ForEach(Array(atlas.breadcrumb.dropLast().enumerated()), id: \.offset) { _, tile in
                 Button(tile.node.label) { atlas.focus(tile.id) }
@@ -159,6 +158,9 @@ struct KnowledgeAtlasView: View {
                 .help("Show the whole library (⌘0)")
         }
         .labelStyle(.iconOnly).buttonStyle(.borderless).controlSize(.small)
+        // A fixed height: selecting adds a bordered Open button, and a taller footer would
+        // shrink the canvas, which re-fits the camera and throws away the user's zoom.
+        .frame(height: 24)
         .padding(.horizontal, 20).padding(.vertical, 10)
     }
 

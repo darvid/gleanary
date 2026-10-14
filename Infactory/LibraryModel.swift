@@ -63,6 +63,8 @@ final class LibraryModel {
         provider: any EmbeddingProviding = AppleEmbeddingProvider(),
         graphProvider: any GraphExtracting = AppleGraphExtractor(),
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
+        // When true, summaries wait for `useLinkSummarizer` to pick the provider's engine.
+        followsProvider: Bool = false,
         screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
@@ -72,6 +74,7 @@ final class LibraryModel {
         ingestion = IngestionEngine(
             store: store,
             summarizer: summarizer,
+            summarizerChosen: !followsProvider,
             screenshotter: screenshotter
         )
     }

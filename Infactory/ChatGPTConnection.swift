@@ -23,6 +23,8 @@ final class ChatGPTConnection {
     var signingIn = false
     var error: String?
     var welcome = false
+    /// Accounts, the enabled setting and models have loaded, so `inference()` means what it says.
+    private(set) var loaded = false
     var providerPrompt: ChatGPTProviderPrompt?
     private(set) var consented = false
     @ObservationIgnored private var signInTask: Task<Void, Never>?
@@ -51,6 +53,7 @@ final class ChatGPTConnection {
                 await refreshModels()
             }
         } catch { self.error = ChatGPTError.keychain.localizedDescription }
+        loaded = true
     }
 
     func refreshModels() async {

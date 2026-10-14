@@ -14,6 +14,17 @@ extension LinkSummarizing {
     }
 }
 
+/// The chosen engine can't run, such as ChatGPT without an available model; summaries fail
+/// with its reason and the capture keeps its full text.
+struct UnavailableSummarizer: LinkSummarizing {
+    let engineName: String
+    let error: any Error
+
+    func summarize(_: CapturedDocument) async throws -> String {
+        throw error
+    }
+}
+
 /// A summary failure attributed to the engine that produced it.
 struct SummaryFailure: LocalizedError {
     let engine: String

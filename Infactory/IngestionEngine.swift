@@ -10,6 +10,9 @@ actor IngestionEngine {
     let transcriber: any AudioTranscribing
     /// Follows the AI provider setting; see `useSummarizer`.
     private(set) var summarizer: any LinkSummarizing
+    /// False until the app has chosen a summarizer from the AI provider setting, so a capture
+    /// made while ChatGPT is still loading doesn't quietly use Apple Intelligence.
+    private var summarizerChosen: Bool
     let screenshotter: (any PageScreenshotting)?
     private let pdf = PDFExtractor()
     private var running = false
@@ -21,9 +24,11 @@ actor IngestionEngine {
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
         transcriber: any AudioTranscribing = LocalTranscriber(),
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
+        summarizerChosen: Bool = true,
         screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
+        self.summarizerChosen = summarizerChosen
         self.fetcher = fetcher
         self.youtube = youtube
         self.transcriber = transcriber
@@ -36,6 +41,15 @@ actor IngestionEngine {
     /// Later summaries use this summarizer, such as ChatGPT once it's enabled.
     func useSummarizer(_ summarizer: any LinkSummarizing) {
         self.summarizer = summarizer
+        summarizerChosen = true
+    }
+
+    /// The provider's summarizer once chosen; after 20 seconds, whichever is set.
+    private func chosenSummarizer() async throws -> any LinkSummarizing {
+        for _ in 0 ..< 200 where !summarizerChosen {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        return summarizer
     }
 
     func enqueue(
@@ -134,6 +148,7 @@ actor IngestionEngine {
 
     func summarizeExisting(_ document: MarkdownDocument) async throws -> MarkdownDocument {
         let source = try await store.summarySource(for: document)
+        let summarizer = try await chosenSummarizer()
         let summary = try await summarizer.summarize(source.document)
         try Task.checkCancellation()
         let artifact = try await artifacts.retain(
@@ -162,6 +177,7 @@ actor IngestionEngine {
         guard let primary = acquired.first else { throw CaptureError.missingArtifact }
         var document: CapturedDocument
         var faviconURL: URL?
+        var shareImageURL: URL?
         switch primary.kind {
         case .capture:
             document = try await JSONDecoder().decode(
@@ -192,9 +208,11 @@ actor IngestionEngine {
                 job: job,
                 acquired: &acquired,
                 faviconURL: &faviconURL,
+                shareImageURL: &shareImageURL,
                 changed: changed
             )
             try await screenshot(primary, job: job, acquired: &acquired, changed: changed)
+            try await shareImage(shareImageURL, job: job, acquired: &acquired)
         case .text, .markdown:
             let text = try await Self.decodeText(
                 artifacts.data(for: primary),
@@ -226,9 +244,9 @@ actor IngestionEngine {
             preferred: faviconURL
         )
         var preview: Data?
-        if let still = acquired.first(where: { $0.kind == .image }) {
+        if let still = Self.previewStill(acquired) {
             preview = try? await PagePreview.thumbnail(
-                artifacts.data(for: still), centered: still.name == Self.videoThumbnailName
+                artifacts.data(for: still), centered: still.name != Self.screenshotName
             )
         }
         try Task.checkCancellation()
@@ -271,6 +289,7 @@ actor IngestionEngine {
     ) async throws -> String? {
         guard job.request.url != nil, job.request.summarizeLink != false else { return nil }
         var summary: String?
+        let summarizer = try await chosenSummarizer()
         let engine = summarizer.engineName
         try await store.checkpoint(
             job,
@@ -309,6 +328,49 @@ actor IngestionEngine {
     }
 
     static let videoThumbnailName = "Thumbnail.jpg"
+    static let screenshotName = "Screenshot.jpg"
+    static let heroName = "Hero.jpg"
+    static let shareImageName = "Share image"
+
+    /// The library preview: the page's own share card, else the hero cut from its screenshot,
+    /// else a video still, else the top of the screenshot.
+    static func previewStill(_ acquired: [Artifact]) -> Artifact? {
+        let stills = acquired.filter { $0.kind == .image }
+        return [shareImageName, heroName, videoThumbnailName].lazy
+            .compactMap { name in stills.first { $0.name == name } }.first ?? stills.first
+    }
+
+    /// Best effort: the page's share card, kept only when it's a wide, detailed image rather
+    /// than a square logo or a tiny icon.
+    private func shareImage(
+        _ url: URL?,
+        job: CaptureJob,
+        acquired: inout [Artifact]
+    ) async throws {
+        guard let url, !acquired.contains(where: { $0.name == Self.shareImageName })
+        else { return }
+        let data: Data
+        do { data = try await fetcher.fetch(url).data }
+        catch is CancellationError { throw CancellationError() }
+        catch { return }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+              as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              width >= 600, height > 0,
+              (1.3 ... 2.6).contains(Double(width) / Double(height)) else { return }
+        try Task.checkCancellation()
+        let artifact = try await artifacts.retain(
+            data, kind: .image, name: Self.shareImageName, sourceURL: url
+        )
+        acquired.append(artifact)
+        try await store.checkpoint(
+            job,
+            acquired: acquired,
+            progress: "Share image retained locally"
+        )
+    }
 
     /// Best effort: a YouTube video keeps its thumbnail as media and as its library preview.
     /// The largest size doesn't exist for every video, so the always-present one follows it.
@@ -353,9 +415,9 @@ actor IngestionEngine {
               !acquired.contains(where: { $0.kind == .image }) else { return }
         try await store.checkpoint(job, acquired: acquired, progress: "Capturing a page screenshot")
         await changed()
-        let data: Data
+        let shot: PageScreenshot
         do {
-            data = try await screenshotter.capture(url)
+            shot = try await screenshotter.capture(url)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -364,9 +426,17 @@ actor IngestionEngine {
         }
         try Task.checkCancellation()
         let artifact = try await artifacts.retain(
-            data, kind: .image, name: "Screenshot.jpg", sourceURL: url
+            shot.image, kind: .image, name: Self.screenshotName, sourceURL: url
         )
         acquired.append(artifact)
+        // The hero as the page lays it out, else where attention goes in its first screens.
+        if let top = shot.heroTop ?? PagePreview.salientTop(shot.image),
+           let hero = PagePreview.thumbnail(shot.image, top: top)
+        {
+            try await acquired.append(artifacts.retain(
+                hero, kind: .image, name: Self.heroName, sourceURL: url
+            ))
+        }
         try await store.checkpoint(job, acquired: acquired, progress: "Screenshot retained locally")
     }
 
@@ -389,12 +459,14 @@ actor IngestionEngine {
     private func extractHTML(
         _ primary: Artifact, job: CaptureJob, acquired: inout [Artifact],
         faviconURL: inout URL?,
+        shareImageURL: inout URL?,
         changed: @escaping @Sendable () async -> Void
     ) async throws -> CapturedDocument {
         let data = try await artifacts.data(for: primary)
         let html = try Self.decodeText(data, encoding: primary.textEncoding, html: true)
         let analysis = try HTMLExtractor.analyze(html, url: primary.sourceURL)
         faviconURL = analysis.faviconURL
+        shareImageURL = analysis.shareImageURL
         guard let pdfURL = analysis.pdfURL else {
             return try await HTMLExtractor.extract(analysis, url: primary.sourceURL)
         }

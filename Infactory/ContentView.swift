@@ -29,6 +29,13 @@ struct ContentView: View {
     @AppStorage("atlasHidesEmptyCategories") private var atlasHidesEmpty = false
     /// The item opened from the Atlas; the Atlas keeps its own state underneath.
     @State private var atlasItem: UUID?
+    @State private var history = NavigationHistory<NavigationLocation>()
+    /// The history entry being returned to; changes on the way there update it, not add more.
+    @State private var restoring: NavigationLocation?
+    /// Atlas state to restore once a scope change has reset the Atlas.
+    @State private var pendingRestore: NavigationLocation?
+    /// Atlas navigations already accounted for, so a context change from free zooming isn't one.
+    @State private var seenAtlasNavigations = 0
     @FocusState private var searchFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
 
@@ -68,6 +75,14 @@ struct ContentView: View {
             }
         }
         .toolbar { toolbar }
+        .background {
+            MouseNavigationMonitor(back: goBack, forward: goForward)
+        }
+        .focusedSceneValue(\.navigationActions, NavigationActions(
+            canGoBack: history.canGoBack, canGoForward: history.canGoForward,
+            back: goBack, forward: goForward
+        ))
+        .onChange(of: location, initial: true) { old, new in record(from: old, to: new) }
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .background(Color(nsColor: .windowBackgroundColor))
         .environment(\.openURL, OpenURLAction { url in
@@ -162,10 +177,8 @@ struct ContentView: View {
         }
         // Summaries follow the AI provider: ChatGPT when enabled, else Apple Intelligence.
         .task(id: summarizerKey) {
-            await library.useLinkSummarizer(
-                (try? conversation?.chatGPT.inference()) as? any LinkSummarizing
-                    ?? AppleLinkSummarizer()
-            )
+            guard summarizerKey != "pending" else { return }
+            await library.useLinkSummarizer(linkSummarizer())
         }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
@@ -174,6 +187,10 @@ struct ContentView: View {
                 showInAtlas(scope ?? .all)
             }
             revealPendingSelection()
+            if let target = pendingRestore {
+                pendingRestore = nil
+                restoreAtlas(target)
+            }
             Task { await library.documentGrid.reload(); await library.refreshCaptures() }
         }
         .onChange(of: presentation) {
@@ -262,7 +279,22 @@ struct ContentView: View {
 
     private var summarizerKey: String {
         guard let chatGPT = conversation?.chatGPT else { return "apple" }
+        // Until accounts and models load, `useChatGPT` and the model aren't settled yet.
+        guard chatGPT.loaded, !chatGPT.busy else { return "pending" }
         return chatGPT.useChatGPT ? "chatgpt:" + chatGPT.selectedModel : "apple"
+    }
+
+    /// ChatGPT when it's enabled, else Apple Intelligence. An enabled ChatGPT that can't be used
+    /// fails summaries with its reason rather than quietly switching engines.
+    private func linkSummarizer() -> any LinkSummarizing {
+        guard let chatGPT = conversation?.chatGPT, chatGPT.useChatGPT else {
+            return AppleLinkSummarizer()
+        }
+        do {
+            return try chatGPT.inference() as? any LinkSummarizing ?? AppleLinkSummarizer()
+        } catch {
+            return UnavailableSummarizer(engineName: "ChatGPT", error: error)
+        }
     }
 
     /// ChatGPT's filing model when ChatGPT is connected and enabled; otherwise Apple
@@ -322,8 +354,8 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
                     Button("Atlas", systemImage: "chevron.left") { self.atlasItem = nil }
-                        .buttonStyle(.borderless).keyboardShortcut("[", modifiers: .command)
-                        .help("Return to the Atlas (⌘[)")
+                        .buttonStyle(.borderless)
+                        .help("Return to the Atlas")
                     ForEach(atlasLocation(of: atlasItem), id: \.self) { label in
                         Image(systemName: "chevron.right").font(.caption2)
                             .foregroundStyle(.tertiary).accessibilityHidden(true)
@@ -378,6 +410,76 @@ struct ContentView: View {
             .map { atlas.layout.tiles[$0].node.label }
     }
 
+    // MARK: History
+
+    private var location: NavigationLocation {
+        NavigationLocation(
+            chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem
+        )
+    }
+
+    private func record(from old: NavigationLocation, to new: NavigationLocation) {
+        defer { seenAtlasNavigations = atlas.navigations }
+        if let target = restoring {
+            history.replace(new)
+            if new == target {
+                restoring = nil
+            }
+            return
+        }
+        var drifted = old
+        drifted.atlasFocus = new.atlasFocus
+        // Zooming or panning freely moves the Atlas context; that updates where this entry
+        // returns to rather than adding one.
+        if drifted == new, atlas.navigations == seenAtlasNavigations {
+            history.replace(new)
+        } else {
+            history.visit(new)
+        }
+    }
+
+    private func goBack() {
+        if let target = history.back() {
+            restore(target)
+        }
+    }
+
+    private func goForward() {
+        if let target = history.forward() {
+            restore(target)
+        }
+    }
+
+    private func restore(_ target: NavigationLocation) {
+        restoring = target
+        chatting = target.chatting
+        if scope != target.scope {
+            // The scope change resets the Atlas, so its region and item follow it.
+            pendingRestore = target
+            scope = target.scope
+        } else {
+            restoreAtlas(target)
+        }
+        // A region or item deleted since can't be reached; stop treating changes as the return.
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            if restoring == target {
+                restoring = nil
+            }
+        }
+    }
+
+    private func restoreAtlas(_ target: NavigationLocation) {
+        if target.atlasFocus != atlas.focusID {
+            atlas.focus(target.atlasFocus)
+        }
+        if let id = target.atlasItem {
+            openFromAtlas(id)
+        } else {
+            atlasItem = nil
+        }
+    }
+
     /// Sidebar choices act as shortcuts into the Atlas instead of filtering a list.
     private func showInAtlas(_ scope: LibraryScope) {
         atlasItem = nil
@@ -392,6 +494,7 @@ struct ContentView: View {
         case .captures: break
         default: atlas.reset()
         }
+        seenAtlasNavigations = atlas.navigations
     }
 
     private var sidebar: some View {
