@@ -18,7 +18,8 @@ struct ContentView: View {
     /// An item to select once a scope change has cleared the old selection.
     @State private var pendingSelection: UUID?
     @State private var editing: MarkdownDocument?
-    @State private var filing: MarkdownDocument?
+    /// The filing inspector beside the selected item.
+    @State private var showingFiling = false
     @State private var preview = DocumentPreviewModel()
     @State private var source: SourceCitation?
     @AppStorage("libraryPresentation") private var presentation = LibraryPresentation.map
@@ -66,6 +67,13 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 notice
                 main.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .inspector(isPresented: filingInspectorShown) {
+                FilingInspector(
+                    document: preview.document, categories: categories, store: library.store,
+                    file: file, close: { showingFiling = false }
+                )
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
             }
         }
         // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
@@ -138,7 +146,6 @@ struct ContentView: View {
         .sheet(isPresented: $categorizing, onDismiss: { Task { await loadCategories() } }) {
             FilingSuggestionsView(library: library, inference: currentInference)
         }
-        .sheet(item: $filing) { document in filingSheet(document) }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
         .sheet(item: $library.browserJob) { job in
             if let url = job.request.url, let target = try? MediaTarget.parse(url) {
@@ -552,7 +559,6 @@ struct ContentView: View {
                 }
             }
         }.listStyle(.sidebar).foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
-            .environment(\.sidebarRowSize, .small)
             .accessibilityLabel("Library navigation")
     }
 
@@ -762,7 +768,7 @@ struct ContentView: View {
             bookmarkFetch: preview.selectedID.flatMap { library.bookmarkFetch(for: $0)?.progress },
             openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
-            fileDocument: { filing = $0 }
+            fileDocument: { _ in showingFiling = true }
         )
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -906,31 +912,20 @@ struct ContentView: View {
         .onChange(of: error) { AccessibilityNotification.Announcement(error).post() }
     }
 
-    private func filingSheet(_ document: MarkdownDocument) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("File item").font(.title2.weight(.semibold))
-            Text(document.name).foregroundStyle(.secondary).lineLimit(2)
-            List(categories) { category in
-                Button(category.label) {
-                    Task {
-                        do {
-                            let includesSource = try await library.store
-                                .captureID(for: document.id) != nil
-                            try await library.store.fileNote(
-                                document.id,
-                                categoryID: category.id,
-                                includeSources: includesSource
-                            )
-                            filing = nil
-                            await library.refreshConversationChanges()
-                        } catch { library.error = error.localizedDescription }
-                    }
-                }.buttonStyle(.borderless)
-            }
-            Text("Changes the item's primary filing home. Existing secondary memberships are kept.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack { Spacer(); Button("Cancel") { filing = nil }.keyboardShortcut(.cancelAction) }
-        }.padding(24).frame(width: 420, height: 380)
+    /// Library only: chat has no selected item to file.
+    private var filingInspectorShown: Binding<Bool> {
+        Binding { showingFiling && !chatting } set: { showingFiling = $0 }
+    }
+
+    private func file(_ document: MarkdownDocument, into categoryID: UUID) async {
+        do {
+            let includesSource = try await library.store.captureID(for: document.id) != nil
+            try await library.store.fileNote(
+                document.id, categoryID: categoryID, includeSources: includesSource
+            )
+            await library.refreshConversationChanges()
+            await library.loadPreview(preview)
+        } catch { library.error = error.localizedDescription }
     }
 }
 

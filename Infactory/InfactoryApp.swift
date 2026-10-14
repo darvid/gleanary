@@ -14,7 +14,10 @@ struct InfactoryApp: App {
                 return LibraryModel(store: DocumentStore(url: url))
             }
         #endif
-        return LibraryModel(followsProvider: true, screenshotter: WebPageScreenshotter())
+        return LibraryModel(
+            followsProvider: true, screenshotter: WebPageScreenshotter(),
+            captureSettings: CaptureSettings.current
+        )
     }
 
     /// The main window and the Settings window can both ask first; only one model is made.
