@@ -729,3 +729,63 @@ struct GroundedResearch: Codable {
         ]), dependencies: [])
     }
 }
+
+extension AppleConversationInference: LinkJudging {
+    var local: Bool {
+        true
+    }
+
+    func judgeLinks(
+        _ item: LinkJudgement.Item,
+        candidates: [LinkJudgement.Item]
+    ) async throws -> [LinkJudgement.Answer] {
+        guard SystemLanguageModel.default.availability == .available
+        else { throw LinkSummaryError.unavailable }
+        let answer = DynamicGenerationSchema(name: "Answer", properties: [
+            .init(name: "item", schema: .init(type: Int.self)),
+            .init(name: "related", schema: .init(type: Bool.self)),
+            .init(
+                name: "reason",
+                description: "One short reason naming what connects them, or empty.",
+                schema: .init(type: String.self)
+            ),
+        ])
+        let schema = try GenerationSchema(
+            root: .init(name: "Answers", properties: [
+                .init(name: "answers", schema: .init(arrayOf: .init(referenceTo: "Answer"))),
+            ]),
+            dependencies: [answer]
+        )
+        let session = LanguageModelSession(instructions: LinkJudgement.instructions)
+        do {
+            // On-device context is small, so each excerpt is shortened further.
+            let shortened = candidates.map {
+                LinkJudgement.Item(
+                    number: $0.number,
+                    title: $0.title,
+                    excerpt: String($0.excerpt.prefix(240))
+                )
+            }
+            let response = try await session.respond(
+                to: LinkJudgement.prompt(
+                    item: LinkJudgement.Item(
+                        number: 0, title: item.title, excerpt: String(item.excerpt.prefix(400))
+                    ),
+                    candidates: shortened
+                ),
+                schema: schema,
+                options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 600)
+            )
+            try Task.checkCancellation()
+            return try LinkJudgement.decode(
+                Data(response.content.jsonString.utf8), candidates: candidates
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as LinkSummaryError {
+            throw error
+        } catch {
+            throw AppleLinkSummarizer.modelFailure(error)
+        }
+    }
+}

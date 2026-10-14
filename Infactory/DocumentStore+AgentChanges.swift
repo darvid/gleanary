@@ -6,12 +6,18 @@ import GRDB
 struct AgentChange: Identifiable, Sendable, Equatable {
     enum Kind: String, Sendable, CaseIterable {
         case title, summary, filing, category
+        /// Archive the item; only ever proposed, never applied by an automation itself.
+        case archive
+        /// Link `noteID` to `targetID`.
+        case link
     }
 
     let id: UUID
     let taskID: UUID
     let kind: Kind
     let noteID: UUID?
+    /// The other item of a link.
+    var targetID: UUID?
     /// The category code a filing moves to, or the code a new category takes.
     let code: String?
     /// What the change replaces: a title, a note body, a filing label, or empty for a category.
@@ -26,6 +32,7 @@ struct AgentChange: Identifiable, Sendable, Equatable {
 struct AgentChangeDraft: Sendable, Equatable {
     var kind: AgentChange.Kind
     var noteID: UUID?
+    var targetID: UUID?
     var code: String?
     var before: String
     var after: String
@@ -51,24 +58,28 @@ extension DocumentStore {
             let now = Date().timeIntervalSince1970
             for (ordinal, draft) in drafts.enumerated() {
                 try db.execute(sql: """
-                INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, code, before, after,
-                    reason, baseRevision, status, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
+                    after, reason, baseRevision, status, createdAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                 """, arguments: [
                     UUID().uuidString, taskID.uuidString, ordinal, draft.kind.rawValue,
-                    draft.noteID?.uuidString, draft.code, draft.before, draft.after,
-                    draft.reason, draft.baseRevision?.uuidString, now,
+                    draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code,
+                    draft.before, draft.after, draft.reason, draft.baseRevision?.uuidString, now,
                 ])
             }
         }
     }
 
+    /// One task's or automation run's changes; without one, every changeset chat proposed.
     func agentChanges(taskID: UUID? = nil) throws -> [AgentChange] {
         try readyDatabase().read { db in
             try Row.fetchAll(
                 db,
                 sql: taskID == nil
-                    ? "SELECT * FROM agent_changes ORDER BY createdAt, ordinal"
+                    ? """
+                    SELECT * FROM agent_changes WHERE taskID IN (SELECT id FROM conversation_tasks)
+                    ORDER BY createdAt, ordinal
+                    """
                     : "SELECT * FROM agent_changes WHERE taskID = ? ORDER BY ordinal",
                 arguments: taskID.map { [$0.uuidString] } ?? []
             ).map(Self.agentChange)
@@ -115,6 +126,12 @@ extension DocumentStore {
             for row in rows where row["kind"] as String == "filing" {
                 try record(Self.applyFiling(row, in: db), [row])
             }
+            for row in rows where row["kind"] as String == "archive" {
+                try record(Self.applyArchive(row, in: db), [row])
+            }
+            for row in rows where row["kind"] as String == "link" {
+                try record(Self.applyLink(row, in: db), [row])
+            }
             return report
         }
     }
@@ -125,6 +142,11 @@ extension DocumentStore {
         try readyDatabase().write { db in
             let rows = try Self.agentRows(ids, status: "applied", in: db)
             var undone: [Row] = []
+            for row in rows where ["link", "archive"].contains(row["kind"] as String) {
+                if try Self.undoArchiveOrLink(row, in: db) {
+                    undone.append(row)
+                }
+            }
             for row in rows where row["kind"] as String == "filing" {
                 if try Self.undoFiling(row, in: db) {
                     undone.append(row)
@@ -298,7 +320,68 @@ extension DocumentStore {
         return true
     }
 
-    private static func agentChange(_ row: Row) throws -> AgentChange {
+    /// Archives the item unless it was archived meanwhile; Undo restores only this archive.
+    private static func applyArchive(_ row: Row, in db: Database) throws -> Bool {
+        guard let note = note(for: row, in: db) else { return false }
+        guard try Double.fetchOne(
+            db, sql: "SELECT archivedAt FROM notes WHERE id = ?", arguments: [note.id.uuidString]
+        ) == nil else { return false }
+        let now = Date().timeIntervalSince1970
+        try db.execute(
+            sql: "UPDATE notes SET archivedAt = ?, archiveReason = ? WHERE id = ?",
+            arguments: [now, row["after"] as String, note.id.uuidString]
+        )
+        try db.execute(
+            sql: "UPDATE agent_changes SET status = 'applied', snapshot = ? WHERE id = ?",
+            arguments: [String(now), row["id"] as String]
+        )
+        return true
+    }
+
+    /// Links two live items; an existing link between them makes this one stale.
+    private static func applyLink(_ row: Row, in db: Database) throws -> Bool {
+        guard let left = note(for: row, in: db),
+              let targetID = (row["targetID"] as String?).flatMap(UUID.init(uuidString:)),
+              let right = try? liveNote(targetID, in: db), left.id != right.id
+        else { return false }
+        let ids = [left.id.uuidString, right.id.uuidString].sorted()
+        guard try Bool.fetchOne(db, sql: """
+        SELECT EXISTS(SELECT 1 FROM note_links WHERE leftID = ? AND rightID = ?)
+            OR EXISTS(SELECT 1 FROM knowledge_links WHERE leftID = ?1 AND rightID = ?2)
+        """, arguments: [ids[0], ids[1]]) == false else { return false }
+        try db.execute(sql: """
+        INSERT INTO note_links(leftID, rightID, changeID, rationale, createdAt)
+        VALUES (?, ?, ?, ?, ?)
+        """, arguments: [
+            ids[0], ids[1], row["id"] as String, row["reason"] as String,
+            Date().timeIntervalSince1970,
+        ])
+        try db.execute(
+            sql: "UPDATE agent_changes SET status = 'applied' WHERE id = ?",
+            arguments: [row["id"] as String]
+        )
+        return true
+    }
+
+    private static func undoArchiveOrLink(_ row: Row, in db: Database) throws -> Bool {
+        let id: String = row["id"]
+        if row["kind"] as String == "link" {
+            try db.execute(sql: "DELETE FROM note_links WHERE changeID = ?", arguments: [id])
+            return true
+        }
+        // Unarchived or archived again by hand since: leave it as the person set it.
+        guard let noteID: String = row["noteID"], let stamp: String = row["snapshot"],
+              let archivedAt = try Double.fetchOne(
+                  db, sql: "SELECT archivedAt FROM notes WHERE id = ?", arguments: [noteID]
+              ), String(archivedAt) == stamp else { return false }
+        try db.execute(
+            sql: "UPDATE notes SET archivedAt = NULL, archiveReason = NULL WHERE id = ?",
+            arguments: [noteID]
+        )
+        return true
+    }
+
+    static func agentChange(_ row: Row) throws -> AgentChange {
         guard let kind = AgentChange.Kind(rawValue: row["kind"]) else {
             throw InfactoryError.invalidDatabase
         }
@@ -307,6 +390,7 @@ extension DocumentStore {
             taskID: uuid(row["taskID"]),
             kind: kind,
             noteID: (row["noteID"] as String?).flatMap(UUID.init(uuidString:)),
+            targetID: (row["targetID"] as String?).flatMap(UUID.init(uuidString:)),
             code: row["code"],
             before: row["before"],
             after: row["after"],

@@ -42,6 +42,11 @@ actor IngestionEngine {
             .appending(path: "artifacts"))
     }
 
+    /// Whether summaries stay on the Mac.
+    var summarizerIsLocal: Bool {
+        summarizer is AppleLinkSummarizer
+    }
+
     /// Later summaries use this summarizer, such as ChatGPT once it's enabled.
     func useSummarizer(_ summarizer: any LinkSummarizing) {
         self.summarizer = summarizer

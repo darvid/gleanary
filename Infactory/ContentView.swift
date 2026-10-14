@@ -6,6 +6,8 @@ struct ContentView: View {
     /// The Chat conversation shown beside the shared sidebar; nil in library-only hosts.
     var conversation: ConversationModel?
     @State private var chatting: Bool
+    /// The Automations screen, in place of the library; Chat still takes precedence.
+    @State private var automating = false
     var initialSelection: UUID?
     @State private var scope: LibraryScope? = .all
     @State private var sidebarVisible = true
@@ -173,6 +175,7 @@ struct ContentView: View {
         .task {
             await library.load()
             guard library.ready else { return }
+            library.automations.start()
             library.documentGrid.scope = scope ?? .all
             await library.documentGrid.reloadIfNeeded()
             if let initialSelection {
@@ -203,6 +206,7 @@ struct ContentView: View {
         .task(id: summarizerKey) {
             guard summarizerKey != "pending" else { return }
             await library.useLinkSummarizer(linkSummarizer())
+            library.useLinkJudge(linkJudge())
         }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
@@ -266,7 +270,9 @@ struct ContentView: View {
     @ViewBuilder private var main: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
-        } else if presentation == .list || scope == .captures {
+        } else if automating {
+            AutomationsView(model: library.automations)
+        } else if presentation == .list || scope == .captures || scope == .archived {
             libraryColumns
         } else {
             atlasPane
@@ -288,11 +294,12 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
-                Text(chatting ? "Chat" : scopeTitle).font(.headline).lineLimit(1)
+                Text(chatting ? "Chat" : automating ? "Automations" : scopeTitle)
+                    .font(.headline).lineLimit(1)
             }
         }
         .sharedBackgroundVisibility(.hidden)
-        if !chatting {
+        if !chatting, !automating {
             ToolbarSpacer(.flexible)
             ToolbarItem {
                 Picker("Presentation", selection: $presentation) {
@@ -343,6 +350,15 @@ struct ContentView: View {
         } catch {
             return UnavailableSummarizer(engineName: "ChatGPT", error: error)
         }
+    }
+
+    /// The cross-linker's judge follows the provider too. An enabled ChatGPT that can't be used
+    /// leaves none, so the automation says so instead of quietly switching to Apple.
+    private func linkJudge() -> (any LinkJudging)? {
+        guard let chatGPT = conversation?.chatGPT, chatGPT.useChatGPT else {
+            return AppleConversationInference()
+        }
+        return (try? chatGPT.inference()) as? any LinkJudging
     }
 
     /// ChatGPT's filing model when ChatGPT is connected and enabled; otherwise Apple
@@ -485,7 +501,8 @@ struct ContentView: View {
 
     private var location: NavigationLocation {
         NavigationLocation(
-            chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem
+            chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
+            automations: automating
         )
     }
 
@@ -524,6 +541,7 @@ struct ContentView: View {
     private func restore(_ target: NavigationLocation) {
         restoring = target
         chatting = target.chatting
+        automating = target.automations
         if scope != target.scope {
             // The scope change resets the Atlas, so its region and item follow it.
             pendingRestore = target
@@ -562,7 +580,7 @@ struct ContentView: View {
         switch scope {
         case .unfiled: atlas.focus(.uncategorized)
         case let .category(id): atlas.focus(.category(id))
-        case .captures: break
+        case .captures, .archived: break
         default: atlas.reset()
         }
         seenAtlasNavigations = atlas.navigations
@@ -607,6 +625,26 @@ struct ContentView: View {
                                 : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
+                Label("Archive", systemImage: "archivebox")
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.archived)))
+                    .tag(SidebarItem.library(.archived))
+                HStack {
+                    let color: Color = colorScheme == .dark || (automating && !chatting)
+                        ? .white : .black
+                    Label("Automations", systemImage: "clock.arrow.2.circlepath")
+                        .labelStyle(LibrarySidebarLabelStyle(color: color))
+                    Spacer()
+                    // Proposals waiting for review, like Captures' count of failures.
+                    let waiting = library.automations.pendingCount
+                    if waiting > 0 {
+                        Text(waiting.formatted())
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(color.opacity(0.72))
+                            .countsOnChange(waiting)
+                            .accessibilityLabel(waiting == 1 ? "1 proposal to review"
+                                : "\(waiting) proposals to review")
+                    }
+                }.tag(SidebarItem.automations)
             }
             Section("Filing") {
                 ForEach(CategoryArea.group(categories)) { area in
@@ -673,18 +711,20 @@ struct ContentView: View {
 
     /// Pass nil for the conversation row.
     private func sidebarColor(_ item: LibraryScope?) -> Color {
-        let selected = item.map { !chatting && scope == $0 } ?? chatting
+        let selected = item.map { !chatting && !automating && scope == $0 } ?? chatting
         return colorScheme == .dark || selected ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
-            chatting ? .conversation : scope.map(SidebarItem.library)
+            chatting ? .conversation : automating ? .automations : scope.map(SidebarItem.library)
         } set: { item in
             switch item {
-            case .conversation: chatting = true
+            case .conversation: chatting = true; automating = false
+            case .automations: chatting = false; automating = true
             case let .library(scope):
                 chatting = false
+                automating = false
                 self.scope = scope
             case nil: break
             }
@@ -873,6 +913,12 @@ struct ContentView: View {
             },
             openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
+            archiveDocument: { document, archive in
+                Task {
+                    await library.setArchived(document.id, archive)
+                    await library.loadPreview(preview)
+                }
+            },
             fileDocument: { _ in withAnimation(.snappy(duration: 0.25)) { showingFiling = true } }
         )
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -990,6 +1036,7 @@ struct ContentView: View {
         case .notes: "Notes"
         case .unfiled: "Unfiled"
         case .captures: "Captures"
+        case .archived: "Archive"
         case let .category(id): categories.first { $0.id == id }?.label ?? "Filing"
         }
     }
@@ -1182,5 +1229,6 @@ private struct LibrarySidebarLabelStyle: LabelStyle {
 
 private enum SidebarItem: Hashable {
     case conversation
+    case automations
     case library(LibraryScope)
 }

@@ -75,10 +75,11 @@ extension DocumentStore {
                 .execute(
                     sql: "UPDATE knowledge_proposals SET status = 'rejected' WHERE status = 'pending'"
                 )
-            try db
-                .execute(
-                    sql: "UPDATE agent_changes SET status = 'rejected' WHERE status = 'pending'"
-                )
+            // Only chat's changesets; an automation's proposals outlive the conversation.
+            try db.execute(sql: """
+            UPDATE agent_changes SET status = 'rejected'
+            WHERE status = 'pending' AND taskID IN (SELECT id FROM conversation_tasks)
+            """)
             try db.execute(sql: """
             DELETE FROM conversation_tasks
             WHERE id NOT IN (SELECT taskID FROM authored_artifacts)

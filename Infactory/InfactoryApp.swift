@@ -16,7 +16,8 @@ struct InfactoryApp: App {
         #endif
         return LibraryModel(
             followsProvider: true, screenshotter: WebPageScreenshotter(),
-            captureSettings: CaptureSettings.current
+            captureSettings: CaptureSettings.current,
+            schedulesAutomations: true
         )
     }
 
