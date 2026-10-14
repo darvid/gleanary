@@ -299,7 +299,8 @@ actor IngestionEngine {
         try await store.checkpoint(
             job,
             acquired: acquired,
-            progress: engine.isEmpty ? "Writing a brief summary" : "Writing a brief summary with \(engine)"
+            progress: engine.isEmpty ? Self.summarizingProgress
+                : "\(Self.summarizingProgress) with \(engine)"
         )
         await changed()
         do {
@@ -333,6 +334,9 @@ actor IngestionEngine {
     }
 
     static let videoThumbnailName = "Thumbnail.jpg"
+    /// A capture's progress while it writes the summary, so the item's Summarize button can
+    /// show the same state.
+    static let summarizingProgress = "Writing a brief summary"
     static let screenshotName = "Screenshot.jpg"
     static let heroName = "Hero.jpg"
     static let shareImageName = "Share image"

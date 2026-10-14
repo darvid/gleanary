@@ -37,7 +37,9 @@ struct FilingInspector: View {
                         }
                     }
                 }
-                .listStyle(.sidebar)
+                // Not `.sidebar`: its vibrant text looks soft away from the window's edge.
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
                 .overlay {
                     if areas.isEmpty {
                         ContentUnavailableView.search(text: query)

@@ -68,12 +68,18 @@ struct ContentView: View {
                 notice
                 main.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .inspector(isPresented: filingInspectorShown) {
+            // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
+            // toolbar, which pulls content under this window's custom titlebar.
+            if showingFiling, !chatting {
+                Divider()
                 FilingInspector(
                     document: preview.document, categories: categories, store: library.store,
-                    file: file, close: { showingFiling = false }
+                    file: file,
+                    close: { withAnimation(.snappy(duration: 0.25)) { showingFiling = false } }
                 )
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
+                .frame(width: Self.inspectorWidth)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
@@ -105,7 +111,13 @@ struct ContentView: View {
         // The conversation publishes its own actions while it is showing.
         .focusedSceneValue(\.infactoryActions, chatting ? nil : InfactoryActions(
             enabled: library.ready && !library.busy,
-            newNote: { editing = MarkdownDocument(name: "Untitled", markdown: "") },
+            newNote: {
+                // Captures has no reading pane to edit in.
+                if scope == .captures {
+                    scope = .all
+                }
+                editing = MarkdownDocument(name: "Untitled", markdown: "")
+            },
             attach: { importing = true }, focus: { searchFocused = true },
             importBookmarks: { importingBookmarks = true },
             categorize: { categorizing = true }
@@ -130,7 +142,6 @@ struct ContentView: View {
             }
             return !files.isEmpty
         }
-        .sheet(item: $editing) { NoteEditor(document: $0, library: library) }
         .sheet(isPresented: $importingBookmarks) {
             BookmarkImportView(
                 library: library,
@@ -357,23 +368,34 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var atlasPane: some View {
-        if let atlasItem {
+        if atlasItem != nil || editing != nil {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Button("Atlas", systemImage: "chevron.left") { self.atlasItem = nil }
+                    Button("Atlas", systemImage: "chevron.left") { atlasItem = nil }
                         .buttonStyle(.borderless)
                         .help("Return to the Atlas")
-                    ForEach(atlasLocation(of: atlasItem), id: \.self) { label in
+                        .disabled(editing != nil)
+                    ForEach(atlasItem.map(atlasLocation(of:)) ?? [], id: \.id) { region in
                         Image(systemName: "chevron.right").font(.caption2)
                             .foregroundStyle(.tertiary).accessibilityHidden(true)
-                        Text(label).foregroundStyle(.secondary).lineLimit(1)
+                        Button(region.label) {
+                            atlasItem = nil
+                            atlas.focus(region.id)
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary).lineLimit(1)
+                        .disabled(editing != nil)
+                        .help("Show \(region.label) in the Atlas")
                     }
                     Spacer()
                 }.font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
                 Divider()
                 detail(openDocument: openFromAtlas)
             }
-            .onExitCommand { self.atlasItem = nil }
+            .onExitCommand {
+                if editing == nil {
+                    atlasItem = nil
+                }
+            }
         } else {
             KnowledgeAtlasView(
                 atlas: atlas, store: library.store,
@@ -411,10 +433,14 @@ struct ContentView: View {
     }
 
     /// Category labels from the Library down to the item's placement in the Atlas.
-    private func atlasLocation(of id: UUID) -> [String] {
+    /// The regions from the Library down to the item, each one a way back into the Atlas. A
+    /// category's "not in a subcategory" group repeats its parent, so it's left out.
+    private func atlasLocation(of id: UUID) -> [(id: AtlasNodeID, label: String)] {
         guard let position = atlas.layout.index[.item(id)] else { return [] }
         return atlas.layout.path(to: position).dropFirst().dropLast()
-            .map { atlas.layout.tiles[$0].node.label }
+            .map { atlas.layout.tiles[$0] }
+            .filter { $0.node.kind != .direct }
+            .map { (id: $0.id, label: $0.node.label) }
     }
 
     // MARK: History
@@ -568,9 +594,16 @@ struct ContentView: View {
         // Dimmed, not removed: the map hides empty categories, but they stay reachable here.
         let hidden = !chatting && presentation == .map && atlasHidesEmpty
             && atlas.emptyCategoryIDs.contains(category.id)
+        // The category's Atlas colour, as on its chips and in the filing inspector.
+        let ink = AtlasPalette.ink(
+            AtlasHierarchy.hue(for: category.code),
+            dark: colorScheme == .dark
+        )
         return HStack(spacing: 8) {
             if let icon {
-                Image(systemName: icon).foregroundStyle(color.opacity(0.72)).frame(width: 18)
+                Image(systemName: icon).foregroundStyle(ink).frame(width: 18)
+            } else {
+                Circle().fill(ink).frame(width: 7, height: 7).accessibilityHidden(true)
             }
             Text(category.name).foregroundStyle(color).lineLimit(1)
             Spacer(minLength: 4)
@@ -755,20 +788,44 @@ struct ContentView: View {
         }.padding(.horizontal, 18).padding(.bottom, 16)
     }
 
-    private func detail(openDocument: ((UUID) -> Void)? = nil) -> some View {
+    @ViewBuilder private func detail(openDocument: ((UUID) -> Void)? = nil) -> some View {
+        if let editing {
+            // The editor stays put while the selection changes, so a draft is never dropped.
+            NoteEditor(document: editing, library: library) {
+                self.editing = nil
+                Task { await library.loadPreview(preview) }
+            }
+            .id(editing.id)
+        } else {
+            reading(openDocument: openDocument)
+        }
+    }
+
+    /// A fetch in progress writes the summary itself once the page arrives.
+    private var summaryEnabled: Bool {
+        guard let id = preview.selectedID else { return library.canGenerateSummaries }
+        return library.canGenerateSummaries && library.bookmarkFetch(for: id) == nil
+    }
+
+    /// Only Generate Summary stops from here; stopping a page fetch would discard the page.
+    private var summaryCancel: (() -> Void)? {
+        guard let id = library.generatingSummaryID, id == preview.selectedID else { return nil }
+        return library.cancelSummary
+    }
+
+    private func reading(openDocument: ((UUID) -> Void)?) -> some View {
         DocumentPreview(
             model: preview,
             openSource: { source = $0 },
-            summaryEnabled: library.canGenerateSummaries,
-            generatingSummary: library.generatingSummaryID != nil
-                && library.generatingSummaryID == preview.selectedID,
+            summaryEnabled: summaryEnabled,
+            generatingSummary: preview.selectedID.map(library.summarizing) ?? false,
             generateSummary: { library.generateSummary(for: $0) },
-            cancelSummary: library.cancelSummary,
+            cancelSummary: summaryCancel,
             showsLibraryDetails: true,
             bookmarkFetch: preview.selectedID.flatMap { library.bookmarkFetch(for: $0)?.progress },
             openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
-            fileDocument: { _ in showingFiling = true }
+            fileDocument: { _ in withAnimation(.snappy(duration: 0.25)) { showingFiling = true } }
         )
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -912,10 +969,7 @@ struct ContentView: View {
         .onChange(of: error) { AccessibilityNotification.Announcement(error).post() }
     }
 
-    /// Library only: chat has no selected item to file.
-    private var filingInspectorShown: Binding<Bool> {
-        Binding { showingFiling && !chatting } set: { showingFiling = $0 }
-    }
+    static let inspectorWidth: CGFloat = 300
 
     private func file(_ document: MarkdownDocument, into categoryID: UUID) async {
         do {
