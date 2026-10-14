@@ -578,3 +578,27 @@ extension ChatGPTConversationInference: LinkSummarizing {
         catch { throw LinkSummaryError.invalidOutput }
     }
 }
+
+extension ChatGPTConversationInference: LinkJudging {
+    var local: Bool {
+        false
+    }
+
+    func judgeLinks(
+        _ item: LinkJudgement.Item,
+        candidates: [LinkJudgement.Item]
+    ) async throws -> [LinkJudgement.Answer] {
+        let fence = try await session.authorizationFence()
+        let json = try await response(
+            prompt: LinkJudgement.prompt(item: item, candidates: candidates),
+            instructions: LinkJudgement.instructions,
+            name: "link_judgement",
+            schema: LinkJudgement.jsonSchema,
+            fence: fence
+        ) { _ in }
+        try Task.checkCancellation()
+        try await session.validateFence(fence)
+        do { return try LinkJudgement.decode(Data(json.utf8), candidates: candidates) }
+        catch { throw ChatGPTError.invalidOutput }
+    }
+}

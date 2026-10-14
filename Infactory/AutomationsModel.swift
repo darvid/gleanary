@@ -1,0 +1,170 @@
+import Foundation
+import Observation
+
+/// The app's automations: their settings, the schedule that runs them, their run history and
+/// what they've proposed. Runs happen one at a time while the app is open.
+@MainActor @Observable final class AutomationsModel {
+    private(set) var configs: [AutomationConfig] = []
+    private(set) var runs: [AutomationKind: [AutomationRun]] = [:]
+    /// Proposals waiting for review, per automation.
+    private(set) var pending: [AutomationKind: [AgentChange]] = [:]
+    /// Item titles for showing proposals.
+    private(set) var titles: [UUID: String] = [:]
+    private(set) var running: AutomationKind?
+    var error: String?
+
+    @ObservationIgnored private let store: DocumentStore
+    @ObservationIgnored private let engine: AutomationEngine
+    @ObservationIgnored private let schedules: Bool
+    @ObservationIgnored private var runTask: Task<Void, Never>?
+    @ObservationIgnored private var scheduler: NSBackgroundActivityScheduler?
+    /// Refreshes the library after a run changed it.
+    @ObservationIgnored var libraryChanged: () async -> Void = {}
+
+    var pendingCount: Int {
+        pending.values.reduce(0) { $0 + $1.count }
+    }
+
+    /// `schedules` false keeps tests and previews from running anything on their own.
+    init(store: DocumentStore, engine: AutomationEngine, schedules: Bool) {
+        self.store = store
+        self.engine = engine
+        self.schedules = schedules
+    }
+
+    func config(_ kind: AutomationKind) -> AutomationConfig {
+        configs.first { $0.kind == kind } ?? AutomationConfig(kind: kind)
+    }
+
+    func load() async {
+        do {
+            configs = try await store.automationConfigs()
+            var updatedRuns: [AutomationKind: [AutomationRun]] = [:]
+            var updatedPending: [AutomationKind: [AgentChange]] = [:]
+            for kind in AutomationKind.allCases {
+                updatedRuns[kind] = try await store.automationRuns(kind)
+                updatedPending[kind] = try await store.pendingAutomationChanges(kind)
+            }
+            var updatedTitles = titles
+            for id in Set(updatedPending.values.joined().flatMap { [$0.noteID, $0.targetID] }
+                .compactMap(\.self)) where updatedTitles[id] == nil
+            {
+                updatedTitles[id] = try await store.document(id: id)?.name ?? "Deleted item"
+            }
+            runs = updatedRuns
+            pending = updatedPending
+            titles = updatedTitles
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Starts the schedule, first catching up on anything missed while the app was closed.
+    /// The system decides exactly when within each window, deferring under load or on battery.
+    func start() {
+        guard schedules, scheduler == nil else { return }
+        let activity = NSBackgroundActivityScheduler(identifier: "app.getinfactory.automations")
+        activity.repeats = true
+        activity.interval = 5 * 60
+        activity.tolerance = 2 * 60
+        activity.qualityOfService = .utility
+        activity.schedule { [weak self] completion in
+            Task { @MainActor in
+                await self?.tick()
+                completion(.finished)
+            }
+        }
+        scheduler = activity
+        Task {
+            try? await store.closeInterruptedAutomationRuns()
+            await load()
+            await tick()
+        }
+    }
+
+    /// Runs every enabled automation that's due, one after another.
+    func tick(now: Date = Date()) async {
+        guard running == nil else { return }
+        if configs.isEmpty {
+            await load()
+        }
+        for config in configs where config.isDue(at: now) {
+            await perform(config)
+        }
+    }
+
+    func runNow(_ kind: AutomationKind) {
+        guard running == nil else { return }
+        runTask = Task { await perform(config(kind)) }
+    }
+
+    func stop() {
+        runTask?.cancel()
+    }
+
+    func update(_ config: AutomationConfig) {
+        guard let index = configs.firstIndex(where: { $0.kind == config.kind }) else { return }
+        configs[index] = config
+        Task {
+            do { try await store.saveAutomation(config) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+
+    /// Applies the chosen proposals and turns down the rest of this automation's.
+    func apply(_ ids: Set<UUID>, of kind: AutomationKind) async {
+        let all = pending[kind] ?? []
+        do {
+            let report = try await store.applyAgentChanges(Array(ids))
+            try await store.rejectAgentChanges(all.map(\.id).filter { !ids.contains($0) })
+            if report.stale > 0 {
+                error = "\(report.stale) change\(report.stale == 1 ? "" : "s") skipped: the item changed since it was proposed."
+            }
+        } catch { self.error = error.localizedDescription }
+        await load()
+        await libraryChanged()
+    }
+
+    func reject(_ kind: AutomationKind) async {
+        do { try await store.rejectAgentChanges((pending[kind] ?? []).map(\.id)) }
+        catch { self.error = error.localizedDescription }
+        await load()
+    }
+
+    /// Puts back what one run applied, where the item hasn't changed since.
+    func undo(_ run: AutomationRun) async {
+        do {
+            let ids = try await store.appliedRunChanges(run.id)
+            let undone = try await store.undoAgentChanges(ids)
+            if undone < ids.count {
+                error = "\(ids.count - undone) change\(ids.count - undone == 1 ? " was" : "s were") edited since and kept."
+            }
+        } catch { self.error = error.localizedDescription }
+        await load()
+        await libraryChanged()
+    }
+
+    func canUndo(_ run: AutomationRun) -> Bool {
+        run.kind == .inboxSummarizer && run.changed > 0
+    }
+
+    private func perform(_ config: AutomationConfig) async {
+        running = config.kind
+        defer { running = nil }
+        let run = await engine.run(config)
+        await load()
+        if run.changed > 0 || run.proposed > 0 {
+            await libraryChanged()
+        }
+    }
+}
+
+/// What automations need from the library while they run, read on the main actor.
+@MainActor final class AutomationHooks {
+    weak var library: LibraryModel?
+    var judge: (any LinkJudging)?
+
+    /// Imports, deletions and a summary someone asked for come first.
+    var shouldYield: Bool {
+        guard let library else { return true }
+        return library.busy || library.generatingSummaryID != nil
+    }
+}
