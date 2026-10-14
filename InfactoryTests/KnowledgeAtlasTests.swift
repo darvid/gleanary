@@ -442,6 +442,50 @@ struct KnowledgeAtlasCameraTests {
     }
 }
 
+struct NavigationHistoryTests {
+    @Test func backForwardAndBranching() {
+        var history = NavigationHistory<String>()
+        #expect(history.back() == nil)
+        history.visit("all")
+        history.visit("all")
+        history.visit("category")
+        history.visit("item")
+        #expect(history.entries == ["all", "category", "item"])
+        #expect(history.back() == "category")
+        #expect(history.back() == "all")
+        #expect(history.back() == nil)
+        #expect(history.forward() == "category")
+        // Visiting somewhere new after going back drops the old forward path.
+        history.visit("chat")
+        #expect(history.entries == ["all", "category", "chat"])
+        #expect(!history.canGoForward)
+        history.replace("chat, scrolled")
+        #expect(history.back() == "category")
+        #expect(history.forward() == "chat, scrolled")
+    }
+
+    @Test func historyIsBounded() {
+        var history = NavigationHistory<Int>()
+        history.limit = 3
+        (1 ... 5).forEach { history.visit($0) }
+        #expect(history.entries == [3, 4, 5])
+        #expect(history.current == 5)
+        #expect(history.back() == 4)
+    }
+
+    @MainActor @Test func onlyDeliberateAtlasMovesCountAsNavigation() {
+        let fixture = AtlasFixture()
+        let atlas = KnowledgeAtlasModel(snapshot: fixture.snapshot)
+        atlas.reduceMotion = true
+        atlas.setViewport(CGSize(width: 1000, height: 640))
+        let before = atlas.navigations
+        atlas.zoom(by: 3, around: CGPoint(x: 500, y: 320), animated: false)
+        #expect(atlas.navigations == before)
+        atlas.activate(.category(fixture.technology.id))
+        #expect(atlas.navigations == before + 1)
+    }
+}
+
 @Suite(.serialized) struct KnowledgeAtlasStoreTests {
     @Test @MainActor func snapshotReadsLibraryItemsAndOrderedMemberships() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)

@@ -14,7 +14,7 @@ struct InfactoryApp: App {
                 return LibraryModel(store: DocumentStore(url: url))
             }
         #endif
-        return LibraryModel(screenshotter: WebPageScreenshotter())
+        return LibraryModel(followsProvider: true, screenshotter: WebPageScreenshotter())
     }
 
     /// The main window and the Settings window can both ask first; only one model is made.
@@ -88,7 +88,14 @@ extension FocusedValues {
 
 private struct InfactoryCommands: Commands {
     @FocusedValue(\.infactoryActions) private var actions
+    @FocusedValue(\.navigationActions) private var navigation
     var body: some Commands {
+        CommandMenu("Go") {
+            Button("Back") { navigation?.back() }.keyboardShortcut("[")
+                .disabled(navigation?.canGoBack != true)
+            Button("Forward") { navigation?.forward() }.keyboardShortcut("]")
+                .disabled(navigation?.canGoForward != true)
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Note") { actions?.newNote() }.keyboardShortcut("n")
                 .disabled(actions?.enabled != true)

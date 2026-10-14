@@ -10,6 +10,8 @@ struct HTMLAnalysis: Sendable {
     let identifier: String?
     let pdfURL: URL?
     let faviconURL: URL?
+    /// The page's chosen share card (`og:image` or `twitter:image`).
+    let shareImageURL: URL?
     let academic: Bool
     let warnings: [String]
 }
@@ -98,6 +100,13 @@ enum HTMLExtractor {
         }.flatMap { link in
             try URL(string: link.attr("href"), relativeTo: url)?.absoluteURL
         }
+        let shareImageURL = try [
+            "og:image:secure_url", "og:image", "twitter:image", "twitter:image:src",
+        ].lazy.compactMap { key in
+            try document.select("meta[property=\"\(key)\"], meta[name=\"\(key)\"]").first()
+                .map { try $0.attr("content").trimmingCharacters(in: .whitespacesAndNewlines) }
+                .flatMap { URL(string: $0, relativeTo: url)?.absoluteURL }
+        }.first { $0.scheme == "https" || $0.scheme == "http" }
         try sanitize(document, url: url)
         return try HTMLAnalysis(
             sanitizedHTML: document.outerHtml(),
@@ -107,6 +116,7 @@ enum HTMLExtractor {
             identifier: identifier,
             pdfURL: unique.count == 1 ? unique.first : nil,
             faviconURL: faviconURL,
+            shareImageURL: shareImageURL,
             academic: academic,
             warnings: warnings
         )
