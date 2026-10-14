@@ -29,6 +29,52 @@ struct ChatGPTConversationInference: ConversationInferring {
         return try ConversationPlan.decode(Data(json.utf8), context: context)
     }
 
+    func mapFolders(
+        _ folders: [FolderMapping.Folder],
+        categories: [DecimalCategory],
+        withSamples: Bool,
+        progress: @escaping @Sendable ([FolderMapping.Answer]) -> Void
+    ) async throws -> [FolderMapping.Answer] {
+        let fence = try await session.authorizationFence()
+        let json = try await response(
+            prompt: FolderMapping.prompt(
+                folders: folders, categories: categories, withSamples: withSamples
+            ),
+            instructions: FolderMapping.instructions,
+            name: "folder_mapping",
+            schema: FolderMapping.jsonSchema(),
+            fence: fence
+        ) { partial in progress(FolderMapping.completedAnswers(inPartial: partial)) }
+        try Task.checkCancellation()
+        try await session.validateFence(fence)
+        do { return try FolderMapping.decode(Data(json.utf8)) }
+        catch { throw ChatGPTError.invalidOutput }
+    }
+
+    func classifyBookmarks(
+        _ items: [BookmarkClassification.Item],
+        categories: [DecimalCategory],
+        examples: [UUID: [String]]
+    ) async throws -> [BookmarkClassification.Answer] {
+        let fence = try await session.authorizationFence()
+        let json = try await response(
+            prompt: BookmarkClassification.prompt(
+                items: items, categories: categories, examples: examples, local: false
+            ),
+            instructions: BookmarkClassification.instructions,
+            name: "bookmark_filing",
+            schema: BookmarkClassification.jsonSchema(categories: categories),
+            fence: fence
+        ) { _ in }
+        try Task.checkCancellation()
+        try await session.validateFence(fence)
+        do {
+            return try BookmarkClassification.decode(
+                Data(json.utf8), items: items, categories: categories
+            )
+        } catch { throw ChatGPTError.invalidOutput }
+    }
+
     func reply(
         question: String,
         role: AgentRole,
@@ -86,7 +132,7 @@ struct ChatGPTConversationInference: ConversationInferring {
                 do {
                     guard !sources.isEmpty,
                           sources.count <= 4 else { throw ConversationError.missingSource }
-                    let evidence = AppleConversationInference.evidence(sources)
+                    let evidence = AppleConversationInference.evidence(sources, question: question)
                     guard !evidence.isEmpty else { throw ConversationError.missingSource }
                     let fence = try await session.authorizationFence()
                     continuation
@@ -107,11 +153,11 @@ struct ChatGPTConversationInference: ConversationInferring {
                     invent contrasts, guarantees or details. You cannot execute tools or authorize changes.
                     """, name: "grounded_research", schema: Self.researchSchema(
                         ids: evidence.map(\.id)
-                    ), fence: fence) { count in
+                    ), fence: fence) { text in
                         continuation
                             .yield(
                                 .progress(
-                                    "Reading response (\(count) characters)"
+                                    "Reading response (\(text.count) characters)"
                                 )
                             )
                     }
@@ -119,7 +165,7 @@ struct ChatGPTConversationInference: ConversationInferring {
                         GroundedResearch.self,
                         from: Data(json.utf8)
                     )
-                    let markdown = try result.markdown(evidence: evidence)
+                    _ = try result.markdown(evidence: evidence)
                     continuation.yield(.progress("Checking source evidence"))
                     let review = try await response(
                         prompt: result.points.map { point in
@@ -139,12 +185,11 @@ struct ChatGPTConversationInference: ConversationInferring {
                         Verification.self,
                         from: Data(review.utf8)
                     )
-                    guard verification.supported.count == result.points.count,
-                          verification.supported.allSatisfy(\.self)
+                    guard let verified = result.keeping(verification.supported)
                     else { throw ChatGPTError.invalidOutput }
                     try Task.checkCancellation()
                     try await session.validateFence(fence)
-                    continuation.yield(.result(markdown))
+                    try continuation.yield(.result(verified.markdown(evidence: evidence)))
                     continuation.finish()
                 } catch is CancellationError { continuation.finish(throwing: CancellationError()) }
                 catch let error as ChatGPTError { continuation.finish(throwing: error) }
@@ -161,7 +206,7 @@ struct ChatGPTConversationInference: ConversationInferring {
         name: String,
         schema: [String: Any],
         fence: (accountID: String, epoch: UUID),
-        progress: @Sendable (Int) -> Void
+        progress: @Sendable (String) -> Void
     ) async throws -> String {
         let body = try Self.requestBody(
             model: model,
@@ -194,7 +239,7 @@ struct ChatGPTConversationInference: ConversationInferring {
 
     private func consume(
         _ request: URLRequest,
-        progress: @Sendable (Int) -> Void
+        progress: @Sendable (String) -> Void
     ) async throws -> String {
         var decoder = ChatGPTSSEDecoder()
         var lastProgress = 0
@@ -205,7 +250,7 @@ struct ChatGPTConversationInference: ConversationInferring {
             }
             if decoder.text.count - lastProgress >= 120 {
                 lastProgress = decoder.text.count
-                progress(lastProgress)
+                progress(decoder.text)
             }
         }
         return try decoder.finish()
@@ -341,5 +386,85 @@ struct ChatGPTSSEDecoder {
         }
         guard !text.isEmpty, text.utf8.count <= 64000 else { throw ChatGPTError.invalidStream }
         return text
+    }
+}
+
+/// Grounded link summaries with ChatGPT: the same evidence IDs, prompts, verification and output
+/// as Apple Intelligence, without its small context. Only very long sources are first narrowed
+/// to key excerpts section by section, so nothing past the opening is silently dropped.
+extension ChatGPTConversationInference: LinkSummarizing {
+    static let summarySection = 60000
+
+    var engineName: String {
+        "ChatGPT"
+    }
+
+    func summarize(_ document: CapturedDocument) async throws -> String {
+        let fence = try await session.authorizationFence()
+        let context = "Title: \(document.title)\nCaptured coverage: \(document.coverage.label)"
+        var text = document.blocks.map(\.text).joined(separator: "\n\n")
+        let sections = AppleLinkSummarizer.chunks(text, limit: Self.summarySection)
+        if sections.count > 1 {
+            var selected: [String] = []
+            for (index, section) in sections.enumerated() {
+                let evidence = SummaryEvidence(section)
+                guard !evidence.items.isEmpty else { continue }
+                let picked: SummaryExcerpts = try await structured(
+                    prompt: AppleLinkSummarizer.excerptPrompt(
+                        context: context + "\nSection \(index + 1) of \(sections.count)",
+                        evidence: evidence
+                    ),
+                    instructions: AppleLinkSummarizer.instructions,
+                    name: "summary_excerpts",
+                    schema: SummaryExcerpts.jsonSchema(),
+                    fence: fence
+                )
+                selected += try evidence.select(Array(picked.excerpts.prefix(4)))
+            }
+            text = selected.joined(separator: "\n\n")
+        }
+        let evidence = SummaryEvidence(text)
+        guard !evidence.items.isEmpty else { throw LinkSummaryError.noEvidence }
+        let proposal: EvidenceSummaryDraft = try await structured(
+            prompt: AppleLinkSummarizer.summaryPrompt(context: context, evidence: evidence),
+            instructions: AppleLinkSummarizer.instructions,
+            name: "grounded_summary",
+            schema: EvidenceSummaryDraft.jsonSchema(),
+            fence: fence
+        )
+        let anchored = try proposal.anchored(in: evidence)
+        let draft = SummaryDraft(
+            overview: anchored.overview,
+            takeaways: Array(anchored.takeaways.prefix(3))
+        )
+        _ = try draft.markdown(source: text)
+        let review: SummaryVerification = try await structured(
+            prompt: AppleLinkSummarizer.verificationPrompt(draft),
+            instructions: AppleLinkSummarizer.verificationInstructions,
+            name: "summary_review",
+            schema: SummaryVerification.jsonSchema(),
+            fence: fence
+        )
+        let verified = try review.applied(to: draft)
+        try await session.validateFence(fence)
+        return try AppleLinkSummarizer.withCaptureLimits(
+            verified.markdown(source: text),
+            coverage: document.coverage
+        )
+    }
+
+    private func structured<Value: Decodable>(
+        prompt: String,
+        instructions: String,
+        name: String,
+        schema: [String: Any],
+        fence: (accountID: String, epoch: UUID)
+    ) async throws -> Value {
+        let json = try await response(
+            prompt: prompt, instructions: instructions, name: name, schema: schema, fence: fence
+        ) { _ in }
+        try Task.checkCancellation()
+        do { return try JSONDecoder().decode(Value.self, from: Data(json.utf8)) }
+        catch { throw LinkSummaryError.invalidOutput }
     }
 }

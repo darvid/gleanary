@@ -18,6 +18,8 @@ struct KnowledgeAtlasView: View {
     @AppStorage("atlasHidesEmptyCategories") private var hidesEmpty = false
     @State private var hoverPoint: CGPoint?
     @State private var dragStart: AtlasCamera?
+    /// The previous click, so a second click on the same tile opens it.
+    @State private var lastClick: (id: AtlasNodeID, time: Date)?
     @State private var pinchStart: AtlasCamera?
     @FocusState private var canvasFocused: Bool
     @FocusState private var searchFocused: Bool
@@ -34,7 +36,7 @@ struct KnowledgeAtlasView: View {
                     atlas.loading ? "Loading library…" : "Nothing to map yet",
                     systemImage: "square.grid.3x3",
                     description: Text(
-                        "Save a source in #general or import a document. Filed items appear here by category."
+                        "Save a source in Chat or import a document. Filed items appear here by category."
                     )
                 ).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -193,8 +195,6 @@ struct KnowledgeAtlasView: View {
                 Canvas { context, size in
                     AtlasRenderer(
                         layout: atlas.layout, camera: camera,
-                        focusPath: Set(atlas.layout.index[atlas.focusID]
-                            .map(atlas.layout.path(to:)) ?? []),
                         selectedID: atlas.selectedID,
                         hoveredID: atlas.hoveredID, matchCounts: atlas.matchCounts,
                         dark: colorScheme == .dark, highContrast: contrast == .increased,
@@ -204,8 +204,9 @@ struct KnowledgeAtlasView: View {
             }
             .contentShape(Rectangle())
             .focusable().focusEffectDisabled().focused($canvasFocused)
-            .gesture(SpatialTapGesture(count: 2).onEnded { activate(at: $0.location) }
-                .exclusively(before: SpatialTapGesture().onEnded { select(at: $0.location) }))
+            // One tap gesture: an exclusive double-tap would hold every single click until the
+            // double-click interval passed, delaying selection.
+            .gesture(SpatialTapGesture().onEnded { click(at: $0.location) })
             .simultaneousGesture(drag)
             .simultaneousGesture(pinch)
             .onContinuousHover { phase in
@@ -221,12 +222,12 @@ struct KnowledgeAtlasView: View {
                 }
             }
             .onKeyPress(phases: .down) { press in handleKey(press) }
-            .background { AtlasScrollMonitor { event, point in scroll(event, at: point) } }
+            .background { AtlasEventMonitor { event, point in handle(event, at: point) } }
             .overlay(alignment: .topLeading) { tooltip(in: geometry.size) }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Knowledge Atlas")
             .accessibilityHint(
-                "Arrow keys choose a region, Return opens it, Escape goes back. Drag to pan; pinch, scroll or use Command-plus and Command-minus to zoom."
+                "Arrow keys choose a region, Return opens it, Escape goes back. Drag or middle-drag to pan; pinch, scroll or use Command-plus and Command-minus to zoom."
             )
             .accessibilityChildren { accessibilityTiles }
             .accessibilityAction(named: "Back") { atlas.back() }
@@ -260,9 +261,15 @@ struct KnowledgeAtlasView: View {
             .onEnded { _ in pinchStart = nil }
     }
 
-    /// Trackpad scrolling pans, as in other canvases; a mouse wheel, or scrolling with Command
-    /// held, zooms toward the pointer.
-    private func scroll(_ event: NSEvent, at point: CGPoint) -> Bool {
+    /// Trackpad scrolling and middle-button dragging pan, as in other canvases; a mouse wheel,
+    /// or scrolling with Command held, zooms toward the pointer.
+    private func handle(_ event: NSEvent, at point: CGPoint) -> Bool {
+        if event.type == .otherMouseDragged {
+            // Mouse deltas grow rightward and downward, like the canvas.
+            atlas.pan(by: CGSize(width: event.deltaX, height: event.deltaY))
+            hoverPoint = nil; atlas.hoveredID = nil
+            return true
+        }
         let zooming = !event.hasPreciseScrollingDeltas || event.modifierFlags.contains(.command)
         if zooming {
             let rate: CGFloat = event.hasPreciseScrollingDeltas ? 0.01 : 0.12
@@ -274,14 +281,24 @@ struct KnowledgeAtlasView: View {
         return true
     }
 
-    private func select(at point: CGPoint) {
+    /// Selects on the first click and opens on a second click on the same tile within the
+    /// system double-click interval, as Finder does.
+    private func click(at point: CGPoint) {
         canvasFocused = true
-        atlas.selectedID = atlas.hitTest(point)
+        let id = atlas.hitTest(point)
+        atlas.selectedID = id
+        let now = Date()
+        if let id, let lastClick, lastClick.id == id,
+           now.timeIntervalSince(lastClick.time) <= NSEvent.doubleClickInterval
+        {
+            self.lastClick = nil
+            activate(id)
+        } else {
+            lastClick = id.map { ($0, now) }
+        }
     }
 
-    private func activate(at point: CGPoint) {
-        canvasFocused = true
-        guard let id = atlas.hitTest(point) else { return }
+    private func activate(_ id: AtlasNodeID) {
         if case let .open(item) = atlas.activate(id) {
             openItem(item)
         }
@@ -340,21 +357,33 @@ struct KnowledgeAtlasView: View {
     @ViewBuilder private func tooltip(in size: CGSize) -> some View {
         if let point = hoverPoint, let id = atlas.hoveredID, let tile = atlas.layout.tile(id) {
             let width: CGFloat = 260
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tile.node.label).font(.callout.weight(.medium)).lineLimit(2)
-                Text(detail(of: tile)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            let flipsLeft = point.x + width + 24 > size.width
+            // Snug on one line when it fits, otherwise wrapped at `width`. The bubble draws its
+            // own background, so it always grows with its text.
+            ViewThatFits(in: .horizontal) {
+                tooltipBubble(tile, wrapped: false).fixedSize()
+                tooltipBubble(tile, wrapped: true).frame(width: width)
             }
-            .padding(.horizontal, 9).padding(.vertical, 6)
-            .frame(maxWidth: width, alignment: .leading)
-            .fixedSize()
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator, lineWidth: 0.5))
+            .frame(width: width, alignment: flipsLeft ? .trailing : .leading)
             .offset(
-                x: point.x + width + 24 > size.width ? max(0, point.x - width - 8) : point.x + 14,
+                x: flipsLeft ? max(0, point.x - width - 8) : point.x + 14,
                 y: point.y + 70 > size.height ? max(0, point.y - 58) : point.y + 18
             )
             .allowsHitTesting(false).accessibilityHidden(true)
         }
+    }
+
+    private func tooltipBubble(_ tile: AtlasTile, wrapped: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(tile.node.label).font(.callout.weight(.medium)).lineLimit(wrapped ? 2 : 1)
+            Text(detail(of: tile)).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(wrapped ? 2 : 1)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .frame(maxWidth: wrapped ? .infinity : nil, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.separator, lineWidth: 0.5))
     }
 
     private var accessibilityTiles: some View {
@@ -386,7 +415,7 @@ struct KnowledgeAtlasView: View {
 
     private func summary(of tile: AtlasTile) -> String {
         var parts = [count(tile.node.itemCount)]
-        // Uncategorized and "Filed in" groups are not categories of their own.
+        // Uncategorized and direct-item groups are not categories of their own.
         let regions = atlas.layout.children(of: atlas.layout.index[tile.id] ?? 0)
             .filter { [.category, .group].contains(atlas.layout.tiles[$0].node.kind) }.count
         if regions > 0 {
@@ -425,7 +454,9 @@ struct KnowledgeAtlasView: View {
 
 /// Observes scroll-wheel events over one view and reports them in its top-left coordinates.
 /// Returning true from the action consumes the event.
-private struct AtlasScrollMonitor: NSViewRepresentable {
+/// AppKit events SwiftUI gestures don't deliver: scroll wheels, and the middle button, which
+/// DragGesture ignores.
+private struct AtlasEventMonitor: NSViewRepresentable {
     let action: @MainActor (NSEvent, CGPoint) -> Bool
 
     func makeCoordinator() -> Coordinator {
@@ -457,23 +488,50 @@ private struct AtlasScrollMonitor: NSViewRepresentable {
             self.action = action
         }
 
+        /// A middle-button drag that began on the canvas keeps panning outside it until release.
+        private var panning = false
+
         func start() {
             guard monitor == nil else { return }
-            monitor = NSEvent
-                .addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                    guard let self, let view, let window = view.window, event.window === window
-                    else { return event }
-                    let local = view.convert(event.locationInWindow, from: nil)
-                    guard view.bounds.contains(local) else { return event }
-                    let point = view.isFlipped ? local : CGPoint(
-                        x: local.x,
-                        y: view.bounds.height - local.y
-                    )
-                    return action(event, point) ? nil : event
-                }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.scrollWheel, .otherMouseDown, .otherMouseDragged, .otherMouseUp]
+            ) { [weak self] event in
+                self?.route(event) ?? event
+            }
+        }
+
+        private func route(_ event: NSEvent) -> NSEvent? {
+            guard let view, let window = view.window, event.window === window else { return event }
+            let local = view.convert(event.locationInWindow, from: nil)
+            let point = view.isFlipped ? local
+                : CGPoint(x: local.x, y: view.bounds.height - local.y)
+            switch event.type {
+            case .scrollWheel:
+                guard view.bounds.contains(local) else { return event }
+                return action(event, point) ? nil : event
+            case .otherMouseDown where event.buttonNumber == 2:
+                guard view.bounds.contains(local) else { return event }
+                panning = true
+                NSCursor.closedHand.push()
+                return nil
+            case .otherMouseDragged where panning:
+                return action(event, point) ? nil : event
+            case .otherMouseUp where panning:
+                endPanning()
+                return nil
+            default:
+                return event
+            }
+        }
+
+        private func endPanning() {
+            guard panning else { return }
+            panning = false
+            NSCursor.pop()
         }
 
         func stop() {
+            endPanning()
             if let monitor {
                 NSEvent.removeMonitor(monitor)
             }

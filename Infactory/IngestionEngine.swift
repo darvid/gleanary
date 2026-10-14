@@ -1,5 +1,6 @@
 import CoreFoundation
 import Foundation
+import ImageIO
 
 actor IngestionEngine {
     let store: DocumentStore
@@ -7,7 +8,9 @@ actor IngestionEngine {
     let fetcher: any SourceFetching
     let youtube: any YouTubeProviding
     let transcriber: any AudioTranscribing
-    let summarizer: any LinkSummarizing
+    /// Follows the AI provider setting; see `useSummarizer`.
+    private(set) var summarizer: any LinkSummarizing
+    let screenshotter: (any PageScreenshotting)?
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -17,21 +20,29 @@ actor IngestionEngine {
         fetcher: any SourceFetching = SourceFetcher(),
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
         transcriber: any AudioTranscribing = LocalTranscriber(),
-        summarizer: any LinkSummarizing = AppleLinkSummarizer()
+        summarizer: any LinkSummarizing = AppleLinkSummarizer(),
+        screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
         self.fetcher = fetcher
         self.youtube = youtube
         self.transcriber = transcriber
         self.summarizer = summarizer
+        self.screenshotter = screenshotter
         artifacts = ArtifactStore(root: store.url.deletingLastPathComponent()
             .appending(path: "artifacts"))
+    }
+
+    /// Later summaries use this summarizer, such as ChatGPT once it's enabled.
+    func useSummarizer(_ summarizer: any LinkSummarizing) {
+        self.summarizer = summarizer
     }
 
     func enqueue(
         _ input: String,
         deduplicate: Bool = true,
-        summarizeLink: Bool = true
+        summarizeLink: Bool = true,
+        replacing noteID: UUID? = nil
     ) async throws -> UUID {
         if let url = try CaptureRequest.classify(input) {
             let media = try MediaTarget.parse(url)
@@ -43,8 +54,9 @@ actor IngestionEngine {
                 identity: media?.identity ?? arxiv?.identity ?? ("url:" + canonical),
                 label: canonical,
                 summarizeLink: summarizeLink,
-                submittedURL: url
-            ), deduplicate: deduplicate)
+                submittedURL: url,
+                replacingNoteID: noteID
+            ), deduplicate: deduplicate && noteID == nil)
         }
         guard input.utf8.count <= CaptureLimits.markdownBytes else { throw CaptureError.tooLarge }
         let artifact = try await artifacts.retain(
@@ -57,6 +69,12 @@ actor IngestionEngine {
             identity: "text:" + artifact.hash,
             label: Self.title(input)
         ), deduplicate: deduplicate)
+    }
+
+    /// Fetches the page behind an imported bookmark and upgrades its note in place.
+    func enqueueBookmarkFetch(noteID: UUID) async throws -> UUID? {
+        guard let url = try await store.unfetchedBookmarkURL(noteID: noteID) else { return nil }
+        return try await enqueue(url.absoluteString, replacing: noteID)
     }
 
     func enqueueFile(_ url: URL) async throws -> UUID {
@@ -89,6 +107,10 @@ actor IngestionEngine {
                     recovery: error.recovery
                 )
             } catch let error as LinkSummaryError {
+                try await store.failCapture(job, error: error.localizedDescription)
+            } catch let error as SummaryFailure {
+                try await store.failCapture(job, error: error.localizedDescription)
+            } catch let error as ChatGPTError {
                 try await store.failCapture(job, error: error.localizedDescription)
             } catch let error as CaptureError {
                 try await store.failCapture(job, error: error.localizedDescription)
@@ -123,7 +145,8 @@ actor IngestionEngine {
                 summary,
                 artifact: artifact,
                 for: document,
-                captureID: source.id
+                captureID: source.id,
+                engine: summarizer.engineName
             )
         } catch {
             try? await store.queueArtifactCleanup(artifact)
@@ -159,7 +182,7 @@ actor IngestionEngine {
                 CapturedDocument.self,
                 from: artifacts.data(for: snapshot)
             )
-        case .json:
+        case .json, .image:
             throw CaptureError.unsupported
         case .pdf:
             document = try await extractPDF(primary, job: job, acquired: acquired, changed: changed)
@@ -171,6 +194,7 @@ actor IngestionEngine {
                 faviconURL: &faviconURL,
                 changed: changed
             )
+            try await screenshot(primary, job: job, acquired: &acquired, changed: changed)
         case .text, .markdown:
             let text = try await Self.decodeText(
                 artifacts.data(for: primary),
@@ -189,26 +213,54 @@ actor IngestionEngine {
                 )]
             )
         }
+        try await videoThumbnail(job, acquired: &acquired)
         try Task.checkCancellation()
         try document.validate()
-        let summary = try await summarize(
-            job,
-            document: document,
-            acquired: &acquired,
-            changed: changed
+        // The summarizer can switch while this capture awaits; credit the one that wrote it.
+        let summaryEngine = summarizer.engineName
+        let (summary, summaryNote) = try await summaryOrNote(
+            job, document: document, acquired: &acquired, changed: changed
         )
         let favicon = await FaviconLoader(fetcher: fetcher).load(
             source: primary.sourceURL ?? document.sourceURL ?? job.request.url,
             preferred: faviconURL
         )
+        var preview: Data?
+        if let still = acquired.first(where: { $0.kind == .image }) {
+            preview = try? await PagePreview.thumbnail(
+                artifacts.data(for: still), centered: still.name == Self.videoThumbnailName
+            )
+        }
         try Task.checkCancellation()
         return try await store.publishCapture(
             job,
             document: document,
             artifacts: acquired,
             favicon: favicon,
-            summary: summary
+            summary: summary,
+            summaryNote: summaryNote,
+            summaryEngine: summaryEngine,
+            previewImage: preview
         )
+    }
+
+    /// A failed summary never costs the capture: the full text is saved, the reason is noted on
+    /// the capture, and the item offers Generate summary later.
+    private func summaryOrNote(
+        _ job: CaptureJob,
+        document: CapturedDocument,
+        acquired: inout [Artifact],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws -> (summary: String?, note: String?) {
+        do {
+            return try await (
+                summarize(job, document: document, acquired: &acquired, changed: changed), nil
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return (nil, error.localizedDescription)
+        }
     }
 
     private func summarize(
@@ -219,13 +271,21 @@ actor IngestionEngine {
     ) async throws -> String? {
         guard job.request.url != nil, job.request.summarizeLink != false else { return nil }
         var summary: String?
-        try await store.checkpoint(job, acquired: acquired, progress: "Writing a brief summary")
+        let engine = summarizer.engineName
+        try await store.checkpoint(
+            job,
+            acquired: acquired,
+            progress: engine.isEmpty ? "Writing a brief summary" : "Writing a brief summary with \(engine)"
+        )
         await changed()
         do {
             summary = try await summarizer.summarize(document)
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as LinkSummaryError {
+            throw SummaryFailure(engine: engine, underlying: error)
+        } catch let error as ChatGPTError {
+            // Sign-in and usage problems explain themselves better than a generic failure.
             throw error
         } catch {
             throw LinkSummaryError.failed
@@ -246,6 +306,68 @@ actor IngestionEngine {
             progress: "Summary retained locally"
         )
         return summary
+    }
+
+    static let videoThumbnailName = "Thumbnail.jpg"
+
+    /// Best effort: a YouTube video keeps its thumbnail as media and as its library preview.
+    /// The largest size doesn't exist for every video, so the always-present one follows it.
+    private func videoThumbnail(_ job: CaptureJob, acquired: inout [Artifact]) async throws {
+        guard let url = job.request.url, let target = try? MediaTarget.parse(url),
+              target.site == .youtube,
+              !acquired.contains(where: { $0.kind == .image }) else { return }
+        for size in ["maxresdefault", "hqdefault"] {
+            guard let still = URL(string: "https://i.ytimg.com/vi/\(target.id)/\(size).jpg")
+            else { continue }
+            let data: Data
+            do { data = try await fetcher.fetch(still).data }
+            catch is CancellationError { throw CancellationError() }
+            catch { continue }
+            // YouTube answers a missing size with a tiny grey placeholder.
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                  as? [CFString: Any],
+                  (properties[kCGImagePropertyPixelWidth] as? Int ?? 0) >= 320 else { continue }
+            try Task.checkCancellation()
+            let artifact = try await artifacts.retain(
+                data, kind: .image, name: Self.videoThumbnailName, sourceURL: still
+            )
+            acquired.append(artifact)
+            try await store.checkpoint(
+                job,
+                acquired: acquired,
+                progress: "Thumbnail retained locally"
+            )
+            return
+        }
+    }
+
+    /// Best effort: a page that will not render still yields its extracted text.
+    private func screenshot(
+        _ primary: Artifact,
+        job: CaptureJob,
+        acquired: inout [Artifact],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        guard let screenshotter, job.request.url != nil, let url = primary.sourceURL,
+              !acquired.contains(where: { $0.kind == .image }) else { return }
+        try await store.checkpoint(job, acquired: acquired, progress: "Capturing a page screenshot")
+        await changed()
+        let data: Data
+        do {
+            data = try await screenshotter.capture(url)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            return
+        }
+        try Task.checkCancellation()
+        let artifact = try await artifacts.retain(
+            data, kind: .image, name: "Screenshot.jpg", sourceURL: url
+        )
+        acquired.append(artifact)
+        try await store.checkpoint(job, acquired: acquired, progress: "Screenshot retained locally")
     }
 
     private func acquireOriginals(

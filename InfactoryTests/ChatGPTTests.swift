@@ -665,6 +665,37 @@ struct ChatGPTTests {
             })
     }
 
+    @Test func researchKeepsOnlyVerifiedPoints() throws {
+        let research = GroundedResearch(points: [
+            .init(text: "Fixture memory is local.", evidenceID: "S1E1"),
+            .init(text: "Fixture memory is infinite.", evidenceID: "S1E1"),
+        ])
+        #expect(research.keeping([false, false]) == nil)
+        #expect(research.keeping([true]) == nil)
+        let kept = try #require(research.keeping([true, false]))
+        let evidence = [ResearchEvidence(
+            id: "S1E1", title: "Fixture", quote: "Fixture memory is local.", noteID: UUID()
+        )]
+        let markdown = try kept.markdown(evidence: evidence)
+        #expect(markdown.contains("is local"))
+        #expect(!markdown.contains("infinite"))
+        #expect(markdown.contains("1 more point was left out"))
+    }
+
+    @Test func researchExcerptsPreferSentencesAboutTheQuestion() {
+        let sentences = (0 ..< 40).map { "Filler sentence \($0)." } + ["Postgres vacuums bloat."]
+        let positions = AppleConversationInference.excerptPositions(
+            sentences, terms: ["postgres"], limit: 3
+        )
+        #expect(positions.contains(40))
+        #expect(positions.count == 3)
+        #expect(AppleConversationInference.excerptPositions(sentences, terms: [], limit: 3) == [
+            0,
+            20,
+            40,
+        ])
+    }
+
     @Test func streamingRequiresCompletionAndMapsPlanLimits() throws {
         var decoder = ChatGPTSSEDecoder()
         #expect(try decoder.consume(": heartbeat") == nil)
@@ -783,7 +814,7 @@ struct ChatGPTTests {
         )
         .environment(\.colorScheme, scheme))
         view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
-        view.frame = NSRect(x: 0, y: 0, width: 780, height: 600)
+        view.frame = NSRect(origin: .zero, size: ConversationSettings.size)
         let window = NSWindow(
             contentRect: view.frame,
             styleMask: [],
@@ -798,8 +829,7 @@ struct ChatGPTTests {
         try await Task.sleep(for: .milliseconds(50))
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
-        #expect(view.fittingSize.width == 780)
-        #expect(view.fittingSize.height == 600)
+        #expect(view.fittingSize == ConversationSettings.size)
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         if let path = ProcessInfo.processInfo.environment["INFACTORY_SETTINGS_SCREENSHOT"],
@@ -951,5 +981,122 @@ struct ChatGPTTests {
         #expect((accepted as? HTTPURLResponse)?.statusCode == 200)
         #expect(try await listener.wait() == url)
         await listener.stop()
+    }
+}
+
+extension ChatGPTTests {
+    @Test @MainActor func bulkFilingUsesItsOwnModelAndFallsBackLikeChat() async throws {
+        let account = registration()
+        let transport = FixtureChatGPTTransport(response: """
+        {"models":[{"slug":"chat-model","display_name":"Chat","visibility":"list"},{"slug":"small-model","display_name":"Small","visibility":"list"}]}
+        """)
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport,
+            hostID: "fixture"
+        )
+        let suite = "infactory-chatgpt-test-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        connection.setConsent(true)
+        connection.setEnabled(true)
+        connection.selectModel("chat-model")
+        // Unset follows the chat model.
+        #expect(try connection.filingInference().capabilities.identifier.contains("chat-model"))
+        connection.selectFilingModel("small-model")
+        #expect(try connection.filingInference().capabilities.identifier.contains("small-model"))
+        #expect(try connection.inference().capabilities.identifier.contains("chat-model"))
+        connection.selectFilingModel("not-in-catalog")
+        #expect(connection.filingModel == "small-model")
+        // The choice survives a reload.
+        let reloaded = ChatGPTConnection(session: session, preferences: preferences)
+        await reloaded.load()
+        #expect(reloaded.filingModel == "small-model")
+        connection.setEnabled(false)
+        #expect(try connection.filingInference().capabilities.local)
+    }
+}
+
+extension ChatGPTTests {
+    private func summaryDocument() -> (CapturedDocument, SummaryEvidence) {
+        let text = "Spaced repetition improves long-term recall. The study tested 40 adults over six weeks. Results did not hold for children."
+        let document = CapturedDocument(
+            title: "Fixture study",
+            coverage: .article,
+            blocks: [ContentBlock(kind: .paragraph, markdown: text, text: text)]
+        )
+        return (document, SummaryEvidence(text))
+    }
+
+    @Test func chatGPTSummariesKeepOnlyVerifiedEvidencePoints() async throws {
+        let account = registration()
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        try #require(ids.count >= 3)
+        let draft: [String: Any] = [
+            "overview": [
+                "text": "Spaced repetition improves recall.",
+                "evidenceIDs": [ids[0], ids[1]],
+            ],
+            "takeaways": [
+                ["text": "The study ran six weeks with adults.", "evidenceIDs": [ids[1]]],
+                ["text": "It works for everyone.", "evidenceIDs": [ids[2]]],
+            ],
+        ]
+        let transport = try FixtureChatGPTStream([
+            String(decoding: JSONSerialization.data(withJSONObject: draft), as: UTF8.self),
+            #"{"supported":[true,true,false]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport,
+            hostID: "fixture"
+        )
+        let summary = try await ChatGPTConversationInference(
+            session: session,
+            model: "fixture-model"
+        )
+        .summarize(document)
+        #expect(summary == """
+        Spaced repetition improves recall.
+
+        ## Key takeaways
+
+        - The study ran six weeks with adults.
+        """)
+        let requests = await transport.requests
+        #expect(requests.count == 2)
+        let body = try String(decoding: #require(requests.first?.httpBody), as: UTF8.self)
+        #expect(body.contains("grounded_summary"))
+        _ = try await session.signOut()
+    }
+
+    @Test func chatGPTSummariesRejectInventedEvidence() async throws {
+        let account = registration()
+        let (document, _) = summaryDocument()
+        let transport = FixtureChatGPTStream([
+            #"{"overview":{"text":"Made up.","evidenceIDs":["NOT-AN-ID"]},"takeaways":[]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport,
+            hostID: "fixture"
+        )
+        await #expect(throws: LinkSummaryError.evidenceMismatch) {
+            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+                .summarize(document)
+        }
+        _ = try await session.signOut()
     }
 }

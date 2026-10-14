@@ -14,6 +14,10 @@ final class ChatGPTConnection {
     var activeID: String?
     var models: [ChatGPTModelChoice] = []
     var selectedModel = ""
+    /// The model for bulk filing (auto-categorization and the Librarian's folder plan), so a
+    /// small, fast model can handle thousands of items while chat keeps its own. Empty follows
+    /// the chat model.
+    var filingModel = ""
     var useChatGPT = false
     var busy = false
     var signingIn = false
@@ -60,6 +64,8 @@ final class ChatGPTConnection {
             let saved = preferences.string(forKey: "chatgpt.model." + (activeID ?? ""))
             selectedModel = models.first(where: { $0.slug == saved })?.slug ?? models.first?
                 .slug ?? ""
+            let filing = preferences.string(forKey: "chatgpt.filing-model." + (activeID ?? ""))
+            filingModel = models.first(where: { $0.slug == filing })?.slug ?? ""
             error = models
                 .isEmpty ?
                 "No models are available for this account. Use on-device inference or try another account." :
@@ -132,6 +138,23 @@ final class ChatGPTConnection {
         guard models.contains(where: { $0.slug == slug }), let activeID else { return }
         selectedModel = slug
         preferences.set(slug, forKey: "chatgpt.model." + activeID)
+    }
+
+    func selectFilingModel(_ slug: String) {
+        guard slug.isEmpty || models.contains(where: { $0.slug == slug }), let activeID else {
+            return
+        }
+        filingModel = slug
+        preferences.set(slug, forKey: "chatgpt.filing-model." + activeID)
+    }
+
+    /// Inference for bulk filing: the filing model when one is chosen, else the chat model.
+    /// Falls back to Apple Intelligence when ChatGPT is off, like `inference()`.
+    func filingInference() throws -> any ConversationInferring {
+        let chat = try inference()
+        guard chat is ChatGPTConversationInference, !filingModel.isEmpty,
+              models.contains(where: { $0.slug == filingModel }) else { return chat }
+        return ChatGPTConversationInference(session: session, model: filingModel)
     }
 
     func setConsent(_ consent: Bool) {

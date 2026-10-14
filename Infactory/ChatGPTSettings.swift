@@ -13,7 +13,7 @@ struct ChatGPTSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            InferenceSettingsRow(title: "Provider", detail: "Used for new #general messages.") {
+            InferenceSettingsRow(title: "Provider", detail: "Used for new chat messages.") {
                 HStack(spacing: 8) {
                     Picker("AI provider", selection: Binding(
                         get: { connection.useChatGPT }, set: { connection.selectProvider($0) }
@@ -42,6 +42,22 @@ struct ChatGPTSettings: View {
                         }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: actionWidth)
                             .help("Refresh models")
                     }.disabled(changingAccount)
+                }
+                InferenceSettingsRow(title: "Filing model") {
+                    HStack(spacing: 8) {
+                        Picker("Filing model", selection: Binding(
+                            get: { connection.filingModel },
+                            set: { connection.selectFilingModel($0) }
+                        )) {
+                            Text("Same as chat").tag("")
+                            ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
+                        }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
+                        Color.clear.frame(width: actionWidth, height: 1).accessibilityHidden(true)
+                    }
+                    .disabled(changingAccount)
+                    .help(
+                        "Used to categorize unfiled items and plan imported folders. A small, fast model keeps large imports quick and within plan limits."
+                    )
                 }
             } else {
                 Text(localStatus).font(.caption).foregroundStyle(Color.primary.opacity(0.72))

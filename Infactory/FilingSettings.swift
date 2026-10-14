@@ -23,42 +23,51 @@ struct FilingSettings: View {
                     .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
                 Spacer(minLength: 16)
                 Button("Starter categories…") { starterCategories = true }
-                Button("Add category", systemImage: "plus") {
-                    editor = .add(suggestedCode: suggestedCode(near: selection), area: nil)
-                }
-                .popover(isPresented: presenting { $0.addsTo(area: nil) }) {
-                    editorPopover
-                }
             }
-            List(selection: $selection) {
-                ForEach(areas) { area in
-                    Section {
-                        ForEach(area.categories) { category in
-                            row(category).tag(category.id).listRowSeparator(.hidden)
+            VStack(spacing: 0) {
+                List(selection: $selection) {
+                    ForEach(areas) { area in
+                        Section {
+                            ForEach(area.categories) { category in
+                                row(category).tag(category.id).listRowSeparator(.hidden)
+                            }
+                        } header: {
+                            areaHeader(area)
                         }
-                    } header: {
-                        areaHeader(area)
                     }
                 }
+                .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    if let category = category(ids.first) {
+                        Button("Edit…") { editor = .edit(category.id) }
+                        if !category.code.contains(".") {
+                            Button("Add Subcategory") {
+                                editor = .add(
+                                    suggestedCode: nextSubcode(under: category),
+                                    area: nil
+                                )
+                            }
+                        }
+                        Divider()
+                        Button("Delete…", role: .destructive) { deleting = category }
+                            .disabled(category.isInbox)
+                    }
+                } primaryAction: { ids in
+                    if let id = ids.first {
+                        editor = .edit(id)
+                    }
+                }
+                Divider()
+                listControls
             }
-            .listStyle(.inset)
-            .scrollContentBackground(.hidden)
+            // The list and its +/− bar share one box, as in System Settings.
             .background(
                 Color(nsColor: .controlBackgroundColor),
                 in: RoundedRectangle(cornerRadius: 8)
             )
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
-            .contextMenu(forSelectionType: UUID.self) { ids in
-                if let category = category(ids.first) {
-                    Button("Edit…") { editor = .edit(category.id) }
-                    Button("Delete…", role: .destructive) { deleting = category }
-                        .disabled(category.isInbox)
-                }
-            } primaryAction: { ids in
-                if let id = ids.first {
-                    editor = .edit(id)
-                }
-            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
             .onDeleteCommand {
                 if let category = category(selection), !category.isInbox {
                     deleting = category
@@ -100,29 +109,85 @@ struct FilingSettings: View {
     }
 
     private func areaHeader(_ area: CategoryArea) -> some View {
-        HStack(spacing: 6) {
-            Text(area.range).font(.caption.weight(.medium)).monospacedDigit()
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button("Add category to \(area.range)", systemImage: "plus") {
-                editor = .add(suggestedCode: area.nextFreeCode ?? "", area: area.digit)
+        Text(area.range).font(.caption.weight(.medium)).monospacedDigit()
+            .foregroundStyle(.secondary)
+    }
+
+    /// The standard footer under an editable Mac list, as in System Settings: + adds near the
+    /// selection, − deletes it, and … names the other places a category can go. Equal plain
+    /// buttons with hairline dividers, so nothing draws its own chrome.
+    private var listControls: some View {
+        let selected = category(selection)
+        let area = areas.first { $0.digit == selected?.area } ?? areas.last
+        return HStack(spacing: 0) {
+            Button("Add category", systemImage: "plus") {
+                editor = .add(suggestedCode: suggestedCode(near: selection), area: nil)
             }
-            .labelStyle(.iconOnly).buttonStyle(.borderless).controlSize(.small)
-            .help("Add a category in \(area.range)")
-            .popover(isPresented: presenting { $0.addsTo(area: area.digit) }) { editorPopover }
+            .help("Add a category in \(area?.range ?? "the next free area")")
+            .modifier(FooterControl())
+            footerDivider
+            Button("Delete category", systemImage: "minus") {
+                if let selected {
+                    deleting = selected
+                }
+            }
+            .disabled(selected == nil || selected?.isInbox == true)
+            .help(selected?
+                .isInbox == true ? "Inbox can't be deleted" : "Delete the selected category")
+            .modifier(FooterControl())
+            footerDivider
+            Menu {
+                if let area, let code = area.nextFreeCode {
+                    Button("Add Category in \(area.range)") {
+                        editor = .add(suggestedCode: code, area: nil)
+                    }
+                }
+                if let parent = selected, !parent.code.contains(".") {
+                    Button("Add Subcategory under \(parent.label)") {
+                        editor = .add(suggestedCode: nextSubcode(under: parent), area: nil)
+                    }
+                }
+                if let code = nextAreaCode {
+                    Button("Add Area (\(code))") { editor = .add(suggestedCode: code, area: nil) }
+                }
+            } label: {
+                Label("More ways to add", systemImage: "ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .help("Add a subcategory or a new area")
+            .modifier(FooterControl())
+            footerDivider
+            Spacer()
+        }
+        .frame(height: 24)
+        .popover(isPresented: presenting { $0.addsTo(area: nil) }, arrowEdge: .bottom) {
+            editorPopover
         }
     }
 
+    private var footerDivider: some View {
+        Divider().frame(height: 14)
+    }
+
+    /// The next unused XY.NN under a category, such as 31.05 after 31.04.
+    private func nextSubcode(under parent: DecimalCategory) -> String {
+        let used = Set(model.categories.map(\.code))
+        return (1 ... 99).map { parent.code + String(format: ".%02d", $0) }
+            .first { !used.contains($0) } ?? ""
+    }
+
+    /// The `X0` code of the first empty area, for a new top-level block.
+    private var nextAreaCode: String? {
+        let used = Set(areas.map(\.digit))
+        return (1 ... 9).first { !used.contains($0) }.map { "\($0)0" }
+    }
+
     private func row(_ category: DecimalCategory) -> some View {
-        CategoryRow(
-            category: category,
-            count: counts[category.id] ?? 0,
-            edit: { editor = .edit(category.id) },
-            delete: { deleting = category }
-        )
-        .popover(isPresented: presenting { $0 == .edit(category.id) }, arrowEdge: .trailing) {
-            editorPopover
-        }
+        CategoryRow(category: category, count: counts[category.id] ?? 0)
+            .popover(isPresented: presenting { $0 == .edit(category.id) }, arrowEdge: .trailing) {
+                editorPopover
+            }
     }
 
     private var emptyPrompt: some View {
@@ -208,7 +273,7 @@ struct FilingSettings: View {
 }
 
 enum CategoryEditorTarget: Equatable {
-    /// `area` identifies which add button anchors the popover; nil is the toolbar button.
+    /// `area` identifies which add control anchors the popover; nil is the list's + button.
     case add(suggestedCode: String, area: Int?)
     case edit(UUID)
 
@@ -257,9 +322,6 @@ struct CategoryArea: Identifiable {
 private struct CategoryRow: View {
     let category: DecimalCategory
     let count: Int
-    let edit: () -> Void
-    let delete: () -> Void
-    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -280,19 +342,9 @@ private struct CategoryRow: View {
                 Text("\(count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     .help(count == 1 ? "1 item filed here" : "\(count) items filed here")
             }
-            HStack(spacing: 2) {
-                Button("Edit \(category.name)", systemImage: "pencil", action: edit)
-                    .help("Edit")
-                Button("Delete \(category.name)", systemImage: "trash", action: delete)
-                    .help(category.isInbox ? "Inbox can't be deleted" : "Delete")
-                    .disabled(category.isInbox)
-            }
-            .labelStyle(.iconOnly).buttonStyle(.borderless).controlSize(.small)
-            .opacity(hovering ? 1 : 0)
         }
         .padding(.vertical, 1)
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 }
 
@@ -416,5 +468,16 @@ private struct CategoryEditor: View {
         do {
             try await save(editing?.id ?? UUID(), trimmedCode, trimmedName)
         } catch { failure = error.localizedDescription }
+    }
+}
+
+/// One square, plain control in a list footer.
+private struct FooterControl: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .frame(width: 28, height: 24)
+            .contentShape(Rectangle())
     }
 }

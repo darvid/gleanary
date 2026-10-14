@@ -13,6 +13,7 @@ struct FixtureLinkSummarizer: LinkSummarizing {
 }
 
 private actor SummaryProbe: LinkSummarizing {
+    nonisolated let engineName = "Fixture model"
     var documents: [CapturedDocument] = []
     var unavailable = false
     func setUnavailable(_ value: Bool) {
@@ -117,6 +118,7 @@ private actor SummaryFetcher: SourceFetching {
         preview.selectedID = id
         await preview.load(from: reopened)
         #expect(preview.generatedSummary)
+        #expect(preview.authorProvider == "Fixture model")
         #expect(preview.citation?.captureID == detail.id)
         let snapshot = try await reopened.searchSnapshot(query: "cobaltbeacon", candidateLimit: 10)
         let passage = try #require(snapshot.passages.first { $0.text.contains("cobaltbeacon") })
@@ -127,7 +129,7 @@ private actor SummaryFetcher: SourceFetching {
         #expect(await probe.documents.count == 1)
     }
 
-    @Test func unavailableModelRetainsSourceAndRetryDoesNotRefetchIt() async throws {
+    @Test @MainActor func unavailableModelSavesFullTextAndSummarizesLater() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
@@ -137,20 +139,22 @@ private actor SummaryFetcher: SourceFetching {
         let engine = IngestionEngine(store: store, fetcher: fetcher, summarizer: probe)
         _ = try await engine.enqueue("https://example.org/article")
         try await engine.run()
-        let failed = try #require(await store.captureJobs().first)
-        #expect(failed.state == .failed)
-        #expect(failed.noteID == nil)
-        #expect(failed.acquired.count == 1)
-        #expect(failed.error == LinkSummaryError.unavailable.localizedDescription)
-        #expect(await fetcher.calls == 1)
+        let job = try #require(await store.captureJobs().first)
+        #expect(job.state == .ready)
+        #expect(job.progress.contains("without a summary"))
+        #expect(job.progress.contains(LinkSummaryError.unavailable.localizedDescription))
+        let id = try #require(job.noteID)
+        let saved = try #require(await store.document(id: id))
+        #expect(saved.markdown.contains("cobaltbeacon"))
+        let preview = DocumentPreviewModel()
+        preview.selectedID = id
+        await preview.load(from: store)
+        #expect(preview.canGenerateSummary)
         await probe.setUnavailable(false)
-        let reopened = DocumentStore(url: store.url)
-        _ = try await reopened.open()
-        let resumed = IngestionEngine(store: reopened, fetcher: fetcher, summarizer: probe)
-        try await reopened.retryCapture(failed.id)
-        try await resumed.run()
-        #expect(try await reopened.captureJobs().first?.state == .ready)
-        // The second request is for the favicon, not the retained article.
+        let summarized = try await engine.summarizeExisting(saved)
+        #expect(!summarized.markdown.contains("cobaltbeacon"))
+        #expect(try await store.libraryAuthorProvider(for: id) == "Fixture model")
+        // The second request is for the favicon; summarizing later never refetches the article.
         #expect(await fetcher.calls == 2)
     }
 
@@ -454,11 +458,27 @@ private actor SummaryFetcher: SourceFetching {
         #expect(source.contains(first.text))
         #expect(evidence.prompt.contains("did not improve accuracy"))
         let proposal = EvidenceSummaryDraft(
-            overview: .init(text: "The method did not improve accuracy.", evidenceID: first.id),
+            overview: .init(text: "The method did not improve accuracy.", evidenceIDs: [first.id]),
             takeaways: []
         )
         let draft = try proposal.anchored(in: evidence)
-        #expect(draft.overview.quote == first.text)
+        #expect(draft.overview.quotes == [first.text])
+        // A broad point may cite several excerpts, but not none and not more than three.
+        let second = try #require(evidence.items.last)
+        let broad = try EvidenceSummaryDraft(
+            overview: .init(
+                text: "Accuracy held while cost fell.",
+                evidenceIDs: [first.id, second.id]
+            ),
+            takeaways: []
+        ).anchored(in: evidence)
+        #expect(broad.overview.quotes == [first.text, second.text])
+        #expect(throws: LinkSummaryError.evidenceMismatch) {
+            try EvidenceSummaryDraft(
+                overview: .init(text: "Uncited.", evidenceIDs: []),
+                takeaways: []
+            ).anchored(in: evidence)
+        }
         #expect(try draft.markdown(source: source) == "The method did not improve accuracy.")
         #expect(try evidence.select([]).isEmpty)
         #expect(try evidence.select([first.id, first.id]).count == 1)
@@ -494,18 +514,21 @@ private actor SummaryFetcher: SourceFetching {
         let draft = SummaryDraft(
             overview: .init(
                 text: "Local copies keep documents readable offline.",
-                quote: "Local copies work offline."
+                quotes: ["Local copies work offline."]
             ),
             takeaways: [.init(
                 text: "Device failure can lose changes.",
-                quote: "Device failure can lose changes."
+                quotes: ["Device failure can lose changes."]
             )]
         )
         #expect(try draft
             .markdown(source: source) ==
             "Local copies keep documents readable offline.\n\n## Key takeaways\n\n- Device failure can lose changes.")
         let invented = SummaryDraft(
-            overview: .init(text: "Invented claim.", quote: "An absent quote."),
+            overview: .init(
+                text: "Invented claim.",
+                quotes: ["Local copies work offline.", "An absent quote."]
+            ),
             takeaways: []
         )
         #expect(throws: LinkSummaryError.self) { try invented.markdown(source: source) }
@@ -641,5 +664,40 @@ private actor SummaryFetcher: SourceFetching {
         await preview.load(from: store)
         #expect(preview.document == nil)
         #expect(preview.selectedID == nil)
+    }
+}
+
+extension LinkSummaryTests {
+    @Test func switchingSummarizersAppliesToTheNextCapture() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let declined = SummaryProbe()
+        await declined.setUnavailable(true)
+        let engine = IngestionEngine(store: store, fetcher: SummaryFetcher(), summarizer: declined)
+        await engine.useSummarizer(FixtureLinkSummarizer())
+        _ = try await engine.enqueue("https://example.org/article")
+        try await engine.run()
+        let job = try #require(await store.captureJobs().first)
+        #expect(job.state == .ready)
+        let noteID = try #require(job.noteID)
+        let note = try #require(await store.document(id: noteID))
+        #expect(note.markdown.hasPrefix("A brief synthetic summary."))
+        #expect(await declined.documents.isEmpty)
+    }
+}
+
+extension LinkSummaryTests {
+    @Test func summaryFailuresNameTheirEngineOnce() {
+        let checked = SummaryFailure(engine: "ChatGPT", underlying: .unsupportedSummary)
+        #expect(checked
+            .errorDescription == "ChatGPT: " +
+            (LinkSummaryError.unsupportedSummary.errorDescription ?? ""))
+        // Apple's own messages already say Apple Intelligence.
+        let apple = SummaryFailure(engine: "Apple Intelligence", underlying: .unavailable)
+        #expect(apple.errorDescription == LinkSummaryError.unavailable.errorDescription)
+        #expect(SummaryFailure(engine: "", underlying: .failed).errorDescription ==
+            LinkSummaryError.failed.errorDescription)
     }
 }

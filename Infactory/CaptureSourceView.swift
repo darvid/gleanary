@@ -49,7 +49,7 @@ struct CaptureSourceView: View {
                         .foregroundStyle(.secondary)
                 }
                 if !detail.document.warnings.isEmpty {
-                    DisclosureGroup("Extraction notes (\(detail.document.warnings.count))") {
+                    RowDisclosure(title: "Extraction notes (\(detail.document.warnings.count))") {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(detail.document.warnings, id: \.self) {
@@ -143,6 +143,12 @@ struct CaptureSourceView: View {
         if let original, let artifact {
             if artifact.kind == .pdf {
                 RetainedPDFView(data: original, page: citation.page)
+            } else if artifact.kind == .image, let image = NSImage(data: original) {
+                ScrollView {
+                    Image(nsImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        .accessibilityLabel("Screenshot of the page when it was captured")
+                }
             } else if artifact.kind == .audio {
                 ContentUnavailableView(
                     "Audio retained locally",
@@ -186,6 +192,7 @@ struct CaptureSourceView: View {
         case .text: "txt"
         case .capture, .json: "json"
         case .audio: "m4a"
+        case .image: "jpg"
         }
         panel.nameFieldStringValue = artifact.name.hasSuffix("." + suffix) ? artifact
             .name : artifact.name + "." + suffix

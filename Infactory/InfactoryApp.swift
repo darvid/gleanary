@@ -14,7 +14,14 @@ struct InfactoryApp: App {
                 return LibraryModel(store: DocumentStore(url: url))
             }
         #endif
-        return LibraryModel()
+        return LibraryModel(screenshotter: WebPageScreenshotter())
+    }
+
+    /// The main window and the Settings window can both ask first; only one model is made.
+    private func ensureConversation() {
+        if conversation == nil {
+            conversation = Self.makeConversation(store: library.store)
+        }
     }
 
     private static func makeConversation(store: DocumentStore) -> ConversationModel {
@@ -34,7 +41,7 @@ struct InfactoryApp: App {
                     ContentView(library: library, conversation: conversation)
                 } else {
                     ProgressView("Opening workspace…")
-                        .task { conversation = Self.makeConversation(store: library.store) }
+                        .task { ensureConversation() }
                 }
             }
             .frame(minWidth: 900, minHeight: 600)
@@ -42,6 +49,19 @@ struct InfactoryApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1180, height: 780)
         .commands { InfactoryCommands() }
+
+        // The standard Mac home for settings: Infactory › Settings… (⌘,).
+        Settings {
+            if let conversation {
+                ConversationSettings(model: conversation, library: library)
+            } else {
+                ProgressView().frame(
+                    width: ConversationSettings.size.width,
+                    height: ConversationSettings.size.height
+                )
+                .task { ensureConversation() }
+            }
+        }
     }
 }
 
@@ -50,6 +70,9 @@ struct InfactoryActions {
     let newNote: () -> Void
     let attach: () -> Void
     let focus: () -> Void
+    /// Nil where the Library isn't showing, such as the conversation.
+    var importBookmarks: (() -> Void)?
+    var categorize: (() -> Void)?
 }
 
 private struct InfactoryActionsKey: FocusedValueKey {
@@ -71,6 +94,10 @@ private struct InfactoryCommands: Commands {
                 .disabled(actions?.enabled != true)
             Button("Attach Documents…") { actions?.attach() }.keyboardShortcut("o")
                 .disabled(actions?.enabled != true)
+            Button("Import Bookmarks…") { actions?.importBookmarks?() }
+                .disabled(actions?.enabled != true || actions?.importBookmarks == nil)
+            Button("Categorize Unfiled…") { actions?.categorize?() }
+                .disabled(actions?.enabled != true || actions?.categorize == nil)
         }
         CommandGroup(after: .textEditing) {
             Button("Focus Input") { actions?.focus() }.keyboardShortcut("f")

@@ -31,8 +31,14 @@ struct AtlasLayout: Sendable {
     private(set) var index: [AtlasNodeID: Int] = [:]
     let bounds: CGRect
 
-    /// Share of a region's height reserved for its label band.
-    static let labelBand = 0.3
+    /// Share of a region's height reserved for its label band, capped by `labelBandWidth` of its
+    /// width so tall, narrow regions don't open a gap far larger than their label.
+    static let labelBand = 0.18
+    static let labelBandWidth = 0.25
+    /// The overview draws at 1×, so layout units are points there: every region keeps room for
+    /// at least a compact title, but never more than `maximumBandShare` of its height.
+    static let minimumBand: CGFloat = 22
+    static let maximumBandShare = 0.45
     /// Smallest share of the parent's weight given to an empty or tiny category, so it stays
     /// discoverable without dominating.
     static let minimumShare = 0.015
@@ -92,7 +98,7 @@ struct AtlasLayout: Sendable {
         let gap: CGFloat
         if itemChildren {
             cells = Self.grid(count: node.children.count, in: content)
-            gap = min(cells[0].width, cells[0].height) * 0.12
+            gap = min(cells[0].width, cells[0].height) * 0.16
         } else {
             let floor = max(0.5, Double(node.itemCount) * Self.minimumShare)
             cells = Self.squarify(
@@ -108,9 +114,12 @@ struct AtlasLayout: Sendable {
     }
 
     private static func contentRect(for node: AtlasNode, in rect: CGRect) -> CGRect {
-        guard node.kind != .library else { return rect }
-        let band = min(rect.height * labelBand, rect.width * 0.4)
-        let padding = min(rect.width, rect.height) * 0.035
+        // The library and a category's own items have no label of their own.
+        guard node.kind != .library, node.kind != .direct else { return rect }
+        let natural = min(rect.height * labelBand, rect.width * labelBandWidth)
+        let band = min(max(natural, minimumBand), rect.height * maximumBandShare)
+        // A floor keeps small regions from pressing their contents against the edge.
+        let padding = max(min(rect.width, rect.height) * 0.045, min(4, rect.width / 8))
         return CGRect(
             x: rect.minX + padding,
             y: rect.minY + band,

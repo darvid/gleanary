@@ -178,7 +178,10 @@ extension DocumentStore {
         document: CapturedDocument,
         artifacts: [Artifact],
         favicon: StoredFavicon? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        summaryNote: String? = nil,
+        summaryEngine: String? = nil,
+        previewImage: Data? = nil
     ) throws -> UUID {
         var document = document
         try document.validate()
@@ -218,10 +221,14 @@ extension DocumentStore {
                 }
             } else {
                 let captureID = UUID()
-                let note = try Self.writeNote(
-                    MarkdownDocument(name: document.title, markdown: markdown),
-                    in: db
-                )
+                var replacement = MarkdownDocument(name: document.title, markdown: markdown)
+                let bookmark = try Self.unfetchedBookmark(job.request.replacingNoteID, in: db)
+                if let bookmark {
+                    replacement.id = bookmark.id
+                    replacement.revision = bookmark.revision
+                }
+                // Imported bookmarks stay out of the knowledge graph for now, even once fetched.
+                let note = try Self.writeNote(replacement, graph: bookmark == nil, in: db)
                 noteID = note.id
                 var metadata = document
                 metadata.blocks = []
@@ -242,21 +249,29 @@ extension DocumentStore {
                 }
                 try Self.replacePassages(note, in: db)
                 try Self.refreshGraphLinks(in: db)
+                if summary != nil, let summaryEngine, !summaryEngine.isEmpty {
+                    try db.execute(
+                        sql: "UPDATE notes SET summaryEngine = ? WHERE id = ?",
+                        arguments: [summaryEngine, noteID.uuidString]
+                    )
+                }
             }
             try db.execute(sql: """
             UPDATE notes SET sourceURL = coalesce(sourceURL, ?),
                 faviconURL = coalesce(?, faviconURL), faviconData = coalesce(?, faviconData),
-                faviconCheckedAt = coalesce(faviconCheckedAt, ?)
+                faviconCheckedAt = coalesce(faviconCheckedAt, ?),
+                previewImage = coalesce(?, previewImage)
             WHERE id = ?
             """, arguments: [document.sourceURL?.absoluteString ?? job.request.url?.absoluteString,
                              favicon?.url.absoluteString, favicon?.data,
-                             favicon == nil ? nil : now, noteID.uuidString])
+                             favicon == nil ? nil : now, previewImage, noteID.uuidString])
             try db.execute(
                 sql: "UPDATE ingestion_jobs SET state = 'ready', noteID = ?, error = NULL, progress = ?, updatedAt = ? WHERE id = ?",
                 arguments: [
                     noteID.uuidString,
                     existing == nil
-                        ? "Saved locally · \(document.coverage.label)\(document.warnings.isEmpty ? "" : " · Review extraction notes")"
+                        ? summaryNote.map { "Saved full text without a summary · \($0)" }
+                        ?? "Saved locally · \(document.coverage.label)\(document.warnings.isEmpty ? "" : " · Review extraction notes")"
                         : "Already captured; existing note kept · \(document.coverage.label)",
                     now,
                     job.id.uuidString,
@@ -301,7 +316,8 @@ extension DocumentStore {
         _ summary: String,
         artifact: Artifact,
         for document: MarkdownDocument,
-        captureID: UUID
+        captureID: UUID,
+        engine: String = ""
     ) throws -> MarkdownDocument {
         guard !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               summary.utf8.count <= CaptureLimits.markdownBytes,
@@ -341,7 +357,12 @@ extension DocumentStore {
             )
             var updated = document
             updated.markdown = summary
-            return try Self.writeNote(updated, in: db)
+            let note = try Self.writeNote(updated, in: db)
+            try db.execute(
+                sql: "UPDATE notes SET summaryEngine = ? WHERE id = ?",
+                arguments: [engine.isEmpty ? nil : engine, document.id.uuidString]
+            )
+            return note
         }
     }
 
@@ -370,7 +391,8 @@ extension DocumentStore {
         try readyDatabase().read { db in
             try String.fetchOne(
                 db,
-                sql: "SELECT id FROM captures WHERE noteID = ?",
+                // An upgraded bookmark keeps its import capture; the newest capture is the source.
+                sql: "SELECT id FROM captures WHERE noteID = ? ORDER BY createdAt DESC LIMIT 1",
                 arguments: [noteID.uuidString]
             ).map(Self.uuid)
         }
@@ -421,7 +443,7 @@ extension DocumentStore {
         else { throw CaptureError.staleJob }
     }
 
-    private static func recordArtifact(_ artifact: Artifact, in db: Database) throws {
+    static func recordArtifact(_ artifact: Artifact, in db: Database) throws {
         try db.execute(
             sql: "INSERT OR IGNORE INTO artifacts(hash, descriptor, createdAt) VALUES (?, ?, ?)",
             arguments: [

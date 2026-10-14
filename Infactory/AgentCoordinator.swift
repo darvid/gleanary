@@ -10,11 +10,12 @@ actor AgentCoordinator {
     init(
         store: DocumentStore,
         fetcher: any SourceFetching = SourceFetcher(),
-        inference: any ConversationInferring = AppleConversationInference()
+        inference: any ConversationInferring = AppleConversationInference(),
+        screenshotter: (any PageScreenshotting)? = nil
     ) {
         self.store = store
         self.inference = inference
-        ingestion = IngestionEngine(store: store, fetcher: fetcher)
+        ingestion = IngestionEngine(store: store, fetcher: fetcher, screenshotter: screenshotter)
         search = SearchEngine(store: store)
     }
 
@@ -101,9 +102,11 @@ actor AgentCoordinator {
         try await ingestion.cancel(id)
     }
 
-    func setInference(_ inference: any ConversationInferring) throws {
+    func setInference(_ inference: any ConversationInferring) async throws {
         guard !executing else { throw ConversationError.busy }
         self.inference = inference
+        // Captures made from Chat summarize with the same provider.
+        await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
     }
 
     private func capture(
@@ -407,7 +410,7 @@ actor AgentCoordinator {
     private func askForTargets(taskID: UUID) async throws {
         try await store.postConversation(
             author: .assistant,
-            text: "Which saved items should I use? Select up to four references or bring items from Library into #general.",
+            text: "Which saved items should I use? Select up to four references or bring items from Library into Chat.",
             taskID: taskID
         )
     }
@@ -666,8 +669,11 @@ actor AgentCoordinator {
         try await store.updateConversationTask(taskID, progress: "Searching library…")
         await changed()
         let response = try await search.search(query, limit: 20)
+        // Meaning-only matches always fill the list, however weak. When the words themselves
+        // appear somewhere, those documents are the answer and the near-misses are noise.
+        let worded = response.matches.filter { $0.keywordRank != nil }
         var seen = Set<UUID>()
-        let ids = Array(response.matches.map(\.passage.documentID)
+        let ids = Array((worded.isEmpty ? response.matches : worded).map(\.passage.documentID)
             .filter { seen.insert($0).inserted }.prefix(4))
         try await store.postConversation(
             author: author,
