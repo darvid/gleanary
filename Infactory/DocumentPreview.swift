@@ -90,7 +90,8 @@ struct DocumentPreview: View {
     var summaryEnabled = false
     var generatingSummary = false
     var generateSummary: (MarkdownDocument) -> Void = { _ in }
-    var cancelSummary: () -> Void = {}
+    /// Nil while the summary is written by the bookmark's page fetch, which can't stop here.
+    var cancelSummary: (() -> Void)? = {}
     var showsLibraryDetails = false
     /// Progress of the page fetch that will replace this bookmark's note, while it runs.
     var bookmarkFetch: String?
@@ -256,7 +257,9 @@ struct DocumentPreview: View {
                 }
                 .buttonStyle(.bordered)
                 .disabled(!summaryEnabled)
-                .help("Summarize the retained source. No download is needed.")
+                .help(summaryEnabled ? "Summarize the retained source. No download is needed."
+                    : bookmarkFetch != nil ? "Summarized when the page fetch finishes"
+                    : "Available once the current library task finishes")
             }
         }
         .controlSize(.large)
@@ -698,34 +701,31 @@ struct RowDisclosure<Content: View>: View {
     }
 }
 
-/// Summarize's place while it runs: one button that shows progress and stops it on click,
-/// instead of a loose spinner beside a separate Cancel button.
+/// Summarize's place while it runs: one button showing progress, with a stop mark that says
+/// what a click does, instead of a loose spinner beside a separate Cancel button.
 private struct SummarizingButton: View {
     let compact: Bool
-    let cancel: () -> Void
-    @State private var hovering = false
+    /// Nil shows progress only, for a summary the page fetch is writing.
+    let cancel: (() -> Void)?
 
     var body: some View {
-        Button(action: cancel) {
+        Button(action: cancel ?? {}) {
             HStack(spacing: 6) {
-                ZStack {
-                    ProgressView().controlSize(.small).opacity(hovering ? 0 : 1)
-                    Image(systemName: "stop.fill").opacity(hovering ? 1 : 0)
-                }
-                .frame(width: 16, height: 16)
+                ProgressView().controlSize(.small)
                 if !compact {
-                    // Both labels take space, so the button keeps its width on hover.
-                    ZStack(alignment: .leading) {
-                        Text("Summarizing…").opacity(hovering ? 0 : 1)
-                        Text("Stop").opacity(hovering ? 1 : 0)
-                    }
+                    Text("Summarizing…")
+                }
+                if cancel != nil {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
         .buttonStyle(.bordered)
-        .onHover { hovering = $0 }
-        .help("Stop summarizing")
+        .allowsHitTesting(cancel != nil)
+        .help(cancel == nil ? "Summarizing the fetched page" : "Stop summarizing")
         .accessibilityLabel("Summarizing")
-        .accessibilityHint("Stops summarizing")
+        .accessibilityHint(cancel == nil ? "" : "Stops summarizing")
     }
 }

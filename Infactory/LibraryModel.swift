@@ -201,8 +201,10 @@ final class LibraryModel {
         await documentGrid.reload()
     }
 
+    /// Not tied to the capture queue: background bookmark fetches can run for a long time, and
+    /// summary publication already rejects a note that changed meanwhile.
     var canGenerateSummaries: Bool {
-        ready && !busy && captureTask == nil
+        ready && !busy
     }
 
     func generateSummary(for document: MarkdownDocument) {
@@ -307,6 +309,14 @@ final class LibraryModel {
             return "Summarizing…"
         }
         return bookmarkFetch(for: noteID).map { _ in "Fetching page…" }
+    }
+
+    /// Whether this item's summary is being written, by Generate Summary or by the page fetch
+    /// upgrading its bookmark.
+    func summarizing(_ noteID: UUID) -> Bool {
+        generatingSummaryID == noteID
+            || bookmarkFetch(for: noteID)?.progress
+            .hasPrefix(IngestionEngine.summarizingProgress) == true
     }
 
     /// The background page fetch upgrading this bookmark, while it runs.

@@ -1,10 +1,12 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Edits a note in place of its reading view, so the library stays beside it.
 struct NoteEditor: View {
     let document: MarkdownDocument
     @Bindable var library: LibraryModel
-    @Environment(\.dismiss) private var dismiss
+    /// Leaves the editor; saving, discarding and deleting all end here.
+    let close: () -> Void
     @State private var name: String
     @State private var markdown: String
     @State private var history: [NoteRevision] = []
@@ -12,9 +14,10 @@ struct NoteEditor: View {
     @State private var exporting = false
     @State private var confirmingDiscard = false
 
-    init(document: MarkdownDocument, library: LibraryModel) {
+    init(document: MarkdownDocument, library: LibraryModel, close: @escaping () -> Void) {
         self.document = document
         self.library = library
+        self.close = close
         _name = State(initialValue: document.name)
         _markdown = State(initialValue: document.markdown)
     }
@@ -24,15 +27,19 @@ struct NoteEditor: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text(document.revision == nil ? "New note" : "Edit Markdown").font(.headline)
+                Label(
+                    document.revision == nil ? "New Note" : "Editing Markdown",
+                    systemImage: "square.and.pencil"
+                )
+                .font(.headline)
                 Spacer()
                 Button("Cancel") {
                     if changed {
                         confirmingDiscard = true
                     } else {
-                        dismiss()
+                        close()
                     }
                 }
                 .keyboardShortcut(.cancelAction)
@@ -43,7 +50,7 @@ struct NoteEditor: View {
                         draft.name = name
                         draft.markdown = markdown
                         if await library.save(draft) {
-                            dismiss()
+                            close()
                         } else {
                             message = library.error
                         }
@@ -54,23 +61,31 @@ struct NoteEditor: View {
                 .disabled(library.busy || name.trimmingCharacters(in: .whitespacesAndNewlines)
                     .isEmpty)
             }
-            TextField("Note name", text: $name)
-                .textFieldStyle(.roundedBorder)
+            .padding(.horizontal, 28).padding(.vertical, 12)
+            Divider()
+            // The title as the reading view shows it, so editing doesn't change the page's shape.
+            TextField("Title", text: $name)
+                .textFieldStyle(.plain)
+                .font(.title.weight(.bold))
                 .accessibilityLabel("Note name")
+                .padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 8)
             TextEditor(text: $markdown)
                 .font(.system(.body, design: .monospaced))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 23)
                 .accessibilityLabel("Markdown content")
-                .border(.separator)
             if let message {
                 Label(message, systemImage: "exclamationmark.triangle")
                     .font(.callout).textSelection(.enabled)
+                    .padding(.horizontal, 28).padding(.vertical, 8)
             }
+            Divider()
             HStack {
                 if document.revision != nil {
                     Button("Delete note", systemImage: "trash", role: .destructive) {
                         DeleteNoteConfirmation.present(document, library: library) { deleted in
                             if deleted {
-                                dismiss()
+                                close()
                             } else {
                                 message = library
                                     .error ??
@@ -101,13 +116,13 @@ struct NoteEditor: View {
                 Text("Saved locally. Search indexing runs in the background.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            .controlSize(.small)
+            .padding(.horizontal, 28).padding(.vertical, 10)
         }
-        .padding(24)
-        .frame(minWidth: 660, minHeight: 540)
+        .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         .disabled(library.busy)
-        .interactiveDismissDisabled(changed)
         .confirmationDialog("Discard unsaved changes?", isPresented: $confirmingDiscard) {
-            Button("Discard changes", role: .destructive) { dismiss() }
+            Button("Discard changes", role: .destructive) { close() }
         }
         .fileExporter(
             isPresented: $exporting,
