@@ -338,6 +338,9 @@ struct ContentView: View {
         guard let chatGPT = conversation?.chatGPT, chatGPT.useChatGPT else {
             return AppleLinkSummarizer()
         }
+        if chatGPT.models.isEmpty {
+            return DeferredChatGPTSummarizer(connection: chatGPT)
+        }
         do {
             return try chatGPT.inference() as? any LinkSummarizing ?? AppleLinkSummarizer()
         } catch {

@@ -56,7 +56,7 @@ final class ConversationModel {
 
     private func configureInference() async throws {
         if !customCoordinator {
-            try await coordinator.setInference(chatGPT.inference())
+            try await coordinator.setInference(chatGPT.requestInference())
         }
     }
 

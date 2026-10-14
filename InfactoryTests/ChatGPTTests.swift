@@ -95,6 +95,37 @@ private actor FixtureChatGPTTransport: ChatGPTTransporting {
     }
 }
 
+/// Answers each request with the next status in turn, repeating the last one.
+private actor SequencedChatGPTTransport: ChatGPTTransporting {
+    let response = Data(
+        "{\"models\":[{\"slug\":\"fixture\",\"display_name\":\"Fixture model\",\"visibility\":\"list\"}]}"
+            .utf8
+    )
+    var statuses: [Int]
+
+    init(statuses: [Int]) {
+        self.statuses = statuses
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let status = statuses.count > 1 ? statuses.removeFirst() : statuses[0]
+        let url = try #require(request.url)
+        return try (
+            response,
+            #require(HTTPURLResponse(
+                url: url,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: nil
+            ))
+        )
+    }
+
+    nonisolated func lines(for _: URLRequest) -> AsyncThrowingStream<String, any Error> {
+        AsyncThrowingStream { $0.finish(throwing: ChatGPTError.invalidStream) }
+    }
+}
+
 private struct FixtureChatGPTIdentity: ChatGPTIdentityVerifying {
     let subject: String
     func verify(
@@ -411,6 +442,40 @@ struct ChatGPTTests {
         connection.setConsent(false)
         #expect(!connection.useChatGPT)
         #expect(try connection.inference().capabilities.local)
+    }
+
+    /// A model fetch that failed at startup is retried by the next request, and a retry that
+    /// also fails reports why rather than an unavailable model.
+    @Test(arguments: [([500, 200], true), ([500], false)])
+    @MainActor func requestReloadsModelsThatFailedToLoad(
+        statuses: [Int],
+        recovers: Bool
+    ) async throws {
+        let account = registration()
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: SequencedChatGPTTransport(statuses: statuses),
+            hostID: "fixture"
+        )
+        let suite = "infactory-model-reload-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        connection.setConsent(true)
+        connection.setEnabled(true)
+        #expect(connection.models.isEmpty)
+        #expect(throws: ChatGPTError.modelDenied) { try connection.inference() }
+
+        if recovers {
+            #expect(try await !connection.requestInference().capabilities.local)
+            #expect(connection.selectedModel == "fixture")
+        } else {
+            await #expect(throws: ChatGPTError.server) { try await connection.requestInference() }
+        }
     }
 
     @Test @MainActor func selectingChatGPTPromptsForConsentInsteadOfSilentlyIgnoringTheChoice(

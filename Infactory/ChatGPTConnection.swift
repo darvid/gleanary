@@ -30,6 +30,8 @@ final class ChatGPTConnection {
     @ObservationIgnored private var signInTask: Task<Void, Never>?
     @ObservationIgnored private let preferences: UserDefaults
     @ObservationIgnored private var enableAfterSignIn = false
+    /// Why the last model fetch failed, so a request reports that rather than a missing model.
+    @ObservationIgnored private var catalogError: ChatGPTError?
 
     init(session: ChatGPTSession = ChatGPTSession(), preferences: UserDefaults = .standard) {
         self.session = session
@@ -62,6 +64,7 @@ final class ChatGPTConnection {
         defer { busy = false }
         models = []
         selectedModel = ""
+        catalogError = nil
         do {
             models = try await session.catalog()
             let saved = preferences.string(forKey: "chatgpt.model." + (activeID ?? ""))
@@ -73,7 +76,10 @@ final class ChatGPTConnection {
                 .isEmpty ?
                 "No models are available for this account. Use on-device inference or try another account." :
                 nil
-        } catch { self.error = safeMessage(error) }
+        } catch {
+            catalogError = error as? ChatGPTError ?? .server
+            self.error = safeMessage(error)
+        }
     }
 
     func selectAccount(_ id: String) async {
@@ -177,6 +183,19 @@ final class ChatGPTConnection {
         else { throw ChatGPTError.modelDenied }
         preferences.set(selectedModel, forKey: "chatgpt.model." + (activeID ?? ""))
         return ChatGPTConversationInference(session: session, model: selectedModel)
+    }
+
+    /// `inference()` for a request made now. Models load once at startup, and a fetch that failed
+    /// then (offline, an expired token) would fail every request until Refresh Models, so a
+    /// request with no models fetches them again first.
+    func requestInference() async throws -> any ConversationInferring {
+        if useChatGPT, models.isEmpty, !busy {
+            await refreshModels()
+            if let catalogError {
+                throw catalogError
+            }
+        }
+        return try inference()
     }
 
     func signIn(accountID: String? = nil) {
