@@ -95,14 +95,14 @@ The hidden-title-bar window defaults to 1180 × 780pt with a 900 × 600pt minimu
 
 | Region | Minimum | Ideal | Maximum |
 | --- | ---: | ---: | ---: |
-| Filing sidebar | 160pt | 190pt | 240pt |
+| Filing sidebar | 180pt | 220pt | 340pt (drag its edge; double-click resets) |
 | Document list | 260pt | 330pt | 440pt |
 | Capture list | 260pt | 360pt | 480pt |
 | Reading detail | 320pt | Flexible | Flexible |
 
 Reading content is leading-aligned, capped at 640pt before its reading inset. Document/action stacks use the frontmatter rhythm; toolbar horizontal inset is the reading-stack token and vertical inset is standard. List header and footer share list-inset. Rows reserve 18pt for SF Symbols; nested filing rows indent 10pt. Tables scroll horizontally, with 150pt cells and 16pt column gaps.
 
-Preview actions use `ViewThatFits` to replace text labels with SF Symbols when needed, retaining accessibility labels and help. Search reload is debounced by 250ms; results paginate in groups of 80. These are behavior values, not animation tokens.
+Preview actions use `ViewThatFits` to replace text labels with SF Symbols when needed, retaining accessibility labels and help. Search reload is debounced by 250ms; results paginate in groups of 80. These are behavior values, not animation tokens. Text that changes on screen moves one way everywhere (`StatusText.swift`): status wording cross-fades over 0.2s, counts roll with `numericText`. In-progress status uses the animated `progress.indicator` symbol on the text baseline, not a spinner.
 
 ## Elevation & Depth
 
@@ -126,7 +126,7 @@ Search and preview-action radii are the frontmatter's small, observed curves. Li
 - **Library agent changes:** with ChatGPT connected, multi-item requests such as retitling an inbox run a bounded tool loop that only proposes. Its reply carries one card (checklist symbol, a count per kind, "Proposed · nothing changes until you apply", and Review Changes…). The review sheet lists every change with a checkbox, grouped Titles, Summaries, New categories, Filing; old titles are struck through, new categories use the green New badge, and a filing into a proposed category selects with it. Applying rejects the unselected rest; the card then shows counts and Undo.
 - **Atlas thumbnails:** item tiles at least 88 × 54pt on screen show their page or video still as a duotone in the category colour, fading to the tile fill under the title. Stills load lazily for visible tiles only.
 - **Handoff:** pinned below list pagination; selected count, Clear, and Use in Chat. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
-- **Recovery and mutation:** native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, monospaced Markdown, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
+- **Recovery and mutation:** a failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Captures, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, monospaced Markdown, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
 
 The sidecar's HTML/CSS samples are portable illustrations, not shipping components or a substitute for native focus, selection, typography, and accessibility behavior.
 

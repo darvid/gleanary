@@ -440,6 +440,7 @@ struct ConversationView: View {
                     ProgressView().controlSize(.mini).offset(y: 0.5)
                     Text(task.progress.isEmpty ? "Working…" : task.progress)
                         .font(.caption).foregroundStyle(.secondary)
+                        .fadesOnChange(task.progress)
                 }
                 // The composer's send button doubles as Stop; keep Escape without a second control.
                 .background {

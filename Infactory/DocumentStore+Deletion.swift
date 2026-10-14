@@ -114,6 +114,43 @@ extension DocumentStore {
         return removed
     }
 
+    /// Forgets failed captures, the given ones or every failed one. Files only they retained are
+    /// queued for cleanup. A cleared bookmark fetch can run again when the item is next opened.
+    @discardableResult
+    func clearFailedCaptures(_ ids: [UUID]? = nil) throws -> Int {
+        try readyDatabase().write { db in
+            var hashes = Set<String>()
+            var cleared = 0
+            for row in try Row.fetchAll(
+                db, sql: "SELECT id, request, acquired FROM ingestion_jobs WHERE state = 'failed'"
+            ) {
+                let rawID: String = row["id"]
+                if let ids, !ids.contains(where: { $0.uuidString == rawID }) {
+                    continue
+                }
+                try hashes.formUnion(
+                    JSONDecoder().decode([Artifact].self, from: row["acquired"]).map(\.hash)
+                )
+                if let artifact = try JSONDecoder()
+                    .decode(CaptureRequest.self, from: row["request"]).artifact
+                {
+                    hashes.insert(artifact.hash)
+                }
+                try db.execute(sql: "DELETE FROM ingestion_jobs WHERE id = ?", arguments: [rawID])
+                cleared += 1
+            }
+            let referenced = try Self.referencedArtifactHashes(in: db)
+            for hash in hashes.subtracting(referenced) {
+                try db.execute(sql: "DELETE FROM artifacts WHERE hash = ?", arguments: [hash])
+                try db.execute(
+                    sql: "INSERT OR IGNORE INTO artifact_deletions(hash) VALUES (?)",
+                    arguments: [hash]
+                )
+            }
+            return cleared
+        }
+    }
+
     private static func referencedArtifactHashes(in db: Database) throws -> Set<String> {
         var referenced = Set<String>()
         for data in try Data.fetchAll(

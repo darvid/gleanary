@@ -95,6 +95,9 @@ struct DocumentPreview: View {
     var showsLibraryDetails = false
     /// Progress of the page fetch that will replace this bookmark's note, while it runs.
     var bookmarkFetch: String?
+    /// Why the last page fetch for this bookmark failed, until it's tried again.
+    var bookmarkFetchFailure: String?
+    var retryBookmarkFetch: () -> Void = {}
     var openDocument: (UUID) -> Void = { _ in }
     var editDocument: ((MarkdownDocument) -> Void)?
     var fileDocument: ((MarkdownDocument) -> Void)?
@@ -314,14 +317,35 @@ struct DocumentPreview: View {
             if let bookmarkFetch {
                 infoRow("Status") {
                     // One line, so the card doesn't change height as each step reports in.
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.mini)
-                        Text(bookmarkFetch.isEmpty ? "Waiting to fetch the page" : bookmarkFetch)
+                    // The same animated symbol as library rows and Captures: it sits on the
+                    // text's baseline, which a spinner doesn't.
+                    let step = bookmarkFetch.isEmpty ? "Waiting to fetch the page" : bookmarkFetch
+                    Label {
+                        Text(step)
                             .lineLimit(1).truncationMode(.tail)
+                            .fadesOnChange(step)
+                    } icon: {
+                        Image(systemName: "progress.indicator")
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                            .foregroundStyle(.secondary)
                     }
                     .help(
                         "Fetching the full page. This bookmark's notes will be replaced by the page and its summary."
                     )
+                }
+            } else if let bookmarkFetchFailure {
+                infoRow("Status") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .symbolRenderingMode(.multicolor).accessibilityHidden(true)
+                            Text("Couldn't fetch the page")
+                            Button("Try Again", action: retryBookmarkFetch).buttonStyle(.link)
+                        }
+                        Text(bookmarkFetchFailure).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2).textSelection(.enabled)
+                    }
+                    .help("The bookmark is kept as it was imported.")
                 }
             }
             infoRow("Filed in") { filing(document) }

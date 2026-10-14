@@ -72,6 +72,7 @@ struct KnowledgeAtlasView: View {
                     Text(focus.node.label).font(.title3.weight(.semibold)).lineLimit(1)
                         .accessibilityAddTraits(.isHeader)
                     Text(summary(of: focus)).font(.callout).foregroundStyle(.secondary)
+                        .fadesOnChange(summary(of: focus))
                         .monospacedDigit().lineLimit(1)
                 }
             }
