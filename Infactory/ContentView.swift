@@ -271,7 +271,7 @@ struct ContentView: View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
         } else if automating {
-            AutomationsView(model: library.automations)
+            AutomationsView(model: library.automations, open: openSavedItem)
         } else if presentation == .list || scope == .captures || scope == .archived {
             libraryColumns
         } else {
@@ -452,9 +452,7 @@ struct ContentView: View {
                     ContentUnavailableView(
                         "Capture recovery",
                         systemImage: "tray.and.arrow.down",
-                        description: Text(
-                            "Retry failed captures or inspect their saved documents. Retained originals are reused where available."
-                        )
+                        description: Text("Retry a failed capture or open what it saved.")
                     )
                 } else {
                     detail()
@@ -506,6 +504,7 @@ struct ContentView: View {
     /// clears the selection, so the item is selected after that, not before.
     private func openSavedItem(_ id: UUID) {
         chatting = false
+        automating = false
         pendingSelection = id
         if scope == .all {
             revealPendingSelection()
@@ -644,6 +643,19 @@ struct ContentView: View {
                 Label("Automations", systemImage: "clock.arrow.2.circlepath")
                     .labelStyle(LibrarySidebarLabelStyle(color: color))
                 Spacer()
+                if library.automations.running != nil {
+                    Image(systemName: "progress.indicator")
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                        .font(.caption).foregroundStyle(color.opacity(0.72))
+                        .help("An automation is running")
+                        .accessibilityLabel("An automation is running")
+                }
+                if !library.automations.failed.isEmpty {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                        .help("An automation's last run failed")
+                        .accessibilityLabel("An automation's last run failed")
+                }
                 // Proposals waiting for review, like Captures' count of failures.
                 let waiting = library.automations.pendingCount
                 if waiting > 0 {
@@ -735,7 +747,7 @@ struct ContentView: View {
         .opacity(hidden ? 0.4 : 1)
         .padding(.leading, category.code.contains(".") ? 10 : 0)
         .tag(SidebarItem.library(.category(category.id)))
-        .help(hidden ? "\(category.label) · Empty · hidden in the map" : category.label)
+        .help(hidden ? "\(category.label) is empty and hidden in the map" : category.label)
         .accessibilityElement(children: .combine)
         .accessibilityValue(hidden ? "Empty, hidden in the map" : "")
     }
@@ -1065,13 +1077,14 @@ struct ContentView: View {
         if !library.documentGrid.query.isEmpty {
             return "Try another term or choose All items to search more broadly."
         }
+        // Empty states keep to one line, so the icon stays put moving between views.
         if scope == .archived {
-            return "Items you archive, or whose archiving you accept from the link checker, stay here and out of search."
+            return "Archived items stay here, out of search."
         }
         if case .category = scope {
-            return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in Chat."
+            return "File items here from their details or Chat."
         }
-        return "Save a source in Chat or import a document. Unfiled items can be assigned a filing home."
+        return "Save a URL in Chat or import a document."
     }
 
     private var scopeTitle: String {

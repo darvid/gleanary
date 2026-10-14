@@ -756,10 +756,10 @@ extension LinkSummaryTests {
     @Test func providerProblemsAreToldApartFromOnePagesFailure() {
         let denied = ChatGPTError.modelDenied.errorDescription ?? ""
         #expect(LibraryModel.providerProblem(
-            in: "Saved full text without a summary · \(denied)"
+            in: "Saved full text without a summary: \(denied)"
         ) == denied)
         #expect(LibraryModel.providerProblem(
-            in: "Saved full text without a summary · " +
+            in: "Saved full text without a summary: " +
                 (LinkSummaryError.unsupportedSummary.errorDescription ?? "")
         ) == nil)
         #expect(LibraryModel.providerProblem(in: "Ready") == nil)

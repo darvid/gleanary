@@ -26,7 +26,7 @@ struct MindMapInspector: View {
                     .labelStyle(.iconOnly).buttonStyle(.plain)
                 }
                 Text(node.summary).font(.callout).textSelection(.enabled)
-                Label("Generated interpretation · verify with the source", systemImage: "sparkles")
+                Label("Generated interpretation. Verify with the source.", systemImage: "sparkles")
                     .font(.caption).foregroundStyle(.secondary)
                 Divider()
                 if library.graph.mapEvidence.isEmpty {

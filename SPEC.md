@@ -444,7 +444,14 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 - Archive proposals are always `propose` (§7.5). Automations never trash or delete.
 - Cloud inference requires the existing ChatGPT enablement and consent; an automation set to local-only never sends content off the Mac.
 
-**Progress markers.** Selections that walk the library ("oldest first") must not revisit the same items every run. Store per-item, per-check timestamps (for example `accessCheckedAt` and `linksCheckedAt`), and select items that were never checked or were checked longer ago than the automation's interval.
+**Progress markers.** Selections that walk the library ("oldest first") must not revisit the same items every run. Store per-item, per-check timestamps (for example `accessCheckedAt` and `linksCheckedAt`), and select items that were never checked or were checked longer ago than the automation's recheck interval.
+
+**Large libraries.** A library of thousands of items must be covered without manual tuning:
+
+- Never-checked items come first, newest first, so anything just saved is in the next run; then whatever was checked longest ago.
+- Checks that repeat (link checks and cross-linking) have a **Recheck items** setting: every week, month (the default), 3 months or 6 months. A run takes at least enough to get through what's due within that interval at its schedule, never fewer than the user's batch and never more than 1,000. Failing links are still retried the next day, and the archive rule (three failures over a week) is fixed. Summaries keep to the user's batch; the daily model budget limits them.
+- Link checks run several sites at once, each site's links one at a time with a pause between, so no site sees a burst.
+- Each automation shows what's due now and about how many runs that is, counted in SQLite rather than by loading the items.
 
 **Runs.** Each run is persisted with its automation, start/end, items examined, items changed, items skipped with reasons, model calls used, and status (`succeeded`, `partial`, `failed`, `cancelled`). Proposed changes from one run form one changeset in the existing review sheet, and Undo applies per run. Runs are cancellable. Retrying a run never duplicates artifacts (§8).
 
@@ -452,6 +459,7 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 
 - Runs happen in-process while the app is open, scheduled with `NSBackgroundActivityScheduler` so macOS can defer them under load or on battery.
 - A run missed while the app was closed runs once on next launch, not once per missed interval.
+- Automations that work on new items (summaries, cross-linking) also run shortly after a save, once per burst of saves, rather than waiting for their schedule.
 - Automations run one at a time and share a single lock with user-started ingestion and summaries.
 - User-started work always comes first, and an automation run yields between items.
 - Running with the app closed (a login-item helper via `SMAppService`) is a later, opt-in step, not part of the first version.

@@ -245,7 +245,7 @@ struct BookmarkImportView: View {
             .font(.headline)
             Group {
                 Text(
-                    "\(report.filed.formatted()) filed from folders · \(report.unfiledIDs.count.formatted()) unfiled"
+                    "\(report.filed.formatted()) filed from folders, \(report.unfiledIDs.count.formatted()) unfiled"
                 )
                 if report.categoriesCreated > 0 {
                     Text("\(report.categoriesCreated) new categories")
@@ -272,7 +272,7 @@ struct BookmarkImportView: View {
         if draft.file.skipped > 0 {
             parts.append("\(draft.file.skipped.formatted()) skipped (not web pages)")
         }
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: ", ")
     }
 
     // MARK: Destinations
@@ -386,8 +386,8 @@ struct BookmarkImportView: View {
         let created = result.plan.newCategories.count
         librarianNote = (result
             .changed == 1 ? "Changed 1 folder" : "Changed \(result.changed) folders")
-            + (created == 0 ? "." : created == 1 ? " · 1 new category."
-                : " · \(created) new categories.")
+            + (created == 0 ? "." : created == 1 ? ", 1 new category."
+                : ", \(created) new categories.")
     }
 
     private func undoLibrarian() {

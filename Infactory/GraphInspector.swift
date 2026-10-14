@@ -27,7 +27,7 @@ struct GraphInspector: View {
                 {
                     Text(job
                         .error ??
-                        "Connections are incomplete · \(job.completed)/\(job.total) sections · \(job.state)")
+                        "Connections are incomplete: \(job.completed) of \(job.total) sections, \(job.state)")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Divider()
@@ -112,7 +112,7 @@ struct GraphActivityView: View {
                                 Text(job.name).lineLimit(1)
                                 Text(job
                                     .error ??
-                                    "\(job.completed)/\(job.total) sections · \(job.state)")
+                                    "\(job.completed) of \(job.total) sections, \(job.state)")
                                     .font(.caption).foregroundStyle(.secondary)
                                     .textSelection(.enabled)
                             }

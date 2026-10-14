@@ -24,7 +24,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .inboxSummarizer:
             "Summarizes Inbox items that have their full text but no summary yet."
         case .linkChecker:
-            "Checks that saved sources' original links still work, and proposes archiving ones that stay gone."
+            "Checks that saved sources' original links still work, proposes updating ones that moved, and archiving ones that stay gone."
         case .crossLinker:
             "Looks for related items among those with no links yet, and proposes links with a reason."
         }
@@ -33,9 +33,9 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// What the automation may do on its own; enforced by `AutomationEngine`, not prompts.
     var policy: String {
         switch self {
-        case .inboxSummarizer: "Applies summaries · Undo per run"
-        case .linkChecker: "Reports · proposes archiving for review"
-        case .crossLinker: "Proposes links for review"
+        case .inboxSummarizer: "Writes summaries; you can undo a run"
+        case .linkChecker: "Proposes link updates and archiving; you review first"
+        case .crossLinker: "Proposes links; you review first"
         }
     }
 
@@ -52,6 +52,31 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .inboxSummarizer: .researcher
         case .linkChecker: .librarian
         case .crossLinker: .curator
+        }
+    }
+
+    /// Runs soon after something new is saved, not only on its schedule. Checking a link just
+    /// fetched would tell nothing new.
+    var followsNewItems: Bool {
+        self != .linkChecker
+    }
+
+    /// Whether this automation revisits items it already checked, so its recheck interval
+    /// means something.
+    var rechecks: Bool {
+        self != .inboxSummarizer
+    }
+
+    static let defaultRecheck: TimeInterval = 30 * 24 * 60 * 60
+    static let recheckChoices: [TimeInterval] = [7, 30, 91, 182].map { $0 * 24 * 60 * 60 }
+
+    static func recheckLabel(_ interval: TimeInterval) -> String {
+        switch Int((interval / 86400).rounded()) {
+        case 7: "Every week"
+        case 30: "Every month"
+        case 91: "Every 3 months"
+        case 182: "Every 6 months"
+        case let days: "Every \(days) days"
         }
     }
 
@@ -107,6 +132,9 @@ struct AutomationConfig: Sendable, Equatable, Identifiable {
     /// False keeps the automation on-device: it skips rather than send content to ChatGPT.
     var cloudAllowed = true
     var dailyCalls: Int
+    /// How long after a successful check an item is due again. Batches are sized so every
+    /// item is checked within this.
+    var recheck: TimeInterval
     var lastRunAt: Date?
 
     var id: AutomationKind {
@@ -119,6 +147,7 @@ struct AutomationConfig: Sendable, Equatable, Identifiable {
         interval = kind.defaultInterval
         batchLimit = kind.defaultBatch
         dailyCalls = kind.defaultDailyCalls
+        recheck = AutomationKind.defaultRecheck
     }
 
     /// When the next scheduled run is due. A run missed while the app was closed is due now,
@@ -149,7 +178,50 @@ struct AutomationRun: Identifiable, Sendable, Equatable {
     var proposed = 0
     var skipped = 0
     var calls = 0
+    /// Notes about the run as a whole: why it skipped or paused, or how it failed.
     var report: [String] = []
+    /// What happened to each item that needed mentioning, grouped by outcome when shown.
+    var entries: [AutomationEntry] = []
+    /// Items that were fine and needed nothing, counted rather than listed.
+    var fine = 0
+
+    mutating func note(
+        _ outcome: AutomationEntry.Outcome,
+        _ itemID: UUID?,
+        _ title: String,
+        _ detail: String
+    ) {
+        entries.append(AutomationEntry(
+            outcome: outcome,
+            itemID: itemID,
+            title: title,
+            detail: detail
+        ))
+    }
+}
+
+/// One item's outcome in an automation run.
+struct AutomationEntry: Codable, Sendable, Equatable {
+    enum Outcome: String, Codable, Sendable, CaseIterable {
+        /// Changed by the run itself, such as a written summary.
+        case changed
+        /// A change waiting for review.
+        case proposed
+        /// Moved permanently, with nothing proposed.
+        case moved
+        /// Not found; archiving is proposed only after repeated failures.
+        case unreachable
+        /// Needs a login or refused the check; never archived for that.
+        case restricted
+        /// Didn't answer properly; checked again soon.
+        case retry
+        case skipped
+    }
+
+    var outcome: Outcome
+    var itemID: UUID?
+    var title: String
+    var detail: String
 }
 
 // MARK: Link checking

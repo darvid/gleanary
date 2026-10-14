@@ -36,7 +36,7 @@ struct KnowledgeAtlasView: View {
                     atlas.loading ? "Loading library…" : "Nothing to map yet",
                     systemImage: "square.grid.3x3",
                     description: Text(
-                        "Save a source in Chat or import a document. Filed items appear here by category."
+                        "Save a URL in Chat or import a document."
                     )
                 ).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -435,7 +435,7 @@ struct KnowledgeAtlasView: View {
         if atlas.matches != nil, let position = atlas.layout.index[tile.id] {
             parts.append("\(atlas.matchCounts[position].formatted()) match")
         }
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: ", ")
     }
 
     private func detail(of tile: AtlasTile) -> String {
@@ -453,7 +453,7 @@ struct KnowledgeAtlasView: View {
         if let last = tile.node.lastActivity {
             parts.append("updated \(last.formatted(.relative(presentation: .named)))")
         }
-        return parts.joined(separator: " · ")
+        return parts.joined(separator: ", ")
     }
 
     private func count(_ value: Int) -> String {

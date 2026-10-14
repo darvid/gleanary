@@ -707,8 +707,8 @@ actor AgentCoordinator {
         let artifact = try await store.saveResearch(
             citedResult,
             name: sources
-                .count > 1 ? "Comparison · \(sources[0].note.name)" :
-                "Research · \(sources[0].note.name)",
+                .count > 1 ? "Comparison: \(sources[0].note.name)" :
+                "Research: \(sources[0].note.name)",
             sources: sources,
             taskID: taskID,
             provider: inference.capabilities.identifier,

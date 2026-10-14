@@ -28,7 +28,7 @@ actor PDFExtractor {
             )
         for index in 0 ..< pdf.pageCount {
             try Task.checkCancellation()
-            try await progress("Reading PDF text · page \(index + 1) of \(pdf.pageCount)")
+            try await progress("Reading PDF text, page \(index + 1) of \(pdf.pageCount)")
             guard let page = pdf.page(at: index) else {
                 result.partial = true
                 result.warnings.append("Page \(index + 1) could not be read.")
@@ -79,7 +79,7 @@ actor PDFExtractor {
                 : []
             return PDFPageContent(blocks: [native], warnings: warnings)
         }
-        try await progress("Running OCR · page \(number) of \(total)")
+        try await progress("Running OCR on page \(number) of \(total)")
         do {
             let image = try Self.render(page)
             var request = RecognizeDocumentsRequest()

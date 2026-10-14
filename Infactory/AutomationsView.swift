@@ -1,39 +1,37 @@
 import SwiftUI
 
-/// The built-in automations: whether each runs, how often, what it may change, what it did,
-/// and what it's waiting on you to review.
+/// The built-in automations as a list beside the selected one's settings, review and history,
+/// laid out like the library.
 struct AutomationsView: View {
     let model: AutomationsModel
+    /// Shows an item mentioned in a run.
+    let open: (UUID) -> Void
+    @State private var selected: AutomationKind? = AutomationKind.allCases.first
     @State private var reviewing: AutomationKind?
 
     var body: some View {
-        // Cards on the window rather than a grouped Form, which centers itself at a fixed width
-        // unlike the app's other pages.
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(
-                    "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Apart from summaries, nothing changes until you review it."
-                )
-                .font(.callout).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                if let error = model.error {
-                    AutomationCard {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
-                            .symbolRenderingMode(.multicolor)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                ForEach(AutomationKind.allCases) { kind in
-                    AutomationSection(
+        HSplitView {
+            list.frame(minWidth: 260, idealWidth: 330, maxWidth: 440, maxHeight: .infinity)
+            Group {
+                if let selected {
+                    AutomationDetail(
                         model: model,
-                        config: model.config(kind),
-                        review: { reviewing = kind }
+                        config: model.config(selected),
+                        review: { reviewing = selected },
+                        open: open
+                    )
+                    .id(selected)
+                } else {
+                    ContentUnavailableView(
+                        "Select an automation",
+                        systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90",
+                        description: Text("Choose one to see its schedule and history.")
                     )
                 }
             }
-            .padding(24)
+            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await model.load() }
         .sheet(item: $reviewing) { kind in
             AgentChangesReview(
@@ -44,12 +42,121 @@ struct AutomationsView: View {
             )
         }
     }
+
+    static let intro =
+        "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Apart from summaries, nothing changes until you review it."
+
+    private var list: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Automations").font(.title3.weight(.semibold))
+                Text(Self.intro).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            Divider()
+            List(selection: $selected) {
+                ForEach(AutomationKind.allCases) { kind in
+                    AutomationListRow(model: model, config: model.config(kind)).tag(kind)
+                }
+            }
+            .listStyle(.inset)
+            .accessibilityLabel("Automations")
+        }
+    }
 }
 
-private struct AutomationSection: View {
+/// One automation in the list: what it is, whether it's on, and how it's doing at a glance.
+private struct AutomationListRow: View {
+    let model: AutomationsModel
+    let config: AutomationConfig
+
+    private var kind: AutomationKind {
+        config.kind
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AutomationTile(kind: kind, size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(kind.title).font(.headline)
+                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .fadesOnChange(status)
+            }
+            Spacer(minLength: 8)
+            indicator
+            Toggle(kind.title, isOn: Binding {
+                config.enabled
+            } set: { enabled in
+                var updated = config
+                updated.enabled = enabled
+                model.update(updated)
+            })
+            .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+        }
+        .padding(.vertical, 4)
+    }
+
+    /// Running, failed, or waiting on you; the sidebar shows the same marks.
+    @ViewBuilder private var indicator: some View {
+        let waiting = model.pending[kind]?.count ?? 0
+        if model.running == kind {
+            Image(systemName: "progress.indicator")
+                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Running")
+        } else if model.failed.contains(kind) {
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                .help("The last run failed")
+                .accessibilityLabel("Last run failed")
+        }
+        if waiting > 0 {
+            Text(waiting.formatted())
+                .font(.caption.weight(.semibold)).monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(Color.accentColor, in: Capsule())
+                .countsOnChange(waiting)
+                .help(waiting == 1 ? "1 proposal to review" : "\(waiting) proposals to review")
+                .accessibilityLabel(waiting == 1 ? "1 proposal to review"
+                    : "\(waiting) proposals to review")
+        }
+    }
+
+    private var status: String {
+        if model.running == kind {
+            return "Running…"
+        }
+        var parts = [config.enabled ? AutomationKind.intervalLabel(config.interval) : "Off"]
+        if let run = model.runs[kind]?.first {
+            parts.append(run.status == .failed
+                ? "failed \(run.startedAt.formatted(.relative(presentation: .named)))"
+                : "ran \(run.startedAt.formatted(.relative(presentation: .named)))")
+        }
+        return parts.joined(separator: ", ")
+    }
+}
+
+private struct AutomationTile: View {
+    let kind: AutomationKind
+    let size: CGFloat
+
+    var body: some View {
+        Image(systemName: kind.symbol)
+            .font(size > 32 ? .title2 : .body).foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(kind.color.gradient, in: RoundedRectangle(cornerRadius: size / 4))
+            .accessibilityHidden(true)
+    }
+}
+
+/// The selected automation's settings, what's waiting for review, and its runs.
+private struct AutomationDetail: View {
     let model: AutomationsModel
     let config: AutomationConfig
     let review: () -> Void
+    let open: (UUID) -> Void
 
     private var kind: AutomationKind {
         config.kind
@@ -64,65 +171,106 @@ private struct AutomationSection: View {
     }
 
     var body: some View {
-        AutomationCard {
-            header
-            AutomationRow("Schedule") {
-                Picker("Schedule", selection: binding(\.interval)) {
-                    ForEach(kind.intervals, id: \.self) {
-                        Text(AutomationKind.intervalLabel($0)).tag($0)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                if let error = model.error {
+                    AutomationCard {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .labelsHidden().fixedSize()
-            }
-            AutomationRow("Allowed to") { Text(kind.policy).foregroundStyle(.secondary) }
-            AutomationRow("Last run") { lastRunStatus }
-            if config.enabled, !running, let next = config.nextRunAt {
-                AutomationRow("Next run") {
-                    Text(next > Date() ? next
-                        .formatted(.relative(presentation: .named)) : "Shortly")
-                        .foregroundStyle(.secondary)
+                if let pending = model.pending[kind], !pending.isEmpty {
+                    AutomationCard {
+                        AutomationRow {
+                            Label(
+                                "\(AgentChangesCard.breakdown(pending)) waiting",
+                                systemImage: "checklist"
+                            )
+                        } content: {
+                            Button("Review \(pending.count.formatted())…", action: review)
+                                .buttonStyle(.borderedProminent).controlSize(.small)
+                        }
+                    }
                 }
-            }
-            if let pending = model.pending[kind], !pending.isEmpty {
-                AutomationRow {
-                    Label(
-                        "\(AgentChangesCard.breakdown(pending)) waiting",
-                        systemImage: "checklist"
+                AutomationCard {
+                    AutomationRow("Schedule") {
+                        Picker("Schedule", selection: binding(\.interval)) {
+                            ForEach(kind.intervals, id: \.self) {
+                                Text(AutomationKind.intervalLabel($0)).tag($0)
+                            }
+                        }
+                        .labelsHidden().fixedSize()
+                    }
+                    if kind.rechecks {
+                        Divider()
+                        AutomationRow("Recheck items") {
+                            Picker("Recheck items", selection: binding(\.recheck)) {
+                                ForEach(AutomationKind.recheckChoices, id: \.self) {
+                                    Text(AutomationKind.recheckLabel($0)).tag($0)
+                                }
+                            }
+                            .labelsHidden().fixedSize()
+                        }
+                        .help(kind == .linkChecker
+                            ? "How long a link that works waits before it's checked again. Failing links are retried the next day either way."
+                            : "How long an item waits before it's looked at for links again.")
+                    }
+                    Divider()
+                    AutomationRow("Last run") { lastRunStatus }
+                    if config.enabled, !running, let next = config.nextRunAt {
+                        Divider()
+                        AutomationRow("Next run") {
+                            Text(next > Date() ? next
+                                .formatted(.relative(presentation: .named)) : "Shortly")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Divider()
+                    AutomationRow("Due now") {
+                        Text(dueNow).foregroundStyle(.secondary).fadesOnChange(dueNow)
+                    }
+                    .help(
+                        "New items haven't been checked yet, so they always come first; then the ones checked longest ago."
                     )
-                } content: {
-                    Button("Review \(pending.count.formatted())…", action: review)
-                        .buttonStyle(.borderedProminent).controlSize(.small)
+                    Divider()
+                    AutomationRow("Allowed to") {
+                        Text(kind.policy).foregroundStyle(.secondary)
+                    }
                 }
+                section("Options") { AutomationCard { options } }
+                section("History") { AutomationCard { history } }
             }
-            Divider()
-            DisclosureGroup("Options") { options.padding(.top, 8) }
-            if let runs = model.runs[kind], !runs.isEmpty {
-                Divider()
-                DisclosureGroup("History") {
-                    ForEach(runs.prefix(10)) { RunRow(model: model, run: $0) }
-                }
-            }
+            .padding(24)
+            .frame(maxWidth: 720, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: kind.symbol)
-                .font(.title3).foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(kind.color.gradient, in: RoundedRectangle(cornerRadius: 8))
-                .accessibilityHidden(true)
+        HStack(alignment: .top, spacing: 14) {
+            AutomationTile(kind: kind, size: 44)
             VStack(alignment: .leading, spacing: 3) {
-                Text(kind.title).font(.headline)
-                Text(kind.summary).font(.callout).foregroundStyle(.secondary)
+                Text(kind.title).font(.title2.weight(.semibold))
+                Text(kind.summary).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("\(kind.role.title)").font(.caption).foregroundStyle(.tertiary)
+                Text("Runs as the \(kind.role.title)").font(.caption).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 12)
             Toggle(kind.title, isOn: binding(\.enabled)).labelsHidden().toggleStyle(.switch)
-                .controlSize(.small)
         }
-        .padding(.vertical, 4)
+    }
+
+    private func section(
+        _ title: LocalizedStringKey,
+        @ViewBuilder content: () -> some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline).padding(.leading, 4)
+            content()
+        }
     }
 
     private var lastRunStatus: some View {
@@ -150,31 +298,77 @@ private struct AutomationSection: View {
         guard let run = lastRun else {
             return "Never"
         }
-        return [run.startedAt.formatted(.relative(presentation: .named)), run.status.label]
-            .joined(separator: " · ")
+        return "\(run.status.label) \(run.startedAt.formatted(.relative(presentation: .named)))"
     }
 
-    private var options: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            AutomationRow("Items per run") {
-                Stepper(
-                    value: binding(\.batchLimit),
-                    in: 1 ... 200,
-                    step: kind == .linkChecker ? 10 : 5
-                ) {
-                    Text(config.batchLimit.formatted()).monospacedDigit()
+    @ViewBuilder private var options: some View {
+        AutomationRow {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Items per run")
+                Text(batchNote).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .fadesOnChange(batchNote)
+            }
+        } content: {
+            Stepper(
+                value: binding(\.batchLimit),
+                in: 1 ... (kind == .inboxSummarizer ? 200 : AutomationEngine.largestBatch),
+                step: kind == .linkChecker ? 10 : 5
+            ) {
+                Text(config.batchLimit.formatted()).monospacedDigit()
+            }
+        }
+        if kind.usesModel {
+            Divider()
+            AutomationRow("Allow ChatGPT when it's the AI provider") {
+                Toggle("Allow ChatGPT", isOn: binding(\.cloudAllowed))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            Divider()
+            AutomationRow("Model calls per day") {
+                Stepper(value: binding(\.dailyCalls), in: 10 ... 2000, step: 10) {
+                    Text(config.dailyCalls.formatted()).monospacedDigit()
                 }
             }
-            if kind.usesModel {
-                AutomationRow("Allow ChatGPT when it's the AI provider") {
-                    Toggle("Allow ChatGPT", isOn: binding(\.cloudAllowed))
-                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+        }
+    }
+
+    /// How much is waiting, and how many runs at the current batch size will get through it.
+    private var dueNow: String {
+        guard let count = model.backlog[kind] else { return "…" }
+        guard count > 0 else { return "All caught up" }
+        let batch = model.plannedBatch(kind)
+        let runs = (count + batch - 1) / batch
+        let items = count == 1 ? "1 item" : "\(count.formatted()) items"
+        return runs == 1 ? "\(items), all in the next run"
+            : "\(items), about \(runs.formatted()) runs of \(batch.formatted())"
+    }
+
+    /// Says when runs take more than the setting, and why.
+    private var batchNote: String {
+        if kind == .inboxSummarizer {
+            return "Also limited by model calls per day."
+        }
+        let planned = model.plannedBatch(kind)
+        let interval = AutomationKind.recheckLabel(config.recheck).lowercased()
+        return planned > config.batchLimit
+            ? "Taking \(planned.formatted()) for now, so every item is checked \(interval)."
+            : "Takes more when needed, so every item is checked \(interval)."
+    }
+
+    @ViewBuilder private var history: some View {
+        let runs = Array((model.runs[kind] ?? []).prefix(10))
+        if runs.isEmpty {
+            Text("No runs yet.").foregroundStyle(.secondary)
+        } else {
+            ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in
+                if index > 0 {
+                    Divider()
                 }
-                AutomationRow("Model calls per day") {
-                    Stepper(value: binding(\.dailyCalls), in: 10 ... 2000, step: 10) {
-                        Text(config.dailyCalls.formatted()).monospacedDigit()
-                    }
-                }
+                RunRow(
+                    model: model, run: run, expandedAtFirst: index == 0,
+                    review: review, open: open
+                )
             }
         }
     }
@@ -211,15 +405,12 @@ private struct AutomationRow<Label: View, Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(spacing: 10) {
-            Divider()
-            HStack(spacing: 12) {
-                label
-                Spacer(minLength: 12)
-                content
-            }
-            .frame(minHeight: 22)
+        HStack(spacing: 12) {
+            label
+            Spacer(minLength: 12)
+            content
         }
+        .frame(minHeight: 22)
     }
 }
 
@@ -230,51 +421,222 @@ extension AutomationRow where Label == Text {
     }
 }
 
+/// One run: a line saying what it did, opening to what happened to each item, grouped by
+/// outcome.
 private struct RunRow: View {
     let model: AutomationsModel
     let run: AutomationRun
+    let expandedAtFirst: Bool
+    let review: () -> Void
+    let open: (UUID) -> Void
+    @State private var expanded: Bool?
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: run.status.symbol).foregroundStyle(run.status.color)
-                    .accessibilityLabel(run.status.label)
-                Text(run.startedAt.formatted(date: .abbreviated, time: .shortened))
-                    .font(.callout.weight(.medium))
-                Text(counts).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                if model.canUndo(run) {
-                    Button("Undo") { Task { await model.undo(run) } }
-                        .buttonStyle(.link).font(.caption)
-                        .help(
-                            "Put back the summaries this run wrote, where the item hasn't changed since"
-                        )
-                }
-            }
-            ForEach(Array(run.report.prefix(8).enumerated()), id: \.offset) { _, line in
-                Text(line).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if run.report.count > 8 {
-                Text("and \(run.report.count - 8) more").font(.caption).foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.vertical, 4)
+    private var isExpanded: Bool {
+        expanded ?? expandedAtFirst
     }
 
-    private var counts: String {
-        var parts = ["\(run.examined) checked"]
-        if run.changed > 0 {
-            parts.append("\(run.changed) changed")
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation(.snappy(duration: 0.2)) { expanded = !isExpanded }
+            } label: {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Image(systemName: run.status.symbol).foregroundStyle(run.status.color)
+                        .accessibilityLabel(run.status.label)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(run.headline).font(.callout.weight(.medium))
+                        Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(isExpanded ? "Hides this run's details" : "Shows this run's details")
+            if isExpanded {
+                details.padding(.leading, 22)
+            }
         }
-        if run.proposed > 0 {
-            parts.append("\(run.proposed) proposed")
+        .padding(.vertical, 2)
+    }
+
+    private var subtitle: String {
+        var parts = [run.startedAt.formatted(date: .abbreviated, time: .shortened)]
+        parts.append("\(run.examined.formatted()) looked at")
+        if run.calls > 0 {
+            parts.append(run.calls == 1 ? "1 model call" : "\(run.calls) model calls")
         }
-        if run.skipped > 0 {
-            parts.append("\(run.skipped) skipped")
+        return parts.joined(separator: ", ")
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(run.report.enumerated()), id: \.offset) { _, line in
+                Text(line).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            ForEach(AutomationEntry.Outcome.allCases, id: \.self) { outcome in
+                let entries = run.entries.filter { $0.outcome == outcome }
+                if !entries.isEmpty {
+                    OutcomeGroup(
+                        outcome: outcome,
+                        entries: entries,
+                        trailing: trailing(for: outcome),
+                        open: open
+                    )
+                }
+            }
+            if run.fine > 0 {
+                Label(run.fineLine, systemImage: "checkmark.circle")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
         }
-        return parts.joined(separator: " · ")
+    }
+
+    /// Review for proposals still waiting; Undo for summaries this run wrote.
+    @ViewBuilder private func trailing(for outcome: AutomationEntry.Outcome) -> some View {
+        if outcome == .proposed, model.pending[run.kind]?.contains(where: { $0.taskID == run.id })
+            == true
+        {
+            Button("Review…", action: review).controlSize(.small)
+        } else if outcome == .changed, model.canUndo(run) {
+            Button("Undo") { Task { await model.undo(run) } }
+                .controlSize(.small)
+                .help("Put back the summaries this run wrote, where the item hasn't changed since")
+        }
+    }
+}
+
+/// The items that share one outcome, a few at a time.
+private struct OutcomeGroup<Trailing: View>: View {
+    let outcome: AutomationEntry.Outcome
+    let entries: [AutomationEntry]
+    let trailing: Trailing
+    let open: (UUID) -> Void
+    @State private var showsAll = false
+
+    private static var shown: Int {
+        5
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Label {
+                    HStack(spacing: 6) {
+                        Text(outcome.title)
+                        Text(entries.count.formatted()).foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                } icon: {
+                    Image(systemName: outcome.symbol).foregroundStyle(outcome.color)
+                }
+                .font(.callout.weight(.semibold))
+                Spacer()
+                trailing
+            }
+            ForEach(Array(visible.enumerated()), id: \.offset) { _, entry in
+                VStack(alignment: .leading, spacing: 1) {
+                    if let id = entry.itemID {
+                        Button(entry.title) { open(id) }
+                            .buttonStyle(.link).lineLimit(1)
+                            .help("Show this item")
+                    } else {
+                        Text(entry.title).lineLimit(1)
+                    }
+                    Text(entry.detail).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(3).truncationMode(.middle).textSelection(.enabled)
+                }
+                .padding(.leading, 22)
+            }
+            if entries.count > Self.shown {
+                Button(showsAll ? "Show fewer" : "Show all \(entries.count.formatted())") {
+                    showsAll.toggle()
+                }
+                .buttonStyle(.link).font(.caption).padding(.leading, 22)
+            }
+        }
+    }
+
+    private var visible: ArraySlice<AutomationEntry> {
+        showsAll ? entries[...] : entries.prefix(Self.shown)
+    }
+}
+
+extension AutomationRun {
+    /// Whether the run changed anything, then what it found that needs you.
+    /// What the run itself did first (applied, proposed, or neither), then what it found.
+    var headline: String {
+        var parts: [String] = []
+        if status == .failed || status == .cancelled {
+            parts.append(status == .failed ? "Failed" : "Stopped")
+        }
+        if changed > 0 {
+            parts.append(kind == .inboxSummarizer
+                ? "Wrote \(changed) summar\(changed == 1 ? "y" : "ies")"
+                : "Changed \(changed) item\(changed == 1 ? "" : "s")")
+        }
+        if proposed > 0 {
+            parts.append("Proposed \(proposed) change\(proposed == 1 ? "" : "s") for review")
+        }
+        if parts.isEmpty, status != .running {
+            parts.append("Nothing to change")
+        }
+        for outcome in AutomationEntry.Outcome.allCases
+            where outcome != .changed && outcome != .proposed
+        {
+            let number = entries.count { $0.outcome == outcome }
+            if number > 0 {
+                parts.append("\(number) \(outcome.title.lowercased())")
+            }
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    var fineLine: String {
+        switch kind {
+        case .linkChecker: fine == 1 ? "1 link still works" : "\(fine) links still work"
+        case .crossLinker: fine == 1 ? "1 item had nothing to link" : "\(fine) items had nothing to link"
+        case .inboxSummarizer: "\(fine) needed nothing"
+        }
+    }
+}
+
+extension AutomationEntry.Outcome {
+    var title: String {
+        switch self {
+        case .changed: "Changed"
+        case .proposed: "Proposed"
+        case .moved: "Moved"
+        case .unreachable: "Unreachable"
+        case .restricted: "Need a login"
+        case .retry: "Checking again"
+        case .skipped: "Skipped"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .changed: "checkmark.circle.fill"
+        case .proposed: "checklist"
+        case .moved: "arrow.turn.up.right"
+        case .unreachable: "exclamationmark.triangle"
+        case .restricted: "lock"
+        case .retry: "arrow.clockwise"
+        case .skipped: "forward"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .changed: .green
+        case .proposed: .accentColor
+        case .unreachable: .orange
+        default: .secondary
+        }
     }
 }
 

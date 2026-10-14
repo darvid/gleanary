@@ -29,7 +29,7 @@ struct GraphSearchResults: View {
                                 Button("Focus in graph") { focusNote(match.passage.documentID) }
                                 Button("Open note") { openNote(match.passage.documentID) }
                                 if let citation = match.passage.citation {
-                                    Button("Source · \(citation.label)") { openSource(citation) }
+                                    Button("Source: \(citation.label)") { openSource(citation) }
                                 }
                             }.controlSize(.small)
                             if let score = match.semanticScore {

@@ -64,7 +64,7 @@ struct ChatGPTRegistration: Codable, Sendable, Identifiable {
     }
 
     var label: String {
-        "\(email ?? "ChatGPT account") · \(id.prefix(6))"
+        "\(email ?? "ChatGPT account") (\(id.prefix(6)))"
     }
 }
 

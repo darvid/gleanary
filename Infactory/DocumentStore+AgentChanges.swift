@@ -10,6 +10,8 @@ struct AgentChange: Identifiable, Sendable, Equatable {
         case archive
         /// Link `noteID` to `targetID`.
         case link
+        /// Point the item's original link (`before`) at where it moved (`after`).
+        case relink
     }
 
     let id: UUID
@@ -132,6 +134,9 @@ extension DocumentStore {
             for row in rows where row["kind"] as String == "link" {
                 try record(Self.applyLink(row, in: db), [row])
             }
+            for row in rows where row["kind"] as String == "relink" {
+                try record(Self.applyRelink(row, in: db), [row])
+            }
             return report
         }
     }
@@ -144,6 +149,11 @@ extension DocumentStore {
             var undone: [Row] = []
             for row in rows where ["link", "archive"].contains(row["kind"] as String) {
                 if try Self.undoArchiveOrLink(row, in: db) {
+                    undone.append(row)
+                }
+            }
+            for row in rows where row["kind"] as String == "relink" {
+                if try Self.swapLink(row, from: row["after"], to: row["before"], in: db) {
                     undone.append(row)
                 }
             }
@@ -359,6 +369,37 @@ extension DocumentStore {
         try db.execute(
             sql: "UPDATE agent_changes SET status = 'applied' WHERE id = ?",
             arguments: [row["id"] as String]
+        )
+        return true
+    }
+
+    /// Updates the item's link only if it's still the one the check found moved.
+    private static func applyRelink(_ row: Row, in db: Database) throws -> Bool {
+        guard try swapLink(row, from: row["before"], to: row["after"], in: db) else { return false }
+        try db.execute(
+            sql: "UPDATE agent_changes SET status = 'applied' WHERE id = ?",
+            arguments: [row["id"] as String]
+        )
+        return true
+    }
+
+    /// Changes the item's original link from one address to another, and forgets the last
+    /// link check so the new address is checked afresh.
+    private static func swapLink(
+        _ row: Row,
+        from old: String,
+        to new: String,
+        in db: Database
+    ) throws -> Bool {
+        guard let noteID = note(for: row, in: db)?.id.uuidString else { return false }
+        try db.execute(
+            sql: "UPDATE notes SET sourceURL = ? WHERE id = ? AND sourceURL = ?",
+            arguments: [new, noteID, old]
+        )
+        guard db.changesCount > 0 else { return false }
+        try db.execute(
+            sql: "DELETE FROM item_checks WHERE noteID = ? AND kind = 'access'",
+            arguments: [noteID]
         )
         return true
     }

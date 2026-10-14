@@ -28,7 +28,6 @@ actor AutomationEngine {
     /// Failed link checks needed, at least `archiveSpan` apart, before archiving is proposed.
     static let archiveFailures = 3
     static let archiveSpan: TimeInterval = 7 * 24 * 60 * 60
-    static let recheckAfter: TimeInterval = 30 * 24 * 60 * 60
     static let retryAfter: TimeInterval = 24 * 60 * 60
 
     let store: DocumentStore
@@ -59,12 +58,43 @@ actor AutomationEngine {
             run.status = .failed
             run.report.append("Failed: \(error.localizedDescription)")
         }
-        if run.report.isEmpty {
-            run.report.append("Nothing needed doing.")
-        }
         run.endedAt = dependencies.now()
         try? await store.finishAutomationRun(run)
         return run
+    }
+
+    /// How many items are due now, past this run's batch included. New items are never
+    /// checked or summarized yet, so they always count here and come first.
+    func backlog(_ config: AutomationConfig) async throws -> Int {
+        let now = dependencies.now()
+        return switch config.kind {
+        case .inboxSummarizer:
+            try await store.inboxSummaryBacklog(
+                retryBefore: now.addingTimeInterval(-Self.retryAfter)
+            )
+        case .linkChecker:
+            try await store.linkCheckBacklog(
+                checkedBefore: now.addingTimeInterval(-config.recheck),
+                retryBefore: now.addingTimeInterval(-Self.retryAfter)
+            )
+        case .crossLinker:
+            try await store.crossLinkBacklog(
+                checkedBefore: now.addingTimeInterval(-config.recheck)
+            )
+        }
+    }
+
+    /// The most a run takes, so a large library isn't left half-checked.
+    static let largestBatch = 1000
+
+    /// How many items a run takes. Checks repeat every `config.recheck`, so a run takes at
+    /// least enough to get through what's due within that at this schedule, and never fewer
+    /// than the batch you set. Summaries keep to your batch; the daily model budget limits them.
+    static func plannedBatch(_ config: AutomationConfig, backlog: Int) -> Int {
+        guard config.kind != .inboxSummarizer else { return config.batchLimit }
+        let runsPerCycle = max(1, Int(config.recheck / max(config.interval, 60)))
+        let needed = (backlog + runsPerCycle - 1) / runsPerCycle
+        return min(largestBatch, max(config.batchLimit, needed))
     }
 
     // MARK: Inbox summarizer
@@ -105,7 +135,7 @@ actor AutomationEngine {
                     id, kind: Self.summaryCheck, at: dependencies.now(), state: "done"
                 )
                 run.changed += 1
-                run.report.append("Summarized “\(document.name)”.")
+                run.note(.changed, id, document.name, "Wrote a summary.")
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -114,46 +144,104 @@ actor AutomationEngine {
                     failed: true, detail: error.localizedDescription
                 )
                 run.skipped += 1
-                run.report.append("Skipped “\(document.name)”: \(error.localizedDescription)")
+                run.note(
+                    .skipped, id, document.name,
+                    "\(error.localizedDescription) Tried again tomorrow."
+                )
             }
         }
     }
 
     // MARK: Link checker
 
-    private struct LinkTally {
-        var reachable = 0, restricted = 0, transient = 0
-    }
-
     private func checkLinks(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
         let now = dependencies.now()
         let candidates = try await store.linkCheckCandidates(
-            limit: config.batchLimit,
-            checkedBefore: now.addingTimeInterval(-Self.recheckAfter),
+            limit: Self.plannedBatch(config, backlog: backlog(config)),
+            checkedBefore: now.addingTimeInterval(-config.recheck),
             retryBefore: now.addingTimeInterval(-Self.retryAfter)
         )
+        let (probes, yielded) = try await probeAll(candidates)
         var proposals: [AgentChangeDraft] = []
-        var tally = LinkTally()
+        // Recorded in the order they were chosen, whichever site answered first.
         for (index, candidate) in candidates.enumerated() {
-            guard try await proceed(&run) else { break }
-            if index > 0 {
-                try await Task.sleep(for: dependencies.politeness)
-            }
+            guard let result = probes[index] else { continue }
             run.examined += 1
-            if let proposal = try await checkLink(candidate, tally: &tally, run: &run) {
+            if let proposal = try await recordLink(candidate, result, run: &run) {
                 proposals.append(proposal)
             }
         }
-        // The only change this automation can make is a proposal; nothing is archived here.
+        if yielded {
+            run.status = .partial
+            run.report.append("Paused while the library was busy; the rest wait for the next run.")
+        }
+        // The only changes this automation can make are proposals; nothing is archived or
+        // relinked here.
         try await store.saveAgentChanges(proposals, taskID: run.id)
         run.proposed = proposals.count
-        report(tally, proposals: proposals.count, in: &run)
     }
 
-    /// Records one link's check, returning an archive proposal once it has stayed gone.
-    private func checkLink(
-        _ candidate: (id: UUID, url: URL, title: String),
-        tally: inout LinkTally,
+    typealias LinkCandidate = (id: UUID, url: URL, title: String)
+
+    /// Sites checked at once. Each site's links are checked one at a time with a pause
+    /// between, so no site sees a burst; different sites don't wait on each other.
+    static let concurrentSites = 6
+
+    /// Probes every candidate, keyed by its position. Stops starting new checks when the
+    /// library gets busy, reporting that it yielded.
+    private func probeAll(_ candidates: [LinkCandidate]) async throws
+        -> (results: [Int: LinkProbe], yielded: Bool)
+    {
+        let sites = Dictionary(grouping: candidates.indices) {
+            candidates[$0].url.host()?.lowercased() ?? ""
+        }.values.sorted { $0[0] < $1[0] }
+        let (probe, pause, shouldYield) = (
+            dependencies.probe, dependencies.politeness, dependencies.shouldYield
+        )
+        return try await withThrowingTaskGroup(of: ([(Int, LinkProbe)], Bool).self) { group in
+            var next = 0
+            func start(_ group: inout ThrowingTaskGroup<([(Int, LinkProbe)], Bool), Error>) {
+                guard next < sites.count else { return }
+                let indices = sites[next]
+                next += 1
+                group.addTask {
+                    var done: [(Int, LinkProbe)] = []
+                    for (position, index) in indices.enumerated() {
+                        try Task.checkCancellation()
+                        if await shouldYield() {
+                            return (done, true)
+                        }
+                        if position > 0 {
+                            try await Task.sleep(for: pause)
+                        }
+                        await done.append((index, probe.probe(candidates[index].url)))
+                    }
+                    return (done, false)
+                }
+            }
+            for _ in 0 ..< Self.concurrentSites {
+                start(&group)
+            }
+            var results: [Int: LinkProbe] = [:]
+            var yielded = false
+            while let (done, stopped) = try await group.next() {
+                for (index, result) in done {
+                    results[index] = result
+                }
+                yielded = yielded || stopped
+                if !yielded {
+                    start(&group)
+                }
+            }
+            return (results, yielded)
+        }
+    }
+
+    /// Records one link's check, returning a proposal to update a moved link or archive one
+    /// that stayed gone.
+    private func recordLink(
+        _ candidate: LinkCandidate,
+        _ result: LinkProbe,
         run: inout AutomationRun
     ) async throws -> AgentChangeDraft? {
         let checked = dependencies.now()
@@ -165,59 +253,64 @@ actor AutomationEngine {
                 failed: failed, detail: detail
             )
         }
-        switch await dependencies.probe.probe(candidate.url) {
+        let (id, title) = (candidate.id, candidate.title)
+        switch result {
         case .reachable:
-            tally.reachable += 1
+            run.fine += 1
             _ = try await record("ok", nil)
         case let .moved(destination):
             _ = try await record("moved", destination?.absoluteString)
-            run.report.append(destination
-                .map { "“\(candidate.title)” has moved to \($0.absoluteString)." }
-                ?? "“\(candidate.title)” has moved permanently.")
+            guard let destination else {
+                run.note(.moved, id, title, "Moved permanently without saying where.")
+                return nil
+            }
+            guard try await !store.relinkConsidered(id, to: destination) else {
+                run.note(
+                    .moved,
+                    id,
+                    title,
+                    "Moved to \(destination.absoluteString). Already proposed."
+                )
+                return nil
+            }
+            run.note(
+                .proposed,
+                id,
+                title,
+                "Moved to \(destination.absoluteString). Update the link?"
+            )
+            return AgentChangeDraft(
+                kind: .relink, noteID: id, before: candidate.url.absoluteString,
+                after: destination.absoluteString,
+                reason: "The original link redirects permanently to this address."
+            )
         case let .restricted(status):
-            tally.restricted += 1
             _ = try await record("restricted", "HTTP \(status)")
+            run.note(
+                .restricted, id, title,
+                "Needs a login or refused the check (HTTP \(status)). Never archived for that."
+            )
         case let .transient(reason):
-            tally.transient += 1
             _ = try await record("transient", reason)
+            run.note(.retry, id, title, "\(reason). Checked again tomorrow.")
         case let .gone(reason):
             let check = try await record("gone", failed: true, reason)
             if let proposal = try await archiveProposal(candidate, check: check, reason: reason) {
+                run.note(.proposed, id, title, "\(reason). Archive it?")
                 return proposal
             }
-            run.report.append(
-                "“\(candidate.title)” is unreachable (\(reason)); check \(check.failures) of \(Self.archiveFailures)."
+            run.note(
+                .unreachable, id, title,
+                "\(reason). Failed \(check.failures) of \(Self.archiveFailures) checks before archiving is proposed; checking again tomorrow."
             )
         }
         return nil
     }
 
-    private func report(_ tally: LinkTally, proposals: Int, in run: inout AutomationRun) {
-        if proposals > 0 {
-            run.report.append(
-                "Proposed archiving \(proposals) item\(proposals == 1 ? "" : "s") whose links stayed gone."
-            )
-        }
-        if tally.reachable > 0 {
-            run.report
-                .append("\(tally.reachable) link\(tally.reachable == 1 ? "" : "s") still work.")
-        }
-        if tally.restricted > 0 {
-            run.report.append(
-                "\(tally.restricted) need a login or refused the check; they won't be archived for that."
-            )
-        }
-        if tally.transient > 0 {
-            run.report.append(
-                "\(tally.transient) didn't answer properly and will be checked again tomorrow."
-            )
-        }
-    }
-
     /// Archiving is proposed only once a link has failed repeatedly over a week, never for a
     /// site's bad day.
     private func archiveProposal(
-        _ candidate: (id: UUID, url: URL, title: String),
+        _ candidate: LinkCandidate,
         check: ItemCheck,
         reason: String
     ) async throws -> AgentChangeDraft? {
@@ -250,8 +343,8 @@ actor AutomationEngine {
         }
         var budget = try await remainingCalls(config)
         let ids = try await store.crossLinkCandidates(
-            limit: config.batchLimit,
-            checkedBefore: dependencies.now().addingTimeInterval(-Self.recheckAfter)
+            limit: Self.plannedBatch(config, backlog: backlog(config)),
+            checkedBefore: dependencies.now().addingTimeInterval(-config.recheck)
         )
         var proposals: [AgentChangeDraft] = []
         var pairs = Set<[UUID]>()
@@ -261,6 +354,7 @@ actor AutomationEngine {
             guard let document = try await store.document(id: id) else { continue }
             run.examined += 1
             let others = try await linkCandidates(for: document, excluding: pairs)
+            var found = 0
             if !others.isEmpty {
                 let candidates = others.enumerated().map { Self.judgementItem($1, number: $0 + 1) }
                 budget -= 1
@@ -275,7 +369,17 @@ actor AutomationEngine {
                         kind: .link, noteID: id, targetID: other.id, before: "",
                         after: other.name, reason: answer.reason
                     ))
+                    run.note(
+                        .proposed,
+                        id,
+                        document.name,
+                        "Link to “\(other.name)”: \(answer.reason)"
+                    )
+                    found += 1
                 }
+            }
+            if found == 0 {
+                run.fine += 1
             }
             try await store.recordCheck(
                 id,
@@ -286,10 +390,6 @@ actor AutomationEngine {
         }
         try await store.saveAgentChanges(proposals, taskID: run.id)
         run.proposed = proposals.count
-        run.report.append(proposals.isEmpty
-            ? "Looked at \(run.examined) item\(run.examined == 1 ? "" : "s"); found no links worth proposing."
-            :
-            "Proposed \(proposals.count) link\(proposals.count == 1 ? "" : "s") across \(run.examined) item\(run.examined == 1 ? "" : "s").")
     }
 
     /// Up to six similar items not already linked, proposed or archived.
