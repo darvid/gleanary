@@ -8,6 +8,7 @@ struct NavigationLocation: Equatable {
     var scope: LibraryScope?
     var atlasFocus: AtlasNodeID
     var atlasItem: UUID?
+    var automations = false
 }
 
 /// Back and forward through visited locations, like a browser: visiting after going back drops

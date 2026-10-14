@@ -169,7 +169,7 @@ extension DocumentStore {
             let rows = try Row.fetchAll(db, sql: """
             SELECT p.*, e.vector FROM passages p JOIN notes n ON n.id = p.noteID
             LEFT JOIN embeddings e ON e.contentHash = p.contentHash AND e.profileID = ?
-            WHERE n.deletedAt IS NULL ORDER BY p.id
+            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL ORDER BY p.id
             """, arguments: [profileID])
             let passages = try rows.map { row in
                 let data: Data? = row["vector"]

@@ -274,6 +274,82 @@ enum DatabaseSchema {
             CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
             """)
         }
+        // Scheduled library maintenance (SPEC §7.4) and archiving (§7.5). Changes gain archive
+        // and link kinds; SQLite can't alter a CHECK, so that table is rebuilt in place.
+        migrator.registerMigration("automations-v1") { db in
+            try db.execute(sql: """
+            ALTER TABLE notes ADD COLUMN archivedAt REAL;
+            ALTER TABLE notes ADD COLUMN archiveReason TEXT;
+            CREATE TABLE agent_changes_v2 (
+                id TEXT PRIMARY KEY NOT NULL,
+                taskID TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                kind TEXT NOT NULL
+                    CHECK(kind IN ('title','summary','filing','category','archive','link')),
+                noteID TEXT,
+                targetID TEXT,
+                code TEXT,
+                before TEXT NOT NULL,
+                after TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                baseRevision TEXT,
+                appliedRevision TEXT,
+                snapshot TEXT,
+                status TEXT NOT NULL
+                    CHECK(status IN ('pending','applied','rejected','stale','undone')),
+                createdAt REAL NOT NULL
+            );
+            INSERT INTO agent_changes_v2(id, taskID, ordinal, kind, noteID, code, before, after,
+                reason, baseRevision, appliedRevision, snapshot, status, createdAt)
+            SELECT id, taskID, ordinal, kind, noteID, code, before, after, reason, baseRevision,
+                appliedRevision, snapshot, status, createdAt FROM agent_changes;
+            DROP TABLE agent_changes;
+            ALTER TABLE agent_changes_v2 RENAME TO agent_changes;
+            CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+            CREATE TABLE note_links (
+                leftID TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                rightID TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                changeID TEXT NOT NULL,
+                rationale TEXT NOT NULL,
+                createdAt REAL NOT NULL,
+                PRIMARY KEY(leftID, rightID), CHECK(leftID < rightID)
+            );
+            CREATE TABLE automations (
+                id TEXT PRIMARY KEY NOT NULL,
+                enabled INTEGER NOT NULL,
+                interval REAL NOT NULL,
+                batchLimit INTEGER NOT NULL,
+                cloudAllowed INTEGER NOT NULL,
+                dailyCalls INTEGER NOT NULL,
+                lastRunAt REAL
+            );
+            CREATE TABLE automation_runs (
+                id TEXT PRIMARY KEY NOT NULL,
+                automationID TEXT NOT NULL,
+                startedAt REAL NOT NULL,
+                endedAt REAL,
+                status TEXT NOT NULL
+                    CHECK(status IN ('running','succeeded','partial','failed','cancelled')),
+                examined INTEGER NOT NULL DEFAULT 0,
+                changed INTEGER NOT NULL DEFAULT 0,
+                proposed INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0,
+                calls INTEGER NOT NULL DEFAULT 0,
+                report TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX automation_runs_recent ON automation_runs(automationID, startedAt);
+            CREATE TABLE item_checks (
+                noteID TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                checkedAt REAL NOT NULL,
+                state TEXT NOT NULL,
+                failures INTEGER NOT NULL DEFAULT 0,
+                firstFailureAt REAL,
+                detail TEXT,
+                PRIMARY KEY(noteID, kind)
+            );
+            """)
+        }
         try migrator.migrate(database)
     }
 }

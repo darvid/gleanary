@@ -43,7 +43,7 @@ extension DocumentStore {
         try readyDatabase().read { db in
             try Row.fetchAll(db, sql: """
             SELECT n.id, n.revision, n.name, n.sourceURL, n.markdown FROM notes n
-            WHERE n.deletedAt IS NULL
+            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
                 AND NOT EXISTS (SELECT 1 FROM note_categories WHERE noteID = n.id)
                 AND NOT EXISTS (SELECT 1 FROM filing_suggestions WHERE noteID = n.id)
             ORDER BY n.updatedAt DESC

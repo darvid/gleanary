@@ -60,6 +60,8 @@ final class LibraryModel {
     @ObservationIgnored private(set) var indexingTask: Task<Void, Never>?
     private(set) var generatingSummaryID: UUID?
     @ObservationIgnored private(set) var summaryTask: Task<Void, Never>?
+    let automations: AutomationsModel
+    @ObservationIgnored private let automationHooks: AutomationHooks
 
     init(
         store: DocumentStore = DocumentStore(),
@@ -69,19 +71,76 @@ final class LibraryModel {
         // When true, summaries wait for `useLinkSummarizer` to pick the provider's engine.
         followsProvider: Bool = false,
         screenshotter: (any PageScreenshotting)? = nil,
-        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
+        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
+        // True only in the app, so tests and previews never run automations on a schedule.
+        schedulesAutomations: Bool = false
     ) {
         self.store = store
         documentGrid = DocumentGridModel(store: store)
         graph = KnowledgeGraphModel(store: store, provider: graphProvider)
-        engine = SearchEngine(store: store, provider: provider)
-        ingestion = IngestionEngine(
+        let engine = SearchEngine(store: store, provider: provider)
+        let ingestion = IngestionEngine(
             store: store,
             summarizer: summarizer,
             summarizerChosen: !followsProvider,
             screenshotter: screenshotter,
             settings: captureSettings
         )
+        self.engine = engine
+        self.ingestion = ingestion
+        let hooks = AutomationHooks()
+        automationHooks = hooks
+        automations = AutomationsModel(
+            store: store,
+            engine: AutomationEngine(store: store, dependencies: .init(
+                summarize: { try await ingestion.summarizeExisting($0) },
+                summarizerIsLocal: { await ingestion.summarizerIsLocal },
+                probe: WebLinkProber(),
+                archive: WaybackLookup(),
+                judge: { await hooks.judge },
+                similar: { document, limit in
+                    try await Self.similar(to: document, limit: limit, in: engine)
+                },
+                shouldYield: { await hooks.shouldYield }
+            )),
+            schedules: schedulesAutomations
+        )
+        hooks.library = self
+        automations.libraryChanged = { [weak self] in await self?.automationChangedLibrary() }
+    }
+
+    /// Archives an item by hand, or brings it back.
+    func setArchived(_ id: UUID, _ archived: Bool) async {
+        do {
+            if archived {
+                try await store.archive(id, reason: "Archived by you")
+            } else {
+                try await store.unarchive(id)
+            }
+            try await refreshAfterMutation()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// The model that judges the cross-linker's candidates, following the AI provider.
+    func useLinkJudge(_ judge: (any LinkJudging)?) {
+        automationHooks.judge = judge
+    }
+
+    private func automationChangedLibrary() async {
+        do { try await refreshAfterMutation() }
+        catch { self.error = error.localizedDescription }
+    }
+
+    /// Items whose passages are closest to this one's title and opening, best first.
+    private nonisolated static func similar(
+        to document: MarkdownDocument,
+        limit: Int,
+        in engine: SearchEngine
+    ) async throws -> [UUID] {
+        let query = String((document.name + "\n" + document.markdown).prefix(400))
+        var seen = Set<UUID>()
+        return try await engine.search(query, limit: 40).matches.map(\.passage.documentID)
+            .filter { seen.insert($0).inserted }.prefix(limit).map(\.self)
     }
 
     /// File acquisition must be idle before permanently deleting content-addressed originals.

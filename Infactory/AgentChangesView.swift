@@ -56,6 +56,7 @@ struct AgentChangesCard: View {
         let labels: [(AgentChange.Kind, String, String)] = [
             (.title, "title", "titles"), (.summary, "summary", "summaries"),
             (.filing, "filing", "filings"), (.category, "new category", "new categories"),
+            (.link, "link", "links"), (.archive, "archive", "archives"),
         ]
         return labels.compactMap { kind, one, many in
             let count = changes.count { $0.kind == kind }
@@ -104,7 +105,7 @@ struct AgentChangesReview: View {
             Divider()
             List {
                 ForEach(
-                    [AgentChange.Kind.title, .summary, .category, .filing],
+                    [AgentChange.Kind.title, .summary, .category, .filing, .link, .archive],
                     id: \.self
                 ) { kind in
                     let group = changes.filter { $0.kind == kind }
@@ -144,6 +145,8 @@ struct AgentChangesReview: View {
         case .title: "Titles"
         case .summary: "Summaries"
         case .filing: "Filing"
+        case .link: count == 1 ? "Link" : "Links"
+        case .archive: "Archive"
         }
     }
 
@@ -190,6 +193,17 @@ struct AgentChangesReview: View {
                             .tint : .primary)
                 }
                 .lineLimit(1)
+            case .link:
+                Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
+                HStack(spacing: 6) {
+                    Image(systemName: "link").font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityLabel("linked with")
+                    Text(change.targetID.flatMap { titles[$0] } ?? "Item").lineLimit(1)
+                }
+            case .archive:
+                Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
+                Label(change.after, systemImage: "archivebox").font(.callout)
+                    .foregroundStyle(.secondary)
             case .summary:
                 Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
                 RowDisclosure(title: "New text") {

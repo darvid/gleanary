@@ -11,6 +11,8 @@ import SwiftUI
     private(set) var error: String?
     private(set) var categories: [DecimalCategory] = []
     private(set) var related: [DocumentSummary] = []
+    /// Items linked to this one, each with why.
+    private(set) var links: [LinkedItem] = []
     private(set) var coverage: Coverage?
     private(set) var warnings: [String] = []
     private(set) var authorProvider: String?
@@ -28,7 +30,8 @@ import SwiftUI
             citation = nil
             generatedSummary = false
             canGenerateSummary = false
-            categories = []; related = []; coverage = nil; warnings = []; authorProvider = nil
+            categories = []; related = []; links = []; coverage = nil; warnings = []
+            authorProvider = nil
             details = LibraryItemDetails()
         }
         error = nil
@@ -56,6 +59,7 @@ import SwiftUI
             }
             let filing = try await store.categories(for: id)
             let linked = try await store.relatedLibraryDocuments(to: id)
+            let itemLinks = try await store.linkedItems(for: id)
             let provider = try await store.libraryAuthorProvider(for: id)
             let itemDetails = try await store.libraryItemDetails(for: id)
             guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
@@ -65,6 +69,7 @@ import SwiftUI
             document = loaded
             categories = filing
             related = linked
+            links = itemLinks
             coverage = captured?.coverage
             warnings = captured?.warnings ?? []
             authorProvider = provider
@@ -100,6 +105,8 @@ struct DocumentPreview: View {
     var retryBookmarkFetch: () -> Void = {}
     var openDocument: (UUID) -> Void = { _ in }
     var editDocument: ((MarkdownDocument) -> Void)?
+    /// Archives the item when true, unarchives it when false.
+    var archiveDocument: ((MarkdownDocument, Bool) -> Void)?
     var fileDocument: ((MarkdownDocument) -> Void)?
     var showsSummaryActions = true
     @Environment(\.colorScheme) private var colorScheme
@@ -144,8 +151,11 @@ struct DocumentPreview: View {
                         MarkdownPreview(markdown: document.markdown, font: .system(size: 14))
                             .textSelection(.enabled)
                     }
+                    if showsLibraryDetails, !model.links.isEmpty {
+                        itemList("Linked", items: model.links.map { ($0.document, $0.rationale) })
+                    }
                     if showsLibraryDetails, !model.related.isEmpty {
-                        related
+                        itemList("From the Same Sources", items: model.related.map { ($0, nil) })
                     }
                 }
                 .frame(maxWidth: 680, alignment: .leading)
@@ -199,7 +209,9 @@ struct DocumentPreview: View {
                 sourceIcon
                 Text(sourceLine).lineLimit(1)
                 Spacer(minLength: 8)
-                if editDocument != nil || fileDocument != nil || sourceURL != nil {
+                if editDocument != nil || fileDocument != nil || archiveDocument != nil
+                    || sourceURL != nil
+                {
                     moreMenu(document)
                 }
             }
@@ -282,6 +294,13 @@ struct DocumentPreview: View {
                     systemImage: "folder"
                 ) { fileDocument(document) }
             }
+            if let archiveDocument {
+                let archived = model.details.archived != nil
+                Button(
+                    archived ? "Unarchive" : "Archive",
+                    systemImage: archived ? "tray.and.arrow.up" : "archivebox"
+                ) { archiveDocument(document, !archived) }
+            }
             if let sourceURL {
                 Divider()
                 Button("Copy Link", systemImage: "link") {
@@ -314,6 +333,24 @@ struct DocumentPreview: View {
     /// Get Info–style facts: right-aligned labels, left-aligned values.
     private func infoCard(_ document: MarkdownDocument) -> some View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+            if let archived = model.details.archived {
+                infoRow("Archived") {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(archived.formatted(date: .abbreviated, time: .omitted))
+                            if let archiveDocument {
+                                Button("Unarchive") { archiveDocument(document, false) }
+                                    .buttonStyle(.link)
+                            }
+                        }
+                        if let reason = model.details.archiveReason {
+                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .help("Hidden from the library, Atlas, search and Chat until unarchived.")
+                }
+            }
             if let bookmarkFetch {
                 infoRow("Status") {
                     // One line, so the card doesn't change height as each step reports in.
@@ -418,12 +455,14 @@ struct DocumentPreview: View {
 
     // MARK: Related
 
-    private var related: some View {
+    /// Related items in a card; a link's reason shows in place of the item's kind.
+    private func itemList(_ title: String, items: [(DocumentSummary, String?)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("From the Same Sources").font(.title3.weight(.semibold))
+            Text(title).font(.title3.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) {
-                ForEach(Array(model.related.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(items.enumerated()), id: \.element.0.id) { index, entry in
+                    let (item, reason) = entry
                     if index > 0 {
                         Divider().padding(.leading, 40)
                     }
@@ -433,7 +472,8 @@ struct DocumentPreview: View {
                                 .foregroundStyle(.tint).frame(width: 20)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(item.name).lineLimit(2)
-                                Text(item.kindLabel).font(.caption).foregroundStyle(.secondary)
+                                Text(reason ?? item.kindLabel).font(.caption)
+                                    .foregroundStyle(.secondary).lineLimit(2)
                             }
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption)

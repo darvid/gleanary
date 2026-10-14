@@ -91,7 +91,8 @@ final class ConversationModel {
                 .flatMap { [
                     $0.left,
                     $0.right,
-                ] } + updatedChanges.values.joined().compactMap(\.noteID))
+                ] } + updatedChanges.values.joined().flatMap { [$0.noteID, $0.targetID] }
+                .compactMap(\.self))
             {
                 updatedTitles[id] = try await store.document(id: id)?.name ?? "Deleted document"
             }

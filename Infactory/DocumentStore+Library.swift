@@ -29,6 +29,8 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
 
 enum LibraryScope: Hashable, Sendable {
     case all, sources, notes, unfiled, captures, category(UUID)
+    /// Archived items, which every other scope leaves out.
+    case archived
 }
 
 struct DocumentPage: Sendable {
@@ -98,7 +100,7 @@ extension DocumentStore {
             let items = try Row.fetchAll(db, sql: """
             SELECT n.id, n.name, n.sourceURL, n.updatedAt, \(Self.libraryKindSQL) AS kind,
                 n.previewImage IS NOT NULL AS hasPreview
-            FROM notes n WHERE n.deletedAt IS NULL
+            FROM notes n WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
             """).map { row in
                 let id: String = row["id"]
                 let source: String? = row["sourceURL"]
@@ -163,7 +165,7 @@ extension DocumentStore {
 
     /// Summary-first captures predate authored_artifacts. Use their persisted artifact/hash
     /// evidence, not the filename or the presence of a source association, to identify them.
-    private static let legacySummarySQL = """
+    static let legacySummarySQL = """
     EXISTS (SELECT 1 FROM captures c, json_each(CAST(c.artifacts AS TEXT)) artifact
         WHERE c.noteID = n.id AND json_extract(artifact.value, '$.name') = 'Summary.md'
         AND json_extract(artifact.value, '$.kind') = 'markdown'
@@ -180,10 +182,11 @@ extension DocumentStore {
         -> (sql: String, arguments: StatementArguments)
     {
         let text = String(query.prefix(1000)).trimmingCharacters(in: .whitespacesAndNewlines)
-        var sql = "n.deletedAt IS NULL"
+        var sql = scope == .archived ? "n.deletedAt IS NULL AND n.archivedAt IS NOT NULL"
+            : "n.deletedAt IS NULL AND n.archivedAt IS NULL"
         var arguments = StatementArguments()
         switch scope {
-        case .all: break
+        case .all, .archived: break
         case .sources:
             sql += " AND EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) AND NOT EXISTS (SELECT 1 FROM authored_artifacts WHERE noteID = n.id) AND NOT (\(legacySummarySQL))"
         case .notes:
@@ -213,7 +216,7 @@ extension DocumentStore {
             SELECT n.id, n.name, n.sourceURL,
                 \(Self.libraryKindSQL) AS kind
             FROM notes n
-            WHERE n.deletedAt IS NULL AND n.id != ? AND n.id IN (
+            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND n.id != ? AND n.id IN (
                 SELECT peer.noteID FROM note_sources peer JOIN note_sources current ON current.sourceID = peer.sourceID
                 WHERE current.noteID = ?
             ) ORDER BY n.updatedAt DESC, n.id LIMIT 20
@@ -252,14 +255,19 @@ extension DocumentStore {
         try readyDatabase().read { db in
             let row = try Row.fetchOne(
                 db,
-                sql: "SELECT sourceURL, faviconData, previewImage, createdAt FROM notes WHERE id = ?",
+                sql: """
+                SELECT sourceURL, faviconData, previewImage, createdAt, archivedAt, archiveReason
+                FROM notes WHERE id = ?
+                """,
                 arguments: [id.uuidString]
             )
             return LibraryItemDetails(
                 sourceURL: (row?["sourceURL"] as String?).flatMap(URL.init(string:)),
                 favicon: row?["faviconData"],
                 previewImage: row?["previewImage"],
-                saved: (row?["createdAt"] as Double?).map(Date.init(timeIntervalSince1970:))
+                saved: (row?["createdAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                archived: (row?["archivedAt"] as Double?).map(Date.init(timeIntervalSince1970:)),
+                archiveReason: row?["archiveReason"]
             )
         }
     }
@@ -284,4 +292,6 @@ struct LibraryItemDetails: Sendable, Equatable {
     var favicon: Data?
     var previewImage: Data?
     var saved: Date?
+    var archived: Date?
+    var archiveReason: String?
 }
