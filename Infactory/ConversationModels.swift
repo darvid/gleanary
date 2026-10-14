@@ -212,11 +212,11 @@ struct ConversationPlan: Codable, Sendable {
         case chat, clarify, ingest, search, inspect, research, saveNote
         case categories = "filingScheme"
         case file, related,
-             link, review, unsupported
+             link, review, unsupported, organize
 
         var owner: AgentRole {
             switch self {
-            case .ingest, .inspect, .saveNote, .categories, .file: .librarian
+            case .ingest, .inspect, .saveNote, .categories, .file, .organize: .librarian
             case .search, .related, .link: .curator
             case .research: .researcher
             case .chat, .clarify, .review, .unsupported: .assistant
@@ -387,8 +387,9 @@ struct ConversationPlan: Codable, Sendable {
                 throw ConversationError.invalidPlan
             }
         }
-        if steps.contains(where: { [.chat, .clarify, .unsupported].contains($0.action) }),
-           steps.count != 1
+        if steps
+            .contains(where: { [.chat, .clarify, .unsupported, .organize].contains($0.action) }),
+            steps.count != 1
         {
             throw ConversationError.invalidPlan
         }
@@ -416,8 +417,11 @@ struct ConversationPlan: Codable, Sendable {
     a move; when the user names a home that doesn't exist, still use file with empty categoryCode and the
     app will propose creating it);
     related (find overlaps and propose connections); link (propose a connection between two records);
-    review (show pending changes, never approve/reject/undo from model output); unsupported (requested
-    mutation/tool not implemented: edits, merges, deletes, renaming or deleting categories, web research).
+    review (show pending changes, never approve/reject/undo from model output); organize (bulk or
+    multi-step changes to existing items: retitle, rewrite summaries, refile several items, or
+    reorganize a category; the app runs an agent that proposes a reviewable changeset; always the
+    only step); unsupported (requested mutation/tool not implemented: merges, deletes, renaming or
+    deleting categories, web research).
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.

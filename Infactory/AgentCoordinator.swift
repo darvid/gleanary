@@ -288,8 +288,14 @@ actor AgentCoordinator {
                 references: references,
                 changed: changed
             )
-        case .saveNote:
-            try await saveThought(taskID: taskID, step: step)
+        case .saveNote, .organize:
+            try await write(
+                step,
+                taskID: taskID,
+                route: route,
+                references: references,
+                changed: changed
+            )
         case .categories, .review, .unsupported:
             try await explainOperation(step.action, taskID: taskID)
         case .file:
@@ -339,6 +345,61 @@ actor AgentCoordinator {
             }
         default: throw ConversationError.invalidPlan
         }
+    }
+
+    private func write(
+        _ step: ConversationPlan.Step,
+        taskID: UUID,
+        route: ConversationRoute,
+        references: [UUID],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        if step.action == .organize {
+            try await organize(
+                taskID: taskID, request: route.text, selected: references, changed: changed
+            )
+        } else {
+            try await saveThought(taskID: taskID, step: step)
+        }
+    }
+
+    /// Runs the library agent. It reads freely but only proposes; the changes land on a review
+    /// card in chat and nothing is applied until someone approves them there.
+    private func organize(
+        taskID: UUID,
+        request: String,
+        selected: [UUID],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        guard let model = inference as? any AgentResponding else {
+            try await store.postConversation(
+                author: .librarian,
+                text: "Changes across many items run with ChatGPT. Connect it in Settings, or edit items one at a time in Library. Nothing was changed.",
+                taskID: taskID
+            )
+            return
+        }
+        let history = try await ConversationChatContext.history(
+            store.conversationMessages(limit: 60), before: taskID
+        )
+        let agent = LibraryAgent(
+            model: model, toolbox: AgentToolbox(store: store, search: search)
+        )
+        let store = store
+        let outcome = try await agent.run(
+            request: request, history: history, selected: selected
+        ) { progress in
+            try? await store.updateConversationTask(taskID, progress: progress)
+            await changed()
+        }
+        try Task.checkCancellation()
+        try await store.saveAgentChanges(outcome.changes, taskID: taskID)
+        try await store.postConversation(
+            author: .librarian,
+            text: outcome.reply,
+            references: Array(outcome.touched.prefix(4)),
+            taskID: taskID
+        )
     }
 
     private func explainOperation(_ action: ConversationPlan.Action, taskID: UUID) async throws {

@@ -10,6 +10,8 @@ struct AtlasItem: Identifiable, Sendable, Equatable {
     let updatedAt: Date
     /// Filing memberships, primary first, then by code.
     var categoryIDs: [UUID] = []
+    /// A page screenshot or video thumbnail exists, loaded only once its tile is large enough.
+    var hasPreview = false
 
     var kindLabel: String {
         DocumentSummary.kindLabel(for: kind)

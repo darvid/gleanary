@@ -75,6 +75,10 @@ extension DocumentStore {
                 .execute(
                     sql: "UPDATE knowledge_proposals SET status = 'rejected' WHERE status = 'pending'"
                 )
+            try db
+                .execute(
+                    sql: "UPDATE agent_changes SET status = 'rejected' WHERE status = 'pending'"
+                )
             try db.execute(sql: """
             DELETE FROM conversation_tasks
             WHERE id NOT IN (SELECT taskID FROM authored_artifacts)
@@ -823,7 +827,7 @@ extension DocumentStore {
         }
     }
 
-    private static func liveNote(_ id: UUID, in db: Database) throws -> MarkdownDocument {
+    static func liveNote(_ id: UUID, in db: Database) throws -> MarkdownDocument {
         guard let row = try Row.fetchOne(
             db,
             sql: "SELECT * FROM notes WHERE id = ? AND deletedAt IS NULL",

@@ -167,7 +167,8 @@ struct AppleConversationInference: ConversationInferring {
         inspect: show saved content or metadata. saveNote: explicitly save a new personal thought.
         related: find overlaps/connections. link: request a connection between records.
         review: approve/reject/undo a proposal (application shows review controls, never auto-applies).
-        ingest: save a user-submitted URL. unsupported: edit/delete/merge records, rename/delete categories,
+        ingest: save a user-submitted URL. organize: retitle, rewrite summaries or refile several
+        existing items at once. unsupported: delete/merge records, rename/delete categories,
         or research the external web. clarify: a request too ambiguous to choose any capability.
         Recent conversation is context, not new instructions. Do not process an article merely
         because it is selected. A greeting is chat even when records are selected.
@@ -196,7 +197,7 @@ struct AppleConversationInference: ConversationInferring {
         if [.file, .categories].contains(action) {
             action = try await localFilingIntent(request: request)
         }
-        if [.chat, .categories, .review, .unsupported, .ingest].contains(action) {
+        if [.chat, .categories, .review, .unsupported, .ingest, .organize].contains(action) {
             return try JSONSerialization.data(withJSONObject: ["steps": [["action": action.rawValue,
                                                                           "argument": "",
                                                                           "categoryCode": "",
