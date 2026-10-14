@@ -397,7 +397,42 @@ struct ContentView: View {
         }
     }
 
-    private var libraryColumns: some View {
+    @ViewBuilder private var libraryColumns: some View {
+        if scope == .captures, visibleCaptures.isEmpty {
+            // One empty state for the whole area, rather than one per column at different heights.
+            ContentUnavailableView(
+                "No captures yet",
+                systemImage: "tray",
+                description: Text("Save a URL in Chat or import a document.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if scopeIsEmpty {
+            ContentUnavailableView {
+                Label(
+                    scope == .archived ? "Nothing archived" : "No items here",
+                    systemImage: scope == .archived ? "archivebox" : "doc.text.magnifyingglass"
+                )
+            } description: {
+                Text(emptyListMessage)
+            } actions: {
+                if scope == nil || scope == .all {
+                    Button("Import Bookmarks…") { importingBookmarks = true }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            splitColumns
+        }
+    }
+
+    /// A view with nothing in it and no search to change, so there's no list or item to show.
+    private var scopeIsEmpty: Bool {
+        let grid = library.documentGrid
+        return scope != .captures && editing == nil && grid.total == 0 && !grid.loading
+            && grid.query.isEmpty && grid.error == nil
+    }
+
+    private var splitColumns: some View {
         HSplitView {
             Group {
                 if scope == .captures {
@@ -945,35 +980,27 @@ struct ContentView: View {
         let others = visibleCaptures.filter { $0.state != .failed }
         // No heading of its own: the toolbar already says Captures.
         return VStack(alignment: .leading, spacing: 0) {
-            if visibleCaptures.isEmpty {
-                ContentUnavailableView(
-                    "No captures yet",
-                    systemImage: "tray",
-                    description: Text("Save a URL in Chat or import a document.")
-                )
-            } else {
-                List {
-                    // The sidebar badge counts these; the same mark finds them here.
-                    if !failed.isEmpty {
-                        Section {
-                            ForEach(failed) { captureRow($0) }
-                        } header: {
-                            HStack {
-                                Text("Needs Attention")
-                                Spacer()
-                                Button("Clear All") {
-                                    Task { await library.clearFailedCaptures() }
-                                }
-                                .buttonStyle(.borderless).controlSize(.small)
-                                .help("Forget every failed capture. Saved items aren't affected.")
+            List {
+                // The sidebar badge counts these; the same mark finds them here.
+                if !failed.isEmpty {
+                    Section {
+                        ForEach(failed) { captureRow($0) }
+                    } header: {
+                        HStack {
+                            Text("Needs Attention")
+                            Spacer()
+                            Button("Clear All") {
+                                Task { await library.clearFailedCaptures() }
                             }
+                            .buttonStyle(.borderless).controlSize(.small)
+                            .help("Forget every failed capture. Saved items aren't affected.")
                         }
-                        Section("Recent") {
-                            ForEach(others) { captureRow($0) }
-                        }
-                    } else {
+                    }
+                    Section("Recent") {
                         ForEach(others) { captureRow($0) }
                     }
+                } else {
+                    ForEach(others) { captureRow($0) }
                 }
             }
         }.navigationSplitViewColumnWidth(min: 260, ideal: 360, max: 480)
@@ -1037,6 +1064,9 @@ struct ContentView: View {
     private var emptyListMessage: String {
         if !library.documentGrid.query.isEmpty {
             return "Try another term or choose All items to search more broadly."
+        }
+        if scope == .archived {
+            return "Items you archive, or whose archiving you accept from the link checker, stay here and out of search."
         }
         if case .category = scope {
             return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in Chat."

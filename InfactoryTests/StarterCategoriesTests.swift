@@ -253,8 +253,9 @@ struct StarterCategoriesTests {
 }
 
 extension StarterCategoriesTests {
-    /// An empty list view must fill the window rather than float in the middle of it.
-    @Test @MainActor func emptyListViewFillsTheWindow() async throws {
+    /// An empty library shows one empty state across the window, not an empty list column beside
+    /// an empty detail pane.
+    @Test @MainActor func emptyLibraryShowsOneEmptyState() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
@@ -279,12 +280,9 @@ extension StarterCategoriesTests {
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(150))
         }
-        let field = try #require(Self.descendant(NSTextField.self, in: host) {
+        #expect(Self.descendant(NSTextField.self, in: host) {
             $0.placeholderString == "Search this view"
-        })
-        let frame = field.convert(field.bounds, to: nil)
-        // AppKit window coordinates grow upward: the search field belongs near the top.
-        #expect(frame.maxY > host.bounds.height - 140)
+        } == nil)
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         let png = try #require(bitmap.representation(using: .png, properties: [:]))

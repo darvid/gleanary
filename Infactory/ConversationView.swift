@@ -509,7 +509,7 @@ struct ConversationView: View {
                     .accessibilityLabel(model.running && draftIsEmpty ? "Stop task" : model
                         .running ? "Redirect task" : "Send message")
                     .help(model
-                        .running && draftIsEmpty ? "Stop current task" : "Send message (⌘Return)")
+                        .running && draftIsEmpty ? "Stop current task" : "Send message")
                     .disabled(!model.ready || (!model.running && draftIsEmpty))
                 }
             }.padding(.horizontal, 12).padding(.vertical, 9)
@@ -528,11 +528,6 @@ struct ConversationView: View {
                     )
                     .hidden().accessibilityHidden(true).disabled(!model.ready || draftIsEmpty)
                 }
-            Text(model.chatGPT.useChatGPT
-                ? "Messages, recent history and selected excerpts are sent to OpenAI. ⌘Return to send."
-                : "Saved on this Mac. ⌘Return to send.")
-                .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
-                .padding(.horizontal, composerInset)
         }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
             .frame(maxWidth: .infinity)
     }
