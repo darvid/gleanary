@@ -406,9 +406,30 @@ struct ContentView: View {
                 description: Text("Save a URL in Chat or import a document.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if scopeIsEmpty {
+            ContentUnavailableView {
+                Label(
+                    scope == .archived ? "Nothing archived" : "No items here",
+                    systemImage: scope == .archived ? "archivebox" : "doc.text.magnifyingglass"
+                )
+            } description: {
+                Text(emptyListMessage)
+            } actions: {
+                if scope == nil || scope == .all {
+                    Button("Import Bookmarks…") { importingBookmarks = true }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             splitColumns
         }
+    }
+
+    /// A view with nothing in it and no search to change, so there's no list or item to show.
+    private var scopeIsEmpty: Bool {
+        let grid = library.documentGrid
+        return scope != .captures && editing == nil && grid.total == 0 && !grid.loading
+            && grid.query.isEmpty && grid.error == nil
     }
 
     private var splitColumns: some View {
@@ -1043,6 +1064,9 @@ struct ContentView: View {
     private var emptyListMessage: String {
         if !library.documentGrid.query.isEmpty {
             return "Try another term or choose All items to search more broadly."
+        }
+        if scope == .archived {
+            return "Items you archive, or whose archiving you accept from the link checker, stay here and out of search."
         }
         if case .category = scope {
             return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in Chat."
