@@ -96,7 +96,8 @@ struct PageScreenshotTests {
 
     private func capture(
         with screenshotter: StubScreenshotter,
-        fetcher: PageFetcher = PageFetcher()
+        fetcher: PageFetcher = PageFetcher(),
+        settings: CaptureSettings = CaptureSettings()
     ) async throws -> CaptureDetail {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
@@ -105,7 +106,8 @@ struct PageScreenshotTests {
             store: store,
             fetcher: fetcher,
             summarizer: FixtureLinkSummarizer(),
-            screenshotter: screenshotter
+            screenshotter: screenshotter,
+            settings: { settings }
         )
         _ = try await engine.enqueue("https://fixture.example/page")
         try await engine.run()
@@ -210,6 +212,21 @@ struct PageScreenshotTests {
         let preview = try #require(await previewImage())
         let color = try #require(preview.colorAt(x: preview.pixelsWide / 2, y: 4))
         #expect(color.greenComponent > 0.8 && color.redComponent < 0.2)
+    }
+
+    @Test @MainActor func previewsOffFetchesNoStills() async throws {
+        _ = NSApplication.shared
+        defer { try? FileManager.default.removeItem(at: root) }
+        let card = try solidImage(width: 1200, height: 630, color: .green)
+        let screenshotter = try StubScreenshotter(.success(syntheticScreenshot()))
+        let detail = try await capture(
+            with: screenshotter,
+            fetcher: PageFetcher(shareImage: ("https://fixture.example/card.png", card)),
+            settings: CaptureSettings(previews: false)
+        )
+        #expect(await screenshotter.requested.isEmpty)
+        #expect(!detail.artifacts.contains { $0.kind == .image })
+        #expect(try await previewImage() == nil)
     }
 
     @Test @MainActor func aSquareLogoIsNotAShareImage() async throws {

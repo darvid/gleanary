@@ -65,7 +65,8 @@ final class LibraryModel {
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
         // When true, summaries wait for `useLinkSummarizer` to pick the provider's engine.
         followsProvider: Bool = false,
-        screenshotter: (any PageScreenshotting)? = nil
+        screenshotter: (any PageScreenshotting)? = nil,
+        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
     ) {
         self.store = store
         documentGrid = DocumentGridModel(store: store)
@@ -75,7 +76,8 @@ final class LibraryModel {
             store: store,
             summarizer: summarizer,
             summarizerChosen: !followsProvider,
-            screenshotter: screenshotter
+            screenshotter: screenshotter,
+            settings: captureSettings
         )
     }
 

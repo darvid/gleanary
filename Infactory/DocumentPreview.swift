@@ -249,12 +249,7 @@ struct DocumentPreview: View {
                 .help("Read the text Infactory captured from the page")
             }
             if generatingSummary {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text("Summarizing…").foregroundStyle(.secondary)
-                }
-                .accessibilityElement(children: .combine)
-                Button("Cancel", action: cancelSummary).buttonStyle(.bordered)
+                SummarizingButton(compact: compact, cancel: cancelSummary)
             } else if model.canGenerateSummary, showsSummaryActions {
                 Button { generateSummary(document) } label: {
                     actionLabel("Summarize", systemImage: "sparkles", compact: compact)
@@ -315,15 +310,15 @@ struct DocumentPreview: View {
         Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
             if let bookmarkFetch {
                 infoRow("Status") {
+                    // One line, so the card doesn't change height as each step reports in.
                     HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Fetching the full page")
-                            Text(bookmarkFetch.isEmpty ? "Waiting to start" : bookmarkFetch)
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
+                        ProgressView().controlSize(.mini)
+                        Text(bookmarkFetch.isEmpty ? "Waiting to fetch the page" : bookmarkFetch)
+                            .lineLimit(1).truncationMode(.tail)
                     }
-                    .help("This bookmark's notes will be replaced by the page and its summary.")
+                    .help(
+                        "Fetching the full page. This bookmark's notes will be replaced by the page and its summary."
+                    )
                 }
             }
             infoRow("Filed in") { filing(document) }
@@ -700,5 +695,37 @@ struct RowDisclosure<Content: View>: View {
                 .buttonStyle(.plain)
                 .contentShape(Rectangle())
         }
+    }
+}
+
+/// Summarize's place while it runs: one button that shows progress and stops it on click,
+/// instead of a loose spinner beside a separate Cancel button.
+private struct SummarizingButton: View {
+    let compact: Bool
+    let cancel: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: cancel) {
+            HStack(spacing: 6) {
+                ZStack {
+                    ProgressView().controlSize(.small).opacity(hovering ? 0 : 1)
+                    Image(systemName: "stop.fill").opacity(hovering ? 1 : 0)
+                }
+                .frame(width: 16, height: 16)
+                if !compact {
+                    // Both labels take space, so the button keeps its width on hover.
+                    ZStack(alignment: .leading) {
+                        Text("Summarizing…").opacity(hovering ? 0 : 1)
+                        Text("Stop").opacity(hovering ? 1 : 0)
+                    }
+                }
+            }
+        }
+        .buttonStyle(.bordered)
+        .onHover { hovering = $0 }
+        .help("Stop summarizing")
+        .accessibilityLabel("Summarizing")
+        .accessibilityHint("Stops summarizing")
     }
 }

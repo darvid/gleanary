@@ -36,7 +36,10 @@ final class ConversationModel {
         self.chatGPT = chatGPT ?? ChatGPTConnection()
         customCoordinator = coordinator != nil
         self.coordinator = coordinator ??
-            AgentCoordinator(store: store, screenshotter: WebPageScreenshotter())
+            AgentCoordinator(
+                store: store, screenshotter: WebPageScreenshotter(),
+                captureSettings: CaptureSettings.current
+            )
     }
 
     var activeTask: ConversationTask? {

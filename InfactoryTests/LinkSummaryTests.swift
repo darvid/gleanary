@@ -712,6 +712,27 @@ extension LinkSummaryTests {
         #expect(await placeholder.documents.isEmpty)
     }
 
+    @Test func summariesOffSavesTheFullTextWithoutAskingTheModel() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let probe = SummaryProbe()
+        let engine = IngestionEngine(
+            store: store, fetcher: SummaryFetcher(), summarizer: probe,
+            settings: { CaptureSettings(summarize: false) }
+        )
+        _ = try await engine.enqueue("https://example.org/article")
+        try await engine.run()
+        let job = try #require(await store.captureJobs().first)
+        #expect(job.state == .ready)
+        #expect(!job.progress.contains("without a summary"))
+        let noteID = try #require(job.noteID)
+        let note = try #require(await store.document(id: noteID))
+        #expect(note.markdown.contains("cobaltbeacon"))
+        #expect(await probe.documents.isEmpty)
+    }
+
     @Test func anUnusableChosenEngineFailsWithItsReason() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

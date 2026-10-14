@@ -14,6 +14,8 @@ actor IngestionEngine {
     /// made while ChatGPT is still loading doesn't quietly use Apple Intelligence.
     private var summarizerChosen: Bool
     let screenshotter: (any PageScreenshotting)?
+    /// Read at each capture, so Settings changes apply to the next one.
+    let settings: @Sendable () -> CaptureSettings
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -25,9 +27,11 @@ actor IngestionEngine {
         transcriber: any AudioTranscribing = LocalTranscriber(),
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
         summarizerChosen: Bool = true,
-        screenshotter: (any PageScreenshotting)? = nil
+        screenshotter: (any PageScreenshotting)? = nil,
+        settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
     ) {
         self.store = store
+        self.settings = settings
         self.summarizerChosen = summarizerChosen
         self.fetcher = fetcher
         self.youtube = youtube
@@ -287,7 +291,8 @@ actor IngestionEngine {
         acquired: inout [Artifact],
         changed: @escaping @Sendable () async -> Void
     ) async throws -> String? {
-        guard job.request.url != nil, job.request.summarizeLink != false else { return nil }
+        guard job.request.url != nil, job.request.summarizeLink != false,
+              settings().summarize else { return nil }
         var summary: String?
         let summarizer = try await chosenSummarizer()
         let engine = summarizer.engineName
@@ -347,7 +352,8 @@ actor IngestionEngine {
         job: CaptureJob,
         acquired: inout [Artifact]
     ) async throws {
-        guard let url, !acquired.contains(where: { $0.name == Self.shareImageName })
+        guard let url, settings().previews,
+              !acquired.contains(where: { $0.name == Self.shareImageName })
         else { return }
         let data: Data
         do { data = try await fetcher.fetch(url).data }
@@ -375,7 +381,8 @@ actor IngestionEngine {
     /// Best effort: a YouTube video keeps its thumbnail as media and as its library preview.
     /// The largest size doesn't exist for every video, so the always-present one follows it.
     private func videoThumbnail(_ job: CaptureJob, acquired: inout [Artifact]) async throws {
-        guard let url = job.request.url, let target = try? MediaTarget.parse(url),
+        guard settings().previews, let url = job.request.url,
+              let target = try? MediaTarget.parse(url),
               target.site == .youtube,
               !acquired.contains(where: { $0.kind == .image }) else { return }
         for size in ["maxresdefault", "hqdefault"] {
@@ -411,7 +418,8 @@ actor IngestionEngine {
         acquired: inout [Artifact],
         changed: @escaping @Sendable () async -> Void
     ) async throws {
-        guard let screenshotter, job.request.url != nil, let url = primary.sourceURL,
+        guard let screenshotter, settings().previews, job.request.url != nil,
+              let url = primary.sourceURL,
               !acquired.contains(where: { $0.kind == .image }) else { return }
         try await store.checkpoint(job, acquired: acquired, progress: "Capturing a page screenshot")
         await changed()

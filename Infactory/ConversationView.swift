@@ -614,17 +614,25 @@ private struct CategoryMembershipView: View {
 }
 
 enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
-    case inference, filing
+    case inference, capture, filing
     var id: String {
         rawValue
     }
 
     var title: String {
-        self == .inference ? "AI & accounts" : "Filing"
+        switch self {
+        case .inference: "AI & accounts"
+        case .capture: "Capture"
+        case .filing: "Filing"
+        }
     }
 
     var symbol: String {
-        self == .inference ? "sparkles" : "folder"
+        switch self {
+        case .inference: "sparkles"
+        case .capture: "tray.and.arrow.down"
+        case .filing: "folder"
+        }
     }
 }
 
@@ -666,6 +674,13 @@ struct ConversationSettings: View {
                     }
                     .padding(24)
                 }
+            }
+            Tab(
+                KnowledgeSettingsPage.capture.title,
+                systemImage: KnowledgeSettingsPage.capture.symbol,
+                value: KnowledgeSettingsPage.capture
+            ) {
+                CaptureSettingsView()
             }
             Tab(
                 KnowledgeSettingsPage.filing.title,

@@ -11,11 +11,15 @@ actor AgentCoordinator {
         store: DocumentStore,
         fetcher: any SourceFetching = SourceFetcher(),
         inference: any ConversationInferring = AppleConversationInference(),
-        screenshotter: (any PageScreenshotting)? = nil
+        screenshotter: (any PageScreenshotting)? = nil,
+        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
     ) {
         self.store = store
         self.inference = inference
-        ingestion = IngestionEngine(store: store, fetcher: fetcher, screenshotter: screenshotter)
+        ingestion = IngestionEngine(
+            store: store, fetcher: fetcher, screenshotter: screenshotter,
+            settings: captureSettings
+        )
         search = SearchEngine(store: store)
     }
 
