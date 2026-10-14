@@ -753,6 +753,18 @@ extension LinkSummaryTests {
         #expect(!job.progress.contains("Apple Intelligence"))
     }
 
+    @Test func providerProblemsAreToldApartFromOnePagesFailure() {
+        let denied = ChatGPTError.modelDenied.errorDescription ?? ""
+        #expect(LibraryModel.providerProblem(
+            in: "Saved full text without a summary · \(denied)"
+        ) == denied)
+        #expect(LibraryModel.providerProblem(
+            in: "Saved full text without a summary · " +
+                (LinkSummaryError.unsupportedSummary.errorDescription ?? "")
+        ) == nil)
+        #expect(LibraryModel.providerProblem(in: "Ready") == nil)
+    }
+
     @Test func summaryFailuresNameTheirEngineOnce() {
         let checked = SummaryFailure(engine: "ChatGPT", underlying: .unsupportedSummary)
         #expect(checked
