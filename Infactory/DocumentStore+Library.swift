@@ -96,7 +96,8 @@ extension DocumentStore {
                 try memberships[row["noteID"], default: []].append(Self.uuid(row["categoryID"]))
             }
             let items = try Row.fetchAll(db, sql: """
-            SELECT n.id, n.name, n.sourceURL, n.updatedAt, \(Self.libraryKindSQL) AS kind
+            SELECT n.id, n.name, n.sourceURL, n.updatedAt, \(Self.libraryKindSQL) AS kind,
+                n.previewImage IS NOT NULL AS hasPreview
             FROM notes n WHERE n.deletedAt IS NULL
             """).map { row in
                 let id: String = row["id"]
@@ -105,7 +106,8 @@ extension DocumentStore {
                     id: Self.uuid(id), title: row["name"], kind: row["kind"],
                     host: source.flatMap(URL.init(string:))?.host(),
                     updatedAt: Date(timeIntervalSince1970: row["updatedAt"]),
-                    categoryIDs: memberships[id] ?? []
+                    categoryIDs: memberships[id] ?? [],
+                    hasPreview: row["hasPreview"]
                 )
             }
             let categories = try Row.fetchAll(
@@ -226,6 +228,22 @@ extension DocumentStore {
                     kind: row["kind"]
                 )
             }
+        }
+    }
+
+    func previewImages(for ids: [UUID]) throws -> [UUID: Data] {
+        try readyDatabase().read { db in
+            var images: [UUID: Data] = [:]
+            for id in ids {
+                if let data = try Data.fetchOne(
+                    db,
+                    sql: "SELECT previewImage FROM notes WHERE id = ? AND previewImage IS NOT NULL",
+                    arguments: [id.uuidString]
+                ) {
+                    images[id] = data
+                }
+            }
+            return images
         }
     }
 

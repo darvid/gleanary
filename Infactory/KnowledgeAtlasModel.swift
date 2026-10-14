@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import Observation
 
 /// Navigation and camera state for the Knowledge Atlas. It lives as long as the Library window,
@@ -67,6 +68,11 @@ final class KnowledgeAtlasModel {
     private(set) var matches: Set<UUID>?
     /// Matching items per tile, aligned with `layout.tiles`; empty without a search.
     private(set) var matchCounts: [Int] = []
+    /// Thumbnails drawn in item tiles, loaded only for tiles big enough to show them.
+    private(set) var thumbnails: [UUID: AtlasThumbnail] = [:]
+    @ObservationIgnored private var requestedThumbnails: Set<UUID> = []
+    @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
+    @ObservationIgnored private var store: DocumentStore?
     @ObservationIgnored private var transitionTask: Task<Void, Never>?
 
     init(snapshot: AtlasSnapshot? = nil) {
@@ -79,6 +85,7 @@ final class KnowledgeAtlasModel {
     // MARK: Data
 
     func load(from store: DocumentStore) async {
+        self.store = store
         loading = snapshot == nil
         defer { loading = false }
         do {
@@ -86,10 +93,48 @@ final class KnowledgeAtlasModel {
             guard fresh != snapshot else { return }
             snapshot = fresh
             error = nil
+            // A bookmark fetched since may have gained a preview; ask again for the rest.
+            requestedThumbnails = Set(thumbnails.keys)
             rebuild()
+            loadVisibleThumbnails()
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    /// Item tiles at least this big show their thumbnail.
+    nonisolated static let thumbnailTile = CGSize(width: 88, height: 54)
+
+    /// Loads previews for on-screen item tiles big enough to show them, a batch at a time, so a
+    /// large library never decodes thousands of images it isn't showing.
+    func loadVisibleThumbnails() {
+        guard let store, thumbnailTask == nil else { return }
+        let visible = CGRect(origin: .zero, size: viewport)
+        let wanted = Array(layout.tiles.lazy.compactMap { tile -> UUID? in
+            guard let item = tile.node.item, item.hasPreview,
+                  !self.requestedThumbnails.contains(item.id) else { return nil }
+            let rect = self.camera.screen(tile.rect)
+            return rect.width >= Self.thumbnailTile.width && rect.height >= Self.thumbnailTile
+                .height
+                && rect.intersects(visible) ? item.id : nil
+        }.prefix(48))
+        guard !wanted.isEmpty else { return }
+        requestedThumbnails.formUnion(wanted)
+        thumbnailTask = Task { [weak self] in
+            let images = await (try? store.previewImages(for: wanted)) ?? [:]
+            let decoded = await Task.detached {
+                images.compactMapValues(AtlasThumbnail.init(data:))
+            }.value
+            guard let self else { return }
+            thumbnails.merge(decoded) { $1 }
+            thumbnailTask = nil
+            loadVisibleThumbnails()
+        }
+    }
+
+    /// Supplies thumbnails directly, for previews and renders without a library.
+    func useThumbnails(_ thumbnails: [UUID: AtlasThumbnail]) {
+        self.thumbnails = thumbnails
     }
 
     func search(_ query: String, in store: DocumentStore) async {
@@ -401,5 +446,23 @@ final class KnowledgeAtlasModel {
     var accessibleTiles: [Int] {
         guard let position = layout.index[focusID] else { return [] }
         return Array(layout.children(of: position).prefix(400))
+    }
+}
+
+/// A preview downscaled for atlas tiles.
+struct AtlasThumbnail: @unchecked Sendable {
+    let image: CGImage
+
+    var size: CGSize {
+        CGSize(width: image.width, height: image.height)
+    }
+
+    init?(data: Data) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 400,
+              ] as CFDictionary) else { return nil }
+        self.image = image
     }
 }

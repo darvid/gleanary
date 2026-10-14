@@ -10,6 +10,8 @@ final class ConversationModel {
     var messages: [ConversationMessage] = []
     var tasks: [ConversationTask] = []
     var proposals: [KnowledgeProposal] = []
+    /// Changesets from the library agent, grouped by the task that proposed them.
+    var agentChanges: [UUID: [AgentChange]] = [:]
     var categories: [DecimalCategory] = []
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
@@ -79,13 +81,14 @@ final class ConversationModel {
                 .sorted { $0.sequence < $1.sequence }
             let updatedTasks = try await store.conversationTasks()
             let updatedProposals = try await store.proposals()
+            let updatedChanges = try await Dictionary(grouping: store.agentChanges(), by: \.taskID)
             let updatedCategories = try await store.categories()
             var updatedTitles = titles
             for id in Set(updatedMessages.flatMap(\.references) + selectedSources + updatedProposals
                 .flatMap { [
                     $0.left,
                     $0.right,
-                ] })
+                ] } + updatedChanges.values.joined().compactMap(\.noteID))
             {
                 updatedTitles[id] = try await store.document(id: id)?.name ?? "Deleted document"
             }
@@ -93,6 +96,7 @@ final class ConversationModel {
             messages = updatedMessages
             tasks = updatedTasks
             proposals = updatedProposals
+            agentChanges = updatedChanges
             categories = updatedCategories
             titles = updatedTitles
         } catch { self.error = error.localizedDescription }
@@ -274,6 +278,41 @@ final class ConversationModel {
     func review(_ proposal: KnowledgeProposal, action: String) async {
         do { try await store.reviewProposal(proposal.id, action: action) }
         catch { self.error = error.localizedDescription }
+        await refresh()
+        await didMutate?()
+    }
+
+    /// Applies the chosen changes and rejects the rest of the changeset.
+    func applyAgentChanges(_ ids: Set<UUID>, of changeset: [AgentChange]) async {
+        let pending = changeset.filter { $0.status == "pending" }
+        do {
+            let report = try await store
+                .applyAgentChanges(pending.filter { ids.contains($0.id) }.map(\.id))
+            try await store.rejectAgentChanges(pending.filter { !ids.contains($0.id) }.map(\.id))
+            if report.stale > 0 {
+                error = "\(report.stale) change\(report.stale == 1 ? " was" : "s were") skipped because the item changed since it was proposed."
+            }
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+        await didMutate?()
+    }
+
+    func rejectAgentChanges(_ changeset: [AgentChange]) async {
+        do {
+            try await store
+                .rejectAgentChanges(changeset.filter { $0.status == "pending" }.map(\.id))
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
+    func undoAgentChanges(_ changeset: [AgentChange]) async {
+        let applied = changeset.filter { $0.status == "applied" }
+        do {
+            let undone = try await store.undoAgentChanges(applied.map(\.id))
+            if undone < applied.count {
+                error = "\(applied.count - undone) change\(applied.count - undone == 1 ? " was" : "s were") kept because the item was edited again since."
+            }
+        } catch { self.error = error.localizedDescription }
         await refresh()
         await didMutate?()
     }

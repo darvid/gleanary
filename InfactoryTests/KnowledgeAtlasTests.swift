@@ -514,6 +514,13 @@ struct KnowledgeAtlasCameraTests {
                 }
                 let atlas = KnowledgeAtlasModel(snapshot: source)
                 atlas.reduceMotion = true
+                if stage == "zoomed" || stage == "contents" {
+                    // Every other source gets a synthetic page still.
+                    let still = try #require(Self.syntheticStill())
+                    atlas.useThumbnails(Dictionary(uniqueKeysWithValues: source.items
+                            .filter { $0.kind == "source" }.enumerated()
+                            .filter { $0.offset.isMultiple(of: 2) }.map { ($0.element.id, still) }))
+                }
                 let host = NSHostingView(rootView: KnowledgeAtlasView(
                     atlas: atlas, store: nil, openItem: { _ in }
                 ).background(Color(nsColor: .windowBackgroundColor)))
@@ -552,5 +559,36 @@ struct KnowledgeAtlasCameraTests {
                 ))
             }
         }
+    }
+
+    /// A page-like still: a dark masthead band over a lighter body with a block of "text".
+    private static func syntheticStill() -> AtlasThumbnail? {
+        guard let context = CGContext(
+            data: nil, width: 640, height: 320, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+        context.setFillColor(CGColor(gray: 0.92, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 640, height: 320))
+        context.setFillColor(CGColor(gray: 0.15, alpha: 1))
+        context.fill(CGRect(x: 0, y: 250, width: 640, height: 70))
+        context.setFillColor(CGColor(gray: 0.45, alpha: 1))
+        for line in 0 ..< 6 {
+            context.fill(CGRect(
+                x: 40,
+                y: 200 - line * 30,
+                width: 360 + (line % 3) * 60,
+                height: 12
+            ))
+        }
+        context.setFillColor(CGColor(gray: 0.6, alpha: 1))
+        context.fill(CGRect(x: 470, y: 60, width: 130, height: 150))
+        guard let image = context.makeImage() else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, "public.jpeg" as CFString, 1, nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        return AtlasThumbnail(data: output as Data)
     }
 }

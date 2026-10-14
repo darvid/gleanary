@@ -304,6 +304,116 @@ struct ChatGPTConversationInference: ConversationInferring {
     }
 }
 
+extension ChatGPTConversationInference: AgentResponding {
+    func agentTurn(instructions: String, input: [Data], tools: Data) async throws -> AgentTurn {
+        let fence = try await session.authorizationFence()
+        let body = try Self.agentRequestBody(
+            model: model, instructions: instructions, input: input, tools: tools
+        )
+        let request = try await authorizedRequest(body: body, fence: fence)
+        var decoder = ChatGPTAgentDecoder()
+        for try await line in session.transport.lines(for: request) {
+            try Task.checkCancellation()
+            if let turn = try decoder.consume(line) {
+                try await session.validateFence(fence)
+                return turn
+            }
+        }
+        if let turn = try decoder.consume("") {
+            return turn
+        }
+        throw ChatGPTError.invalidStream
+    }
+
+    static func agentRequestBody(
+        model: String,
+        instructions: String,
+        input: [Data],
+        tools: Data
+    ) throws -> Data {
+        // Plan usage requires store: false, so every turn resends the whole exchange.
+        let items = try input.map { try JSONSerialization.jsonObject(with: $0) }
+        return try JSONSerialization.data(withJSONObject: [
+            "model": model, "store": false, "stream": true, "instructions": instructions,
+            "input": items, "tools": JSONSerialization.jsonObject(with: tools),
+            "tool_choice": "auto", "parallel_tool_calls": true,
+        ])
+    }
+}
+
+/// Collects one tool-loop turn from the event stream: the function calls and reply text the
+/// model produced, ready to replay. Reasoning items aren't kept, since with store: false
+/// they can't be referenced again.
+struct ChatGPTAgentDecoder {
+    private var dataLines: [String] = []
+    private var turn = AgentTurn()
+
+    mutating func consume(_ line: String) throws -> AgentTurn? {
+        guard line.utf8.count <= 400_000 else { throw ChatGPTError.invalidStream }
+        if line.hasPrefix("data:") {
+            dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces))
+            guard dataLines.reduce(0, { $0 + $1.utf8.count }) <= 400_000
+            else { throw ChatGPTError.invalidStream }
+            return nil
+        }
+        guard line.isEmpty, !dataLines.isEmpty else { return nil }
+        let payload = dataLines.joined(separator: "\n")
+        dataLines = []
+        return try process(payload)
+    }
+
+    private mutating func process(_ payload: String) throws -> AgentTurn? {
+        guard payload != "[DONE]" else { throw ChatGPTError.invalidStream }
+        guard let event = try JSONSerialization.jsonObject(with: Data(payload.utf8))
+            as? [String: Any], let type = event["type"] as? String
+        else { throw ChatGPTError.invalidStream }
+        switch type {
+        case "response.output_item.done":
+            guard let item = event["item"] as? [String: Any]
+            else { throw ChatGPTError.invalidStream }
+            try collect(item)
+        case "response.completed":
+            guard (event["response"] as? [String: Any])?["status"] as? String == "completed"
+            else { throw ChatGPTError.invalidStream }
+            return turn
+        case "response.failed", "error":
+            let response = event["response"] as? [String: Any]
+            let error = (response?["error"] as? [String: Any]) ??
+                (event["error"] as? [String: Any]) ?? event
+            throw ChatGPTError.apiError(error)
+        case "response.incomplete":
+            throw ChatGPTError.invalidStream
+        default:
+            break
+        }
+        return nil
+    }
+
+    private mutating func collect(_ item: [String: Any]) throws {
+        switch item["type"] as? String {
+        case "function_call":
+            guard let callID = item["call_id"] as? String, let name = item["name"] as? String,
+                  let arguments = item["arguments"] as? String
+            else { throw ChatGPTError.invalidStream }
+            turn.calls.append(AgentCall(id: callID, name: name, arguments: arguments))
+            try turn.output.append(JSONSerialization.data(withJSONObject: [
+                "type": "function_call", "call_id": callID, "name": name, "arguments": arguments,
+            ]))
+        case "message":
+            let text = ((item["content"] as? [[String: Any]]) ?? [])
+                .filter { $0["type"] as? String == "output_text" }
+                .compactMap { $0["text"] as? String }.joined()
+            guard !text.isEmpty else { return }
+            turn.text += text
+            try turn.output.append(JSONSerialization.data(withJSONObject: [
+                "role": "assistant", "content": text,
+            ]))
+        default:
+            break
+        }
+    }
+}
+
 struct ChatGPTSSEDecoder {
     private var dataLines: [String] = []
     private(set) var text = ""

@@ -29,6 +29,7 @@ struct AtlasRenderer {
     let selectedID: AtlasNodeID?
     let hoveredID: AtlasNodeID?
     let matchCounts: [Int]
+    var thumbnails: [UUID: AtlasThumbnail] = [:]
     let dark: Bool
     let highContrast: Bool
     let keyboardFocused: Bool
@@ -343,6 +344,9 @@ struct AtlasRenderer {
                 lineWidth: 1
             )
         }
+        if let item = node.item, let thumbnail = thumbnails[item.id] {
+            drawThumbnail(thumbnail, fill: fill, shape: shape, screen: screen, in: &tileLayer)
+        }
         let titled = Self.ramp(screen.width, 60, 72) * Self.ramp(screen.height, 24, 30)
         guard titled > 0, let item = node.item else { return }
         var label = context
@@ -352,6 +356,47 @@ struct AtlasRenderer {
             item, title: node.title, ink: ink, screen: screen,
             large: screen.width >= 200 && screen.height >= 80, in: &label
         )
+    }
+
+    /// The page or video still as a duotone in the category's colour, so the map stays
+    /// colour-coded, fading out under the title so it stays legible.
+    private func drawThumbnail(
+        _ thumbnail: AtlasThumbnail,
+        fill: Color,
+        shape: Path,
+        screen: CGRect,
+        in context: inout GraphicsContext
+    ) {
+        let reveal = Self.ramp(screen.width, KnowledgeAtlasModel.thumbnailTile.width, 110)
+            * Self.ramp(screen.height, KnowledgeAtlasModel.thumbnailTile.height, 70)
+        guard reveal > 0 else { return }
+        var photo = context
+        photo.clip(to: shape)
+        photo.opacity *= reveal * (dark ? 0.75 : 0.85)
+        photo.addFilter(.grayscale(1))
+        photo.addFilter(.colorMultiply(fill))
+        let scale = max(screen.width / thumbnail.size.width, screen.height / thumbnail.size.height)
+        let size = CGSize(
+            width: thumbnail.size.width * scale,
+            height: thumbnail.size.height * scale
+        )
+        photo.draw(
+            Image(decorative: thumbnail.image, scale: 1),
+            in: CGRect(
+                x: screen.midX - size.width / 2,
+                y: screen.midY - size.height / 2,
+                width: size.width,
+                height: size.height
+            )
+        )
+        var scrim = context
+        scrim.clip(to: shape)
+        scrim.opacity *= reveal
+        scrim.fill(Path(screen), with: .linearGradient(
+            Gradient(colors: [fill, fill.opacity(0.85), fill.opacity(0)]),
+            startPoint: CGPoint(x: screen.midX, y: screen.minY),
+            endPoint: CGPoint(x: screen.midX, y: screen.minY + min(screen.height * 0.75, 90))
+        ))
     }
 
     private func drawItemLabel(

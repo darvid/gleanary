@@ -197,6 +197,7 @@ struct KnowledgeAtlasView: View {
                         layout: atlas.layout, camera: camera,
                         selectedID: atlas.selectedID,
                         hoveredID: atlas.hoveredID, matchCounts: atlas.matchCounts,
+                        thumbnails: atlas.thumbnails,
                         dark: colorScheme == .dark, highContrast: contrast == .increased,
                         keyboardFocused: canvasFocused, displayScale: displayScale
                     ).draw(in: &context, size: size)
@@ -236,6 +237,7 @@ struct KnowledgeAtlasView: View {
                 zoomStep(action.direction == .zoomIn ? 1.6 : 1 / 1.6)
             }
             .onChange(of: geometry.size, initial: true) { atlas.setViewport(geometry.size) }
+            .onChange(of: atlas.camera) { atlas.loadVisibleThumbnails() }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
     }

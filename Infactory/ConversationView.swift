@@ -7,6 +7,7 @@ struct ConversationView: View {
     @State private var preview = DocumentPreviewModel()
     @State private var showingPreview = false
     @State private var source: SourceCitation?
+    @State private var reviewingChanges: ReviewedChangeset?
     @State private var importing = false
     @State private var confirmingClear = false
     @State private var starterCategories = false
@@ -73,6 +74,15 @@ struct ConversationView: View {
         }
         .task(id: preview.selectedID) { await preview.load(from: model.store) }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
+        .sheet(item: $reviewingChanges) { target in
+            let changes = model.agentChanges[target.id] ?? []
+            AgentChangesReview(
+                changes: changes,
+                titles: model.titles,
+                apply: { ids in Task { await model.applyAgentChanges(ids, of: changes) } },
+                reject: { Task { await model.rejectAgentChanges(changes) } }
+            )
+        }
         .sheet(isPresented: $starterCategories) {
             StarterCategoriesView(store: model.store, existing: model.categories) {
                 await model.refresh()
@@ -257,6 +267,18 @@ struct ConversationView: View {
                 }) { proposal in
                     proposalCard(proposal)
                 }
+            if let taskID = message.taskID, message.author == AgentRole.librarian.rawValue,
+               let changes = model.agentChanges[taskID], !changes.isEmpty,
+               model.messages.last(where: {
+                   $0.taskID == taskID && $0.author == AgentRole.librarian.rawValue
+               })?.id == message.id
+            {
+                AgentChangesCard(
+                    changes: changes,
+                    review: { reviewingChanges = ReviewedChangeset(id: taskID) },
+                    undo: { Task { await model.undoAgentChanges(changes) } }
+                )
+            }
         }
         .accessibilityElement(children: .contain)
     }
@@ -714,4 +736,9 @@ struct NewCategoryBadge: View {
             .background(Self.tint.opacity(0.25), in: Capsule())
             .accessibilityLabel("New category")
     }
+}
+
+/// The task whose changeset the review sheet shows.
+struct ReviewedChangeset: Identifiable {
+    let id: UUID
 }
