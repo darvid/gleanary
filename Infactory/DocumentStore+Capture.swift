@@ -270,9 +270,9 @@ extension DocumentStore {
                 arguments: [
                     noteID.uuidString,
                     existing == nil
-                        ? summaryNote.map { "Saved full text without a summary · \($0)" }
-                        ?? "Saved locally · \(document.coverage.label)\(document.warnings.isEmpty ? "" : " · Review extraction notes")"
-                        : "Already captured; existing note kept · \(document.coverage.label)",
+                        ? summaryNote.map { "Saved full text without a summary: \($0)" }
+                        ?? "Saved locally (\(document.coverage.label))\(document.warnings.isEmpty ? "" : ". Review extraction notes.")"
+                        : "Already captured; existing note kept (\(document.coverage.label))",
                     now,
                     job.id.uuidString,
                 ]

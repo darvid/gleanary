@@ -203,7 +203,7 @@ struct ChatGPTSettings: View {
 
     private var accountStatus: String {
         guard let account = connection.activeAccount,
-              account.signedIn else { return "Optional · uses your ChatGPT plan" }
+              account.signedIn else { return "Optional, uses your ChatGPT plan" }
         return account.planAuthorized ? "Connected" : "Plan permission required"
     }
 }

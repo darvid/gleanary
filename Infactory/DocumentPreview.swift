@@ -174,7 +174,7 @@ struct DocumentPreview: View {
                 systemImage: "doc.text",
                 description: Text(model
                     .error ??
-                    "Read a saved summary or note here. Your original sources stay in your library.")
+                    "Its summary or note opens here.")
             )
         }
     }
@@ -390,14 +390,14 @@ struct DocumentPreview: View {
                 infoRow("Summary") {
                     HStack(spacing: 4) {
                         Label(provider, systemImage: "sparkles")
-                        Text("· check the source for details").foregroundStyle(.secondary)
+                        Text("(check the source for details)").foregroundStyle(.secondary)
                     }
                 }
             } else if let provider = model.authorProvider, provider != "user" {
                 infoRow("Written by") { Label(provider, systemImage: "sparkles") }
             } else if model.canGenerateSummary {
                 infoRow("Summary") {
-                    Text("None yet · the full text is saved").foregroundStyle(.secondary)
+                    Text("None yet. The full text is saved.").foregroundStyle(.secondary)
                 }
             }
             if let saved = model.details.saved {

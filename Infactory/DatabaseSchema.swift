@@ -350,6 +350,49 @@ enum DatabaseSchema {
             );
             """)
         }
+        migrator.registerMigration("automation-entries-v1") { db in
+            // Per-item outcomes for run history, and proposals to update a moved link.
+            try db.execute(sql: """
+            ALTER TABLE automation_runs ADD COLUMN entries TEXT NOT NULL DEFAULT '[]';
+            ALTER TABLE automation_runs ADD COLUMN fine INTEGER NOT NULL DEFAULT 0;
+            CREATE TABLE agent_changes_v3 (
+                id TEXT PRIMARY KEY NOT NULL,
+                taskID TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN
+                    ('title','summary','filing','category','archive','link','relink')),
+                noteID TEXT,
+                targetID TEXT,
+                code TEXT,
+                before TEXT NOT NULL,
+                after TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                baseRevision TEXT,
+                appliedRevision TEXT,
+                snapshot TEXT,
+                status TEXT NOT NULL
+                    CHECK(status IN ('pending','applied','rejected','stale','undone')),
+                createdAt REAL NOT NULL
+            );
+            INSERT INTO agent_changes_v3 SELECT id, taskID, ordinal, kind, noteID, targetID, code,
+                before, after, reason, baseRevision, appliedRevision, snapshot, status, createdAt
+                FROM agent_changes;
+            DROP TABLE agent_changes;
+            ALTER TABLE agent_changes_v3 RENAME TO agent_changes;
+            CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+            """)
+        }
+        migrator.registerMigration("automation-scale-v1") { db in
+            // Separate from automation-entries-v1, which earlier builds already applied.
+            try db.execute(sql: """
+            ALTER TABLE automations ADD COLUMN recheck REAL NOT NULL DEFAULT 2592000;
+            -- Finding items with no links looks both ways; the primary keys cover leftID.
+            CREATE INDEX IF NOT EXISTS note_links_right ON note_links(rightID);
+            CREATE INDEX IF NOT EXISTS knowledge_links_right ON knowledge_links(rightID);
+            -- Proposals already made for an item, checked before proposing again.
+            CREATE INDEX IF NOT EXISTS agent_changes_note ON agent_changes(noteID, kind);
+            """)
+        }
         try migrator.migrate(database)
     }
 }

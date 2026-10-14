@@ -29,6 +29,7 @@ extension DocumentStore {
                 config.batchLimit = row["batchLimit"]
                 config.cloudAllowed = row["cloudAllowed"]
                 config.dailyCalls = row["dailyCalls"]
+                config.recheck = row["recheck"]
                 config.lastRunAt = (row["lastRunAt"] as Double?)
                     .map(Date.init(timeIntervalSince1970:))
             }
@@ -39,14 +40,16 @@ extension DocumentStore {
     func saveAutomation(_ config: AutomationConfig) throws {
         try readyDatabase().write { db in
             try db.execute(sql: """
-            INSERT INTO automations(id, enabled, interval, batchLimit, cloudAllowed, dailyCalls, lastRunAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO automations(id, enabled, interval, batchLimit, cloudAllowed, dailyCalls,
+                recheck, lastRunAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, interval = excluded.interval,
                 batchLimit = excluded.batchLimit, cloudAllowed = excluded.cloudAllowed,
-                dailyCalls = excluded.dailyCalls, lastRunAt = excluded.lastRunAt
+                dailyCalls = excluded.dailyCalls, recheck = excluded.recheck,
+                lastRunAt = excluded.lastRunAt
             """, arguments: [
                 config.kind.rawValue, config.enabled, config.interval, config.batchLimit,
-                config.cloudAllowed, config.dailyCalls,
+                config.cloudAllowed, config.dailyCalls, config.recheck,
                 config.lastRunAt?.timeIntervalSince1970,
             ])
         }
@@ -70,10 +73,13 @@ extension DocumentStore {
             let ended = (run.endedAt ?? Date()).timeIntervalSince1970
             try db.execute(sql: """
             UPDATE automation_runs SET endedAt = ?, status = ?, examined = ?, changed = ?,
-                proposed = ?, skipped = ?, calls = ?, report = ? WHERE id = ?
+                proposed = ?, skipped = ?, calls = ?, report = ?, entries = ?, fine = ?
+            WHERE id = ?
             """, arguments: [
                 ended, run.status.rawValue, run.examined, run.changed, run.proposed, run.skipped,
-                run.calls, run.report.joined(separator: "\n"), run.id.uuidString,
+                run.calls, run.report.joined(separator: "\n"),
+                String(decoding: JSONEncoder().encode(run.entries), as: UTF8.self), run.fine,
+                run.id.uuidString,
             ])
             try db.execute(sql: """
             INSERT INTO automations(id, enabled, interval, batchLimit, cloudAllowed, dailyCalls, lastRunAt)
@@ -217,46 +223,35 @@ extension DocumentStore {
 
     // MARK: Selectors
 
-    /// Inbox items holding fetched full text and no summary, oldest first. An item whose
+    /// Inbox items holding fetched full text and no summary, newest first. An item whose
     /// summary failed waits until `retryBefore` before it's tried again.
     func inboxSummaryCandidates(limit: Int, retryBefore: Date) throws -> [UUID] {
-        try readyDatabase().read { db in
-            try String.fetchAll(db, sql: """
-            SELECT n.id FROM notes n
-            JOIN note_categories nc ON nc.noteID = n.id AND nc.isPrimary = 1
-            JOIN decimal_categories dc ON dc.id = nc.categoryID AND dc.code = ?
-            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND n.sourceURL IS NOT NULL
-                AND NOT (\(Self.legacySummarySQL))
-                AND EXISTS (SELECT 1 FROM captures c WHERE c.noteID = n.id
-                    AND c.markdownHash = n.contentHash
-                    AND coalesce(json_extract(CAST(c.document AS TEXT), '$.coverage'), '') != 'bookmark')
-                AND NOT EXISTS (SELECT 1 FROM item_checks ic WHERE ic.noteID = n.id
-                    AND ic.kind = 'summary' AND ic.state = 'failed' AND ic.checkedAt > ?)
-            ORDER BY n.createdAt, n.id LIMIT ?
-            """, arguments: [DecimalCategory.inboxCode, retryBefore.timeIntervalSince1970, limit])
-                .compactMap(UUID.init(uuidString:))
+        let (sql, arguments) = Self.inboxSummaryQuery(retryBefore: retryBefore)
+        return try readyDatabase().read { db in
+            try String.fetchAll(
+                db, sql: "SELECT n.id \(sql) ORDER BY n.createdAt DESC, n.id LIMIT ?",
+                arguments: arguments + [limit]
+            ).compactMap(UUID.init(uuidString:))
         }
     }
 
-    /// Sources whose original link is due a check: never checked, checked before
-    /// `checkedBefore`, or failing and last tried before `retryBefore`.
+    /// Sources whose original link is due a check: never checked (newest first), then those
+    /// checked before `checkedBefore` or failing and last tried before `retryBefore` (longest
+    /// ago first).
     func linkCheckCandidates(
         limit: Int,
         checkedBefore: Date,
         retryBefore: Date
     ) throws -> [(id: UUID, url: URL, title: String)] {
-        try readyDatabase().read { db in
-            try Row.fetchAll(db, sql: """
-            SELECT n.id, n.sourceURL, n.name FROM notes n
-            LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = 'access'
-            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
-                AND (n.sourceURL LIKE 'https://%' OR n.sourceURL LIKE 'http://%')
-                AND (ic.checkedAt IS NULL OR ic.checkedAt < ?
-                    OR (ic.state IN ('gone', 'transient') AND ic.checkedAt < ?))
-            ORDER BY coalesce(ic.checkedAt, 0), n.createdAt, n.id LIMIT ?
-            """, arguments: [
-                checkedBefore.timeIntervalSince1970, retryBefore.timeIntervalSince1970, limit,
-            ]).compactMap { row in
+        let (sql, arguments) = Self.linkCheckQuery(
+            checkedBefore: checkedBefore, retryBefore: retryBefore
+        )
+        return try readyDatabase().read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT n.id, n.sourceURL, n.name \(sql) \(Self.newThenOldest) LIMIT ?",
+                arguments: arguments + [limit]
+            ).compactMap { row in
                 guard let id = (row["id"] as String?).flatMap(UUID.init(uuidString:)),
                       let url = (row["sourceURL"] as String?).flatMap(URL.init(string:))
                 else { return nil }
@@ -265,20 +260,110 @@ extension DocumentStore {
         }
     }
 
-    /// Items with no links yet, oldest link check first.
+    /// Items with no links yet: never looked at (newest first), then the longest ago.
     func crossLinkCandidates(limit: Int, checkedBefore: Date) throws -> [UUID] {
-        try readyDatabase().read { db in
-            try String.fetchAll(db, sql: """
-            SELECT n.id FROM notes n
-            LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = 'links'
-            WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
-                AND NOT EXISTS (SELECT 1 FROM note_links WHERE n.id IN (leftID, rightID))
-                AND NOT EXISTS (SELECT 1 FROM knowledge_links WHERE n.id IN (leftID, rightID))
-                AND (ic.checkedAt IS NULL OR ic.checkedAt < ?)
-            ORDER BY coalesce(ic.checkedAt, 0), n.createdAt, n.id LIMIT ?
-            """, arguments: [checkedBefore.timeIntervalSince1970, limit])
-                .compactMap(UUID.init(uuidString:))
+        let (sql, arguments) = Self.crossLinkQuery(checkedBefore: checkedBefore)
+        return try readyDatabase().read { db in
+            try String.fetchAll(
+                db, sql: "SELECT n.id \(sql) \(Self.newThenOldest) LIMIT ?",
+                arguments: arguments + [limit]
+            ).compactMap(UUID.init(uuidString:))
         }
+    }
+
+    /// How many items each selector would return without a limit, counted in SQLite.
+    func inboxSummaryBacklog(retryBefore: Date) throws -> Int {
+        try count(Self.inboxSummaryQuery(retryBefore: retryBefore))
+    }
+
+    func linkCheckBacklog(checkedBefore: Date, retryBefore: Date) throws -> Int {
+        try count(Self.linkCheckQuery(checkedBefore: checkedBefore, retryBefore: retryBefore))
+    }
+
+    func crossLinkBacklog(checkedBefore: Date) throws -> Int {
+        try count(Self.crossLinkQuery(checkedBefore: checkedBefore))
+    }
+
+    /// Titles for many items in one query, for listing proposals.
+    func noteTitles(_ ids: [UUID]) throws -> [UUID: String] {
+        guard !ids.isEmpty else { return [:] }
+        return try readyDatabase().read { db in
+            var titles: [UUID: String] = [:]
+            // Chunked under SQLite's variable limit.
+            for chunk in stride(from: 0, to: ids.count, by: 500).map({
+                Array(ids[$0 ..< min($0 + 500, ids.count)])
+            }) {
+                let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                for row in try Row.fetchAll(
+                    db, sql: "SELECT id, name FROM notes WHERE id IN (\(marks))",
+                    arguments: StatementArguments(chunk.map(\.uuidString))
+                ) {
+                    if let id = (row["id"] as String?).flatMap(UUID.init(uuidString:)) {
+                        titles[id] = row["name"]
+                    }
+                }
+            }
+            return titles
+        }
+    }
+
+    private func count(_ query: (sql: String, arguments: StatementArguments)) throws -> Int {
+        try readyDatabase().read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) \(query.sql)", arguments: query.arguments)
+                ?? 0
+        }
+    }
+
+    /// Never-checked items first, newest of those first, so what you just saved is in the next
+    /// run; then whatever was checked longest ago.
+    private static let newThenOldest = """
+    ORDER BY ic.checkedAt IS NOT NULL, CASE WHEN ic.checkedAt IS NULL THEN n.createdAt END DESC,
+        ic.checkedAt, n.id
+    """
+
+    private static func inboxSummaryQuery(retryBefore: Date)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM notes n
+        JOIN note_categories nc ON nc.noteID = n.id AND nc.isPrimary = 1
+        JOIN decimal_categories dc ON dc.id = nc.categoryID AND dc.code = ?
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND n.sourceURL IS NOT NULL
+            AND NOT (\(legacySummarySQL))
+            AND EXISTS (SELECT 1 FROM captures c WHERE c.noteID = n.id
+                AND c.markdownHash = n.contentHash
+                AND coalesce(json_extract(CAST(c.document AS TEXT), '$.coverage'), '') != 'bookmark')
+            AND NOT EXISTS (SELECT 1 FROM item_checks ic WHERE ic.noteID = n.id
+                AND ic.kind = 'summary' AND ic.state = 'failed' AND ic.checkedAt > ?)
+        """, [DecimalCategory.inboxCode, retryBefore.timeIntervalSince1970])
+    }
+
+    private static func linkCheckQuery(checkedBefore: Date, retryBefore: Date)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM notes n
+        LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = 'access'
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
+            AND (n.sourceURL LIKE 'https://%' OR n.sourceURL LIKE 'http://%')
+            AND (ic.checkedAt IS NULL OR ic.checkedAt < ?
+                OR (ic.state IN ('gone', 'transient') AND ic.checkedAt < ?))
+        """, [checkedBefore.timeIntervalSince1970, retryBefore.timeIntervalSince1970])
+    }
+
+    private static func crossLinkQuery(checkedBefore: Date)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM notes n
+        LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = 'links'
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
+            AND NOT EXISTS (SELECT 1 FROM note_links WHERE leftID = n.id)
+            AND NOT EXISTS (SELECT 1 FROM note_links WHERE rightID = n.id)
+            AND NOT EXISTS (SELECT 1 FROM knowledge_links WHERE leftID = n.id)
+            AND NOT EXISTS (SELECT 1 FROM knowledge_links WHERE rightID = n.id)
+            AND (ic.checkedAt IS NULL OR ic.checkedAt < ?)
+        """, [checkedBefore.timeIntervalSince1970])
     }
 
     /// Whether these two items are linked, or a link between them was already proposed,
@@ -306,6 +391,16 @@ extension DocumentStore {
         }
     }
 
+    /// Whether updating this item's link to `url` was already proposed, or turned down.
+    func relinkConsidered(_ noteID: UUID, to url: URL) throws -> Bool {
+        try readyDatabase().read { db in
+            try Bool.fetchOne(db, sql: """
+            SELECT EXISTS(SELECT 1 FROM agent_changes WHERE kind = 'relink' AND noteID = ?
+                AND after = ? AND status IN ('pending', 'rejected'))
+            """, arguments: [noteID.uuidString, url.absoluteString]) ?? false
+        }
+    }
+
     func isArchived(_ noteID: UUID) throws -> Bool {
         try readyDatabase().read { db in
             try Double.fetchOne(
@@ -330,7 +425,11 @@ extension DocumentStore {
             proposed: row["proposed"],
             skipped: row["skipped"],
             calls: row["calls"],
-            report: report.isEmpty ? [] : report.components(separatedBy: "\n")
+            report: report.isEmpty ? [] : report.components(separatedBy: "\n"),
+            entries: (try? JSONDecoder().decode(
+                [AutomationEntry].self, from: Data((row["entries"] as String).utf8)
+            )) ?? [],
+            fine: row["fine"]
         )
     }
 }

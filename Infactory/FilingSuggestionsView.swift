@@ -99,7 +99,7 @@ struct FilingSuggestionsView: View {
                         .fadesOnChange(stopping)
                 } currentValueLabel: {
                     Text(stopping
-                        ? "Waiting for requests already sent · \(progress.checked.formatted()) checked"
+                        ? "Waiting for requests already sent, \(progress.checked.formatted()) checked"
                         :
                         "\(progress.checked.formatted()) of \(progress.total.formatted()) checked")
                         .monospacedDigit()

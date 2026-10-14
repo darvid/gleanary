@@ -162,7 +162,7 @@ final class LibraryModel {
         switch SystemLanguageModel.default.availability {
         case .available:
             intelligenceAvailable = true
-            intelligenceStatus = "Apple Intelligence is ready · on-device summaries"
+            intelligenceStatus = "Apple Intelligence is ready for on-device summaries"
         case let .unavailable(reason):
             intelligenceAvailable = false
             switch reason {
@@ -239,7 +239,7 @@ final class LibraryModel {
     private func applyStatistics(_ statistics: LibraryStatistics) {
         passageCount = statistics.passages
         pendingNotes = statistics.pendingNotes
-        status = "\(statistics.passages) passages · \(statistics.embeddedPassages) vectors ready · \(statistics.pendingNotes) notes pending"
+        status = "\(statistics.passages) passages, \(statistics.embeddedPassages) vectors ready, \(statistics.pendingNotes) notes pending"
     }
 
     private func refreshAfterMutation() async throws {
@@ -645,12 +645,14 @@ final class LibraryModel {
             if let failure = refreshedJobs.first(where: {
                 $0.state == .failed && previousStates[$0.id] != .failed
             }) {
-                switch failure.recovery {
-                case .browser: browserJob = failure
-                case .audio: audioJob = failure
-                case nil where failure.request.replacingNoteID == nil: captureFailure = failure
-                case nil: break
-                }
+                announce(failure)
+            }
+            if refreshedJobs.contains(where: {
+                $0
+                    .state == .ready && previousStates[$0.id] != nil && previousStates[$0.id] !=
+                    .ready
+            }) {
+                automations.itemsSaved()
             }
             captureJobs = refreshedJobs
             if sequence != documentChangeSequence {
@@ -664,6 +666,16 @@ final class LibraryModel {
                 startIndexing()
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Offers the recovery a newly failed capture needs, or names it in the failure notice.
+    private func announce(_ failure: CaptureJob) {
+        switch failure.recovery {
+        case .browser: browserJob = failure
+        case .audio: audioJob = failure
+        case nil where failure.request.replacingNoteID == nil: captureFailure = failure
+        case nil: break
+        }
     }
 
     func captureDetail(_ id: UUID) async throws -> CaptureDetail {

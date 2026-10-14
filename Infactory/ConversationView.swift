@@ -155,7 +155,7 @@ struct ConversationView: View {
         if model.chatGPT.useChatGPT {
             return "Using ChatGPT plan"
         }
-        return library.intelligenceAvailable ? "On-device" : "Local · model unavailable"
+        return library.intelligenceAvailable ? "On-device" : "Local, model unavailable"
     }
 
     private var feed: some View {
@@ -582,7 +582,7 @@ private struct CategoryMembershipView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Filing").font(.headline)
-            Text(assigned.isEmpty ? "Not filed" : assigned.map(\.label).joined(separator: " · "))
+            Text(assigned.isEmpty ? "Not filed" : assigned.map(\.label).joined(separator: ", "))
                 .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
             Menu("Set primary home") {
                 ForEach(categories) { category in

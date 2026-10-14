@@ -11,6 +11,8 @@ import Observation
     /// Item titles for showing proposals.
     private(set) var titles: [UUID: String] = [:]
     private(set) var running: AutomationKind?
+    /// Items due now per automation, beyond what one run takes.
+    private(set) var backlog: [AutomationKind: Int] = [:]
     var error: String?
 
     @ObservationIgnored private let store: DocumentStore
@@ -18,11 +20,17 @@ import Observation
     @ObservationIgnored private let schedules: Bool
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var scheduler: NSBackgroundActivityScheduler?
+    @ObservationIgnored private var newItemsTask: Task<Void, Never>?
     /// Refreshes the library after a run changed it.
     @ObservationIgnored var libraryChanged: () async -> Void = {}
 
     var pendingCount: Int {
         pending.values.reduce(0) { $0 + $1.count }
+    }
+
+    /// Automations whose latest run failed, until a later one succeeds.
+    var failed: [AutomationKind] {
+        AutomationKind.allCases.filter { runs[$0]?.first?.status == .failed }
     }
 
     /// `schedules` false keeps tests and previews from running anything on their own.
@@ -41,15 +49,19 @@ import Observation
             configs = try await store.automationConfigs()
             var updatedRuns: [AutomationKind: [AutomationRun]] = [:]
             var updatedPending: [AutomationKind: [AgentChange]] = [:]
+            var updatedBacklog: [AutomationKind: Int] = [:]
             for kind in AutomationKind.allCases {
                 updatedRuns[kind] = try await store.automationRuns(kind)
                 updatedPending[kind] = try await store.pendingAutomationChanges(kind)
+                updatedBacklog[kind] = try await engine.backlog(config(kind))
             }
+            backlog = updatedBacklog
             var updatedTitles = titles
-            for id in Set(updatedPending.values.joined().flatMap { [$0.noteID, $0.targetID] }
-                .compactMap(\.self)) where updatedTitles[id] == nil
-            {
-                updatedTitles[id] = try await store.document(id: id)?.name ?? "Deleted item"
+            let missing = Set(updatedPending.values.joined().flatMap { [$0.noteID, $0.targetID] }
+                .compactMap(\.self)).filter { updatedTitles[$0] == nil }
+            let found = try await store.noteTitles(Array(missing))
+            for id in missing {
+                updatedTitles[id] = found[id] ?? "Deleted item"
             }
             runs = updatedRuns
             pending = updatedPending
@@ -91,6 +103,36 @@ import Observation
         }
     }
 
+    /// How long after the last save a run starts, so a burst of saves is one run.
+    static let newItemsDelay: Duration = .seconds(90)
+
+    /// Something new was saved. Automations that work on new items run shortly after, rather
+    /// than waiting for their schedule; new items come first in every run, so they're covered.
+    func itemsSaved() {
+        guard schedules else { return }
+        newItemsTask?.cancel()
+        newItemsTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.newItemsDelay)
+            guard !Task.isCancelled else { return }
+            await self?.runForNewItems()
+        }
+    }
+
+    func runForNewItems() async {
+        guard running == nil else { return }
+        if configs.isEmpty {
+            await load()
+        }
+        for config in configs where config.enabled && config.kind.followsNewItems {
+            await perform(config)
+        }
+    }
+
+    /// How many items this automation's next run takes, given what's due.
+    func plannedBatch(_ kind: AutomationKind) -> Int {
+        AutomationEngine.plannedBatch(config(kind), backlog: backlog[kind] ?? 0)
+    }
+
     func runNow(_ kind: AutomationKind) {
         guard running == nil else { return }
         runTask = Task { await perform(config(kind)) }
@@ -102,10 +144,16 @@ import Observation
 
     func update(_ config: AutomationConfig) {
         guard let index = configs.firstIndex(where: { $0.kind == config.kind }) else { return }
+        let recheckChanged = configs[index].recheck != config.recheck
         configs[index] = config
         Task {
-            do { try await store.saveAutomation(config) }
-            catch { self.error = error.localizedDescription }
+            do {
+                try await store.saveAutomation(config)
+                // A different interval changes what's due.
+                if recheckChanged {
+                    backlog[config.kind] = try await engine.backlog(config)
+                }
+            } catch { self.error = error.localizedDescription }
         }
     }
 

@@ -42,7 +42,7 @@ extension IngestionEngine {
             try await store.checkpoint(
                 job,
                 acquired: acquired,
-                progress: "Audio retained · preparing on-device transcription"
+                progress: "Audio retained, preparing on-device transcription"
             )
             await changed()
             return try await transcribeAudio(target, job: job, acquired: acquired, changed: changed)
@@ -97,7 +97,7 @@ extension IngestionEngine {
         try await store.checkpoint(
             job,
             acquired: acquired,
-            progress: "Transcribing locally · \(locale)"
+            progress: "Transcribing locally (\(locale))"
         )
         await changed()
         let segments = try await transcriber.transcribe(

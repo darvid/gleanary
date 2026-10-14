@@ -130,8 +130,8 @@ enum Coverage: String, Codable, Sendable {
         case .abstractOnly: "Abstract only"
         case .partial: "Partial extraction"
         case .transcript: "Timestamped transcript"
-        case .visibleThread: "Loaded posts · partial thread"
-        case .bookmark: "Bookmark only · page not fetched yet"
+        case .visibleThread: "Loaded posts, partial thread"
+        case .bookmark: "Bookmark only, page not fetched yet"
         }
     }
 }

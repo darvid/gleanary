@@ -94,17 +94,17 @@ final class KnowledgeGraphModel {
             return initialBuildStatus
         }
         if let job = jobs.first(where: { ["running", "curating"].contains($0.state) }) {
-            return "Finding connections · \(job.completed)/\(job.total) sections · \(job.name)"
+            return "Finding connections in \(job.name): \(job.completed) of \(job.total) sections"
         }
         let waiting = jobs.filter { ["failed", "paused", "unavailable"].contains($0.state) }.count
         if waiting >
             0
         {
-            return "Graph · \(waiting) \(waiting == 1 ? "note needs" : "notes need") attention"
+            return "Graph: \(waiting) \(waiting == 1 ? "note needs" : "notes need") attention"
         }
         let pending = jobs.filter { ["queued", "curating"].contains($0.state) }.count
         if pending > 0 {
-            return "Graph · \(pending) notes queued"
+            return "Graph: \(pending) notes queued"
         }
         return "\(snapshot.totalNodes) knowledge nodes"
     }

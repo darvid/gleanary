@@ -50,6 +50,23 @@ private struct FixedArchive: ArchiveLookup {
     }
 }
 
+/// Answers after a moment, noting how many checks overlap overall and per site.
+private actor PacedProbe: LinkProbing {
+    private var active: [String: Int] = [:]
+    private(set) var mostAtOnce = 0
+    private(set) var mostPerSite = 0
+
+    func probe(_ url: URL) async -> LinkProbe {
+        let site = url.host() ?? ""
+        active[site, default: 0] += 1
+        mostPerSite = max(mostPerSite, active[site] ?? 0)
+        mostAtOnce = max(mostAtOnce, active.values.reduce(0, +))
+        try? await Task.sleep(for: .milliseconds(30))
+        active[site, default: 1] -= 1
+        return .reachable
+    }
+}
+
 /// Calls the first candidate related, with a reason.
 private actor FirstRelatedJudge: LinkJudging {
     nonisolated let local: Bool
@@ -107,7 +124,8 @@ private actor FirstRelatedJudge: LinkJudging {
         probe: any LinkProbing = FixedProbe(.reachable),
         judge: (any LinkJudging)? = nil,
         similar: [UUID] = [],
-        clock: TestClock = TestClock()
+        clock: TestClock = TestClock(),
+        politeness: Duration = .zero
     ) -> AutomationEngine {
         AutomationEngine(store: store, dependencies: .init(
             summarize: { document in
@@ -120,7 +138,7 @@ private actor FirstRelatedJudge: LinkJudging {
             judge: { judge },
             similar: { _, _ in similar },
             now: { clock.now },
-            politeness: .zero
+            politeness: politeness
         ))
     }
 
@@ -266,11 +284,62 @@ private actor FirstRelatedJudge: LinkJudging {
             clock.advance(days: 31)
         }
         #expect(try await store.pendingAutomationChanges(.linkChecker).isEmpty)
-        let moved = await engine(
-            store, probe: FixedProbe(.moved(URL(string: "https://fixture.example/new"))),
-            clock: clock
-        ).run(config(.linkChecker))
-        #expect(moved.report.contains { $0.contains("moved to https://fixture.example/new") })
+        let restricted = try #require(await automation.run(config(.linkChecker)).entries.first)
+        #expect(restricted.outcome == .restricted)
+    }
+
+    @Test func reviewSheetShowsEveryKindOfChange() {
+        #expect(AgentChangesReview.kindOrder.count == AgentChange.Kind.allCases.count)
+        #expect(Set(AgentChangesReview.kindOrder) == Set(AgentChange.Kind.allCases))
+    }
+
+    /// A moved link becomes a proposal to update it, which applies and undoes like any other.
+    @Test func movedLinksProposeUpdatingTheLink() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, ids) = try await library(["old"])
+        let destination = try #require(URL(string: "https://fixture.example/new"))
+        let clock = TestClock()
+        let automation = engine(store, probe: FixedProbe(.moved(destination)), clock: clock)
+        let run = await automation.run(config(.linkChecker))
+        #expect(run.proposed == 1)
+        #expect(run.entries.map(\.outcome) == [.proposed])
+        #expect(run.entries.first?.itemID == ids[0])
+        #expect(try await store.automationRuns(.linkChecker).first?.entries == run.entries)
+        // Checked, so nothing is due until the recheck, which is yours to set.
+        #expect(try await automation.backlog(config(.linkChecker)) == 0)
+        try await store.saveAutomation(config(.linkChecker) { $0.recheck = 7 * 24 * 60 * 60 })
+        #expect(try await store.automationConfigs().first { $0.kind == .linkChecker }?.recheck
+            == 7 * 24 * 60 * 60)
+        clock.advance(days: 8)
+        #expect(try await automation.backlog(config(.linkChecker) {
+            $0.recheck = 7 * 24 * 60 * 60
+        }) == 1)
+        #expect(try await automation.backlog(config(.linkChecker)) == 0)
+        let proposal = try #require(try await store.pendingAutomationChanges(.linkChecker).first)
+        #expect(proposal.kind == .relink)
+        #expect(proposal.after == destination.absoluteString)
+        // Not proposed again while it waits.
+        clock.advance(days: 31)
+        let again = await automation.run(config(.linkChecker))
+        #expect(again.proposed == 0)
+        #expect(again.entries.map(\.outcome) == [.moved])
+
+        _ = try await store.applyAgentChanges([proposal.id])
+        #expect(try await store.libraryItemDetails(for: ids[0]).sourceURL == destination)
+        #expect(try await store.itemCheck(ids[0], kind: "access") == nil)
+        #expect(try await store.undoAgentChanges([proposal.id]) == 1)
+        #expect(try await store.libraryItemDetails(for: ids[0]).sourceURL?.absoluteString
+            == "https://fixture.example/old")
+
+        // Undo forgot the check, so the restored link is due again; a source saved since is
+        // due straight away too.
+        let ingestion = IngestionEngine(
+            store: store, fetcher: ArticleFetcher(), summarizer: FixtureLinkSummarizer(),
+            settings: { CaptureSettings(summarize: false, previews: false) }
+        )
+        _ = try await ingestion.enqueue("https://fixture.example/newer")
+        try await ingestion.run()
+        #expect(try await automation.backlog(config(.linkChecker)) == 2)
     }
 
     @Test func probeClassifiesResponses() throws {
@@ -368,5 +437,89 @@ private actor FirstRelatedJudge: LinkJudging {
         #expect(run.proposed == 1)
         try await store.clearConversation()
         #expect(try await store.pendingAutomationChanges(.crossLinker).count == 1)
+    }
+}
+
+// MARK: Large libraries
+
+extension AutomationTests {
+    @Test func batchesGrowToCoverALibraryWithinAMonth() {
+        var checker = AutomationConfig(kind: .linkChecker)
+        // Daily: 30 runs a cycle, so 7,400 due links need 247 a run.
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 7400) == 247)
+        // Never fewer than the batch you set.
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 10) == checker.batchLimit)
+        // Never more than the cap, however much is due.
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 1_000_000)
+            == AutomationEngine.largestBatch)
+        // More runs a cycle, smaller runs.
+        checker.interval = 6 * 60 * 60
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 7400) == 62)
+        // Rechecking weekly needs bigger runs to get round in time.
+        checker.interval = 24 * 60 * 60
+        checker.recheck = 7 * 24 * 60 * 60
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 7400) == 1000)
+        checker.recheck = 91 * 24 * 60 * 60
+        #expect(AutomationEngine.plannedBatch(checker, backlog: 7400) == 82)
+        // Summaries keep to the batch; the daily model budget limits them.
+        let summarizer = AutomationConfig(kind: .inboxSummarizer)
+        #expect(AutomationEngine.plannedBatch(summarizer, backlog: 7400) == summarizer.batchLimit)
+    }
+
+    @Test func newestUncheckedItemsComeFirst() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, _) = try await library(["first", "second", "third"])
+        let probe = FixedProbe(.reachable)
+        let run = await engine(store, probe: probe).run(config(.linkChecker) { $0.batchLimit = 1 })
+        #expect(run.examined == 1)
+        #expect(await probe.probed.map(\.lastPathComponent) == ["third"])
+        #expect(try await store.linkCheckBacklog(
+            checkedBefore: Date.distantPast,
+            retryBefore: Date.distantPast
+        ) == 2)
+    }
+
+    @Test func sitesAreCheckedTogetherButEachOneAtATime() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open(seed: [])
+        let ingestion = IngestionEngine(
+            store: store, fetcher: ArticleFetcher(), summarizer: FixtureLinkSummarizer(),
+            settings: { CaptureSettings(summarize: false, previews: false) }
+        )
+        for site in ["one", "two", "three"] {
+            for page in ["a", "b"] {
+                _ = try await ingestion.enqueue("https://\(site).example/\(page)")
+            }
+        }
+        try await ingestion.run()
+        let probe = PacedProbe()
+        let run = await engine(store, probe: probe, politeness: .milliseconds(10))
+            .run(config(.linkChecker))
+        #expect(run.examined == 6)
+        #expect(run.fine == 6)
+        #expect(await probe.mostPerSite == 1)
+        #expect(await probe.mostAtOnce > 1)
+    }
+
+    @Test @MainActor func newSavesRunTheAutomationsThatFollowThem() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, ingestion, _) = try await library(["alpha"])
+        for kind in [AutomationKind.inboxSummarizer, .linkChecker] {
+            var automation = AutomationConfig(kind: kind)
+            automation.enabled = true
+            // Not due on its schedule.
+            automation.lastRunAt = Date()
+            try await store.saveAutomation(automation)
+        }
+        let model = AutomationsModel(
+            store: store, engine: engine(store, ingestion: ingestion), schedules: false
+        )
+        await model.load()
+        await model.runForNewItems()
+        #expect(model.runs[.inboxSummarizer]?.count == 1)
+        // A link just fetched needs no check.
+        #expect(model.runs[.linkChecker]?.isEmpty == true)
     }
 }

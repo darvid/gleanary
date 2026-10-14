@@ -41,7 +41,7 @@ struct AgentChangesCard: View {
 
     private var status: String {
         if pending {
-            return "Proposed · nothing changes until you apply"
+            return "Proposed. Nothing changes until you apply."
         }
         let parts = [
             ("applied", "applied"), ("undone", "undone"), ("stale", "skipped"), (
@@ -49,7 +49,7 @@ struct AgentChangesCard: View {
                 "rejected"
             ),
         ].compactMap { status, label in count(status) > 0 ? "\(count(status)) \(label)" : nil }
-        return parts.joined(separator: " · ").capitalizedFirst
+        return parts.formatted(.list(type: .and)).capitalizedFirst
     }
 
     static func breakdown(_ changes: [AgentChange]) -> String {
@@ -57,11 +57,12 @@ struct AgentChangesCard: View {
             (.title, "title", "titles"), (.summary, "summary", "summaries"),
             (.filing, "filing", "filings"), (.category, "new category", "new categories"),
             (.link, "link", "links"), (.archive, "archive", "archives"),
+            (.relink, "moved link", "moved links"),
         ]
         return labels.compactMap { kind, one, many in
             let count = changes.count { $0.kind == kind }
             return count == 0 ? nil : "\(count) \(count == 1 ? one : many)"
-        }.joined(separator: " · ")
+        }.formatted(.list(type: .and))
     }
 }
 
@@ -104,10 +105,7 @@ struct AgentChangesReview: View {
             .padding(20)
             Divider()
             List {
-                ForEach(
-                    [AgentChange.Kind.title, .summary, .category, .filing, .link, .archive],
-                    id: \.self
-                ) { kind in
+                ForEach(Self.kindOrder, id: \.self) { kind in
                     let group = changes.filter { $0.kind == kind }
                     if !group.isEmpty {
                         Section(Self.heading(kind, count: group.count)) {
@@ -139,6 +137,12 @@ struct AgentChangesReview: View {
         .frame(width: 640, height: 560)
     }
 
+    /// Every kind, in the order the sheet groups them; a test keeps it complete, since a kind
+    /// left out would be applied without ever being shown.
+    static let kindOrder: [AgentChange.Kind] = [
+        .title, .summary, .category, .filing, .link, .relink, .archive,
+    ]
+
     private static func heading(_ kind: AgentChange.Kind, count: Int) -> String {
         switch kind {
         case .category: count == 1 ? "New category" : "New categories"
@@ -147,6 +151,7 @@ struct AgentChangesReview: View {
         case .filing: "Filing"
         case .link: count == 1 ? "Link" : "Links"
         case .archive: "Archive"
+        case .relink: count == 1 ? "Moved link" : "Moved links"
         }
     }
 
@@ -204,6 +209,15 @@ struct AgentChangesReview: View {
                 Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
                 Label(change.after, systemImage: "archivebox").font(.callout)
                     .foregroundStyle(.secondary)
+            case .relink:
+                Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
+                Text(change.before).strikethrough().foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.turn.down.right").font(.caption2)
+                        .foregroundStyle(.secondary).accessibilityLabel("now at")
+                    Text(change.after).lineLimit(1).truncationMode(.middle)
+                }
             case .summary:
                 Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
                 RowDisclosure(title: "New text") {
