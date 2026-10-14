@@ -60,6 +60,8 @@ final class KnowledgeAtlasModel {
 
     /// Categories with nothing filed in them, whether or not they are hidden.
     private(set) var emptyCategoryCount = 0
+    /// The categories behind `emptyCategoryCount`, for marking them outside the map.
+    private(set) var emptyCategoryIDs: Set<UUID> = []
 
     /// Item IDs matching the current search, or nil when no search is active.
     private(set) var matches: Set<UUID>?
@@ -117,6 +119,7 @@ final class KnowledgeAtlasModel {
         }
         let projected = AtlasHierarchy.project(source)
         emptyCategoryCount = AtlasHierarchy.emptyCategoryCount(projected)
+        emptyCategoryIDs = AtlasHierarchy.emptyCategoryIDs(projected)
         root = hidesEmptyCategories ? AtlasHierarchy.withoutEmptyCategories(projected) : projected
         // Layouts depend only on the hierarchy and viewport, so unchanged regions stay put and
         // the camera can be kept as is.
@@ -230,7 +233,8 @@ final class KnowledgeAtlasModel {
         guard viewport.width > 0, let tile = layout.tile(id) else { return }
         let target = tile.node.kind == .library
             ? AtlasCamera.fitting(layout.bounds, in: viewport)
-            : AtlasCamera.fitting(tile.contentRect, in: viewport, margin: 12)
+            // The whole region, so its title stays in view above its contents.
+            : AtlasCamera.fitting(tile.rect, in: viewport, margin: 12)
         move(to: target, animated: animated)
     }
 
@@ -240,28 +244,32 @@ final class KnowledgeAtlasModel {
     private func updateContext() {
         guard !layout.tiles.isEmpty else { return }
         let center = camera.logical(viewportCenter)
-        guard camera.scale > 1.05 else {
+        // Fully zoomed out is always the library. No other scale shortcut: a tall region framed
+        // with its title can sit below 1×, and the rules below step out as the view zooms out.
+        guard camera.scale > scaleRange.lowerBound * 1.001 else {
             if focusID != .library {
                 focusID = .library
             }
             return
         }
         func fill(_ position: Int) -> (major: CGFloat, minor: CGFloat) {
-            let screen = camera.screen(layout.tiles[position].contentRect)
+            // Whole regions, matching `fit`, which frames a region with its title.
+            let screen = camera.screen(layout.tiles[position].rect)
             let width = screen.width / viewport.width
             let height = screen.height / viewport.height
             return (max(width, height), min(width, height))
         }
         var current = layout.index[focusID] ?? 0
         while current != 0, let parent = layout.tiles[current].parent,
-              !layout.tiles[current].contentRect.contains(center) || fill(current).major < 0.5
+              !layout.tiles[current].rect.contains(center) || fill(current).major < 0.5
         {
             current = parent
         }
         while let next = layout.children(of: current).first(where: { position in
             let tile = layout.tiles[position]
-            guard tile.node.kind != .item, tile.childCount > 0,
-                  tile.contentRect.contains(center) else { return false }
+            // A category's own items are part of it, not a context of their own.
+            guard tile.node.kind != .item, tile.node.kind != .direct, tile.childCount > 0,
+                  tile.rect.contains(center) else { return false }
             let share = fill(position)
             return share.major >= Self.contextShare && share.minor >= 0.5
         }) {
@@ -343,7 +351,10 @@ final class KnowledgeAtlasModel {
             }
             guard let next else { return hit }
             position = next
-            hit = layout.tiles[next].id
+            // A category's own items have no box to select; clicks reach the items or category.
+            if layout.tiles[next].node.kind != .direct {
+                hit = layout.tiles[next].id
+            }
         }
     }
 

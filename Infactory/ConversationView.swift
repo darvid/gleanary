@@ -7,7 +7,6 @@ struct ConversationView: View {
     @State private var preview = DocumentPreviewModel()
     @State private var showingPreview = false
     @State private var source: SourceCitation?
-    @State private var settings = false
     @State private var importing = false
     @State private var confirmingClear = false
     @State private var starterCategories = false
@@ -74,7 +73,6 @@ struct ConversationView: View {
         }
         .task(id: preview.selectedID) { await preview.load(from: model.store) }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
-        .sheet(isPresented: $settings) { ConversationSettings(model: model, library: library) }
         .sheet(isPresented: $starterCategories) {
             StarterCategoriesView(store: model.store, existing: model.categories) {
                 await model.refresh()
@@ -123,17 +121,24 @@ struct ConversationView: View {
         ))
     }
 
-    /// Two plain icon buttons; the window toolbar already shows the title.
+    /// The same trailing More menu as the library, so the toolbar keeps its shape when
+    /// switching; settings live in the app menu's Settings window (⌘,).
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarSpacer(.flexible)
-        ToolbarItemGroup {
-            Button("Clear conversation", systemImage: "trash") { confirmingClear = true }
+        ToolbarItem {
+            Menu("More", systemImage: "ellipsis") {
+                Section(modelStatus) {
+                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                }
+                Divider()
+                Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
+                    confirmingClear = true
+                }
                 .disabled(!model.ready || model.messages.isEmpty || model.clearingConversation)
-                .help("Clear conversation")
-            Button("Settings", systemImage: "gearshape") { settings = true }
-                .help("Settings · \(modelStatus)")
+            }
+            .menuIndicator(.hidden)
+            .help("Conversation options")
         }
-        .sharedBackgroundVisibility(.hidden)
     }
 
     private var modelStatus: String {
@@ -370,8 +375,7 @@ struct ConversationView: View {
         }
     }
 
-    /// New categories read differently from existing ones by icon, text and color, not color alone.
-    private static let newCategoryTint = Color.green
+    private static let newCategoryTint = NewCategoryBadge.tint
 
     private func categoryChip(_ label: String, isNew: Bool) -> some View {
         HStack(spacing: 4) {
@@ -379,9 +383,7 @@ struct ConversationView: View {
                 .foregroundStyle(isNew ? Self.newCategoryTint : .primary)
             Text(label)
             if isNew {
-                Text("New").font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Self.newCategoryTint.opacity(0.25), in: Capsule())
+                NewCategoryBadge()
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
@@ -604,10 +606,11 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
     }
 }
 
+/// Infactory › Settings… (⌘,): toolbar tabs in the standard Settings window.
 struct ConversationSettings: View {
+    static let size = CGSize(width: 680, height: 560)
     @Bindable var model: ConversationModel
     let library: LibraryModel
-    @Environment(\.dismiss) private var dismiss
     @State private var page: KnowledgeSettingsPage
 
     init(
@@ -621,62 +624,38 @@ struct ConversationSettings: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Settings").font(.title2.weight(.semibold))
-                Spacer()
-                Button("Close settings", systemImage: "xmark") { dismiss() }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    .keyboardShortcut(.cancelAction).help("Close settings")
-            }.padding(.horizontal, 24).padding(.vertical, 20)
-            Divider()
-            HStack(spacing: 0) {
-                VStack(spacing: 4) {
-                    ForEach(KnowledgeSettingsPage.allCases) { item in
-                        Button {
-                            page = item
-                        } label: {
-                            Label(item.title, systemImage: item.symbol)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12).padding(.vertical, 10)
-                                .background(
-                                    page == item ? Color.primary.opacity(0.08) : .clear,
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                                .contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                            .accessibilityAddTraits(page == item ? .isSelected : [])
-                    }
-                    Spacer()
-                }.padding(12).frame(width: 176)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                Divider()
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(page.title).font(.title2.weight(.semibold))
-                        .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 12)
-                    switch page {
-                    case .inference:
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 12) {
-                                if model.running {
-                                    Text("Finish or cancel the current task to change AI settings.")
-                                        .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-                                }
-                                ChatGPTSettings(
-                                    connection: model.chatGPT,
-                                    localStatus: library.intelligenceStatus
-                                )
-                                .disabled(model.running)
-                            }.padding(.horizontal, 28).padding(.bottom, 24)
+        TabView(selection: $page) {
+            Tab(
+                KnowledgeSettingsPage.inference.title,
+                systemImage: KnowledgeSettingsPage.inference.symbol,
+                value: KnowledgeSettingsPage.inference
+            ) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if model.running {
+                            Text("Finish or cancel the current task to change AI settings.")
+                                .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
                         }
-                    case .filing:
-                        FilingSettings(model: model)
-                            .padding(.horizontal, 28).padding(.bottom, 24)
+                        ChatGPTSettings(
+                            connection: model.chatGPT,
+                            localStatus: library.intelligenceStatus
+                        )
+                        .disabled(model.running)
                     }
-                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(24)
+                }
             }
-        }.frame(width: 780, height: 600)
-            .background(Color(nsColor: .windowBackgroundColor))
+            Tab(
+                KnowledgeSettingsPage.filing.title,
+                systemImage: KnowledgeSettingsPage.filing.symbol,
+                value: KnowledgeSettingsPage.filing
+            ) {
+                FilingSettings(model: model).padding(24)
+            }
+        }
+        .frame(width: Self.size.width, height: Self.size.height)
+        // Settings can open before the conversation has, from the app menu.
+        .task { await model.load() }
     }
 }
 
@@ -720,5 +699,19 @@ private struct ReferenceChip: View {
             Button(selected ? "Remove from sources" : "Use as source", action: toggleSource)
                 .disabled(!available)
         }
+    }
+}
+
+/// Marks a category that doesn't exist yet. New categories read differently from existing ones by
+/// icon, text and color together, never color alone.
+struct NewCategoryBadge: View {
+    static let tint = Color.green
+    static let symbol = "folder.badge.plus"
+
+    var body: some View {
+        Text("New").font(.caption2.weight(.semibold))
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(Self.tint.opacity(0.25), in: Capsule())
+            .accessibilityLabel("New category")
     }
 }

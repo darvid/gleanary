@@ -2,6 +2,15 @@ import Foundation
 import FoundationModels
 import Observation
 
+/// A parsed export waiting for the person to confirm where its folders go.
+struct BookmarkImportDraft: Sendable {
+    let fileName: String
+    let file: BookmarkFile
+    let original: Artifact
+    let categories: [DecimalCategory]
+    let plan: BookmarkFolderPlan
+}
+
 struct CaptureNotice: Identifiable, Equatable {
     let id: UUID
     let noteID: UUID
@@ -238,6 +247,153 @@ final class LibraryModel {
         graph.clearSearch()
     }
 
+    /// Parses an export and keeps it as the import's retained original. Nothing is written to
+    /// the library until `importBookmarks` runs.
+    func prepareBookmarkImport(_ url: URL) async throws -> BookmarkImportDraft {
+        let access = url.startAccessingSecurityScopedResource()
+        defer {
+            if access {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        let file = try await Task.detached { try BookmarkParser.parse(data) }.value
+        let original = try await ingestion.artifacts.retain(
+            data,
+            kind: file.format == .csv ? .text : .html,
+            name: url.lastPathComponent
+        )
+        let categories = try await store.categories()
+        return BookmarkImportDraft(
+            fileName: url.lastPathComponent,
+            file: file,
+            original: original,
+            categories: categories,
+            plan: BookmarkFolderPlan(bookmarks: file.bookmarks, existing: categories)
+        )
+    }
+
+    func importBookmarks(
+        _ draft: BookmarkImportDraft,
+        plan: BookmarkFolderPlan,
+        progress: @escaping @MainActor (Int) -> Void
+    ) async throws -> BookmarkImportReport {
+        guard ready, !busy else { throw BookmarkImportError.busy }
+        busy = true
+        error = nil
+        defer { busy = false }
+        let report = try await store.importBookmarks(
+            draft.file.bookmarks,
+            plan: plan,
+            original: draft.original
+        ) { done in await progress(done) }
+        try await refreshAfterMutation()
+        return report
+    }
+
+    /// Captures and Generate Summary use this summarizer, following the AI provider setting.
+    func useLinkSummarizer(_ summarizer: any LinkSummarizing) async {
+        await ingestion.useSummarizer(summarizer)
+    }
+
+    /// A short status for background work on an item, shown on its library row.
+    func activity(for noteID: UUID) -> String? {
+        if generatingSummaryID == noteID {
+            return "Summarizing…"
+        }
+        return bookmarkFetch(for: noteID).map { _ in "Fetching page…" }
+    }
+
+    /// The background page fetch upgrading this bookmark, while it runs.
+    func bookmarkFetch(for noteID: UUID) -> CaptureJob? {
+        captureJobs.first { $0.request.replacingNoteID == noteID && !$0.state.terminal }
+    }
+
+    /// Opening an imported bookmark fetches its page; the capture upgrades the same note.
+    func fetchBookmarkIfNeeded(_ id: UUID) async {
+        guard ready else { return }
+        do {
+            guard try await ingestion.enqueueBookmarkFetch(noteID: id) != nil else { return }
+            await refreshCaptures()
+            startCaptures()
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: Auto-categorization
+
+    private(set) var categorization: CategorizationProgress?
+    private(set) var categorizationEngine: String?
+    var categorizationError: String?
+    /// Observed, unlike the task, so the sheet reacts the moment Stop is pressed and again
+    /// when the last in-flight request ends.
+    private(set) var categorizationState = CategorizationState.idle
+    /// True when the last run ended because someone stopped it.
+    private(set) var categorizationStopped = false
+    @ObservationIgnored private var categorizationTask: Task<Void, Never>?
+
+    enum CategorizationState: Equatable {
+        case idle, running, stopping
+    }
+
+    var categorizing: Bool {
+        categorizationState != .idle
+    }
+
+    /// Runs in the background; suggestions are saved as each batch finishes.
+    func startCategorizing(using inference: any ConversationInferring) {
+        guard ready, categorizationTask == nil else { return }
+        categorizationError = nil
+        categorizationStopped = false
+        categorizationState = .running
+        categorizationEngine = inference.capabilities.local ? "Apple Intelligence" : "ChatGPT"
+        let categorizer = BookmarkCategorizer(store: store, inference: inference)
+        categorizationTask = Task { [weak self] in
+            do {
+                let result = try await categorizer.run { progress in
+                    await MainActor.run { self?.categorization = progress }
+                }
+                self?.categorization = result
+            } catch is CancellationError {
+                self?.categorizationStopped = true
+            } catch {
+                self?.categorizationError = error.localizedDescription
+            }
+            self?.categorizationTask = nil
+            self?.categorizationState = .idle
+        }
+    }
+
+    /// Requests already sent finish or abort before the run ends; the state shows that wait.
+    func stopCategorizing() {
+        guard categorizationState == .running else { return }
+        categorizationState = .stopping
+        categorizationTask?.cancel()
+    }
+
+    func filingSuggestions() async throws -> [FilingSuggestion] {
+        try await store.pendingFilingSuggestions()
+    }
+
+    func acceptFilingSuggestions(_ ids: [UUID]) async throws -> (accepted: Int, batch: UUID) {
+        let result = try await store.acceptFilingSuggestions(ids)
+        try await refreshAfterMutation()
+        return result
+    }
+
+    func rejectFilingSuggestions(_ ids: [UUID]) async throws {
+        try await store.rejectFilingSuggestions(ids)
+    }
+
+    func undoFilingSuggestions(batch: UUID) async throws -> Int {
+        let restored = try await store.undoFilingSuggestions(batch: batch)
+        try await refreshAfterMutation()
+        return restored
+    }
+
+    func createSuggestedCategory(_ name: String, code: String) async throws {
+        _ = try await store.createSuggestedCategory(name, code: code)
+    }
+
     func importFiles(_ urls: [URL]) async {
         guard ready, !busy else { return }
         captureNotice = nil
@@ -345,8 +501,10 @@ final class LibraryModel {
                 .map { ($0.id, $0.state) })
             let refreshedJobs = try await store.captureJobs()
             let sequence = try await store.libraryChangeSequence()
+            // A bookmark upgrade updates the open item in place; it isn't a new save to announce.
             if let completed = refreshedJobs.first(where: {
                 $0.state == .ready && previousStates[$0.id] != .ready && $0.noteID != nil
+                    && $0.request.replacingNoteID == nil
             }), let noteID = completed.noteID {
                 captureNotice = try await CaptureNotice(
                     id: completed.id,

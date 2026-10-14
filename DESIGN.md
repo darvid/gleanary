@@ -69,7 +69,7 @@ The product's platform posture is adaptive; the shipping surface is SwiftUI on m
 **Key Characteristics:**
 - Semantic macOS surfaces and system light/dark appearance.
 - Native sidebar, searchable list, and selectable Markdown reading.
-- Quiet provenance and explicit handoff to #general.
+- Quiet provenance and explicit handoff to Chat.
 
 ## Colors
 
@@ -120,7 +120,10 @@ Search and preview-action radii are the frontmatter's small, observed curves. Li
 - **Preview actions:** compact grayscale bordered buttons for captured source and original link; borderless small Edit/File actions. Press changes the grayscale fill. Enabled prominent actions elsewhere retain the system accent with brightness offsets of −0.12 at rest and −0.18 pressed. No custom hover or motion contract is implemented.
 - **Reading:** selectable native Markdown text with headings, lists, quotes, fenced code, and simple tables. No scripts or remote images load. Coverage, provider, filing, expandable capture limitations, and related source/artifact links accompany the text. Legacy summaries are classified by persisted Summary.md/Markdown/hash evidence, not filename alone; originals remain accessible through source relationships.
 - **Source previews:** link captures with a retained screenshot show it above the row title as a 96pt-tall, top-aligned crop (masthead and hero, like a link preview's image). Corners are 8pt continuous with a 0.5pt quaternary hairline so white pages hold an edge on light surfaces; dark appearance dims it by 14%. The image is local capture evidence, not a remote load, and is hidden from assistive technologies because the title repeats it. Rows without a screenshot keep the text-only layout; no placeholder art.
-- **Handoff:** pinned below list pagination; selected count, Clear, and Use in #general. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
+- **Toolbar and settings:** chat and library share one toolbar shape: view-specific controls (the library's Map/List switcher) sit left of a trailing system-glass More menu (plain `ellipsis`) in both. Destructive or occasional actions such as Clear Conversation live in that menu. Settings is the standard Settings window (Infactory › Settings…, ⌘,) with toolbar tabs, also linked from each More menu; no gear button in the window toolbar.
+- **Bookmark import:** File › Import Bookmarks… opens a native sheet: choose a browser/Raindrop HTML or Raindrop CSV export, review each folder's destination (existing category, a proposed new Johnny Decimal category, or unfiled) in an inset list with subfolders indented 16pt, then import with determinate progress. Imports read only export metadata; a page is fetched after its note stays open for one second.
+- **Categorize Unfiled:** a sheet that runs suggestions in the background and groups them by category in collapsed disclosure rows with Accept All/Reject All, per-item accept/reject icons, an "Accept N Likely" bulk action with undo, and model-proposed new categories that must be created explicitly. The engine line states whether data leaves the Mac.
+- **Handoff:** pinned below list pagination; selected count, Clear, and Use in Chat. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
 - **Recovery and mutation:** native empty/loading/error states, capture retry/stop actions, filing sheet, and confirmed deletion. Errors remain readable and actionable rather than decorative status theater.
 
 The sidecar's HTML/CSS samples are portable illustrations, not shipping components or a substitute for native focus, selection, typography, and accessibility behavior.

@@ -10,7 +10,7 @@ The shipping app is native macOS 26+, written in SwiftUI. No web or mobile surfa
 
 ## Users and purpose
 
-A person building and using a local knowledge library through a persistent #general conversation. Save sources, find material, ask grounded questions, compare sources, and review connections without learning internal agent routing. SPEC.md is the product authority.
+A person building and using a local knowledge library through a persistent Chat conversation. Save sources, find material, ask grounded questions, compare sources, and review connections without learning internal agent routing. SPEC.md is the product authority.
 
 ## Operating context
 

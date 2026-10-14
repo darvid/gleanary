@@ -49,7 +49,7 @@ struct CaptureSourceView: View {
                         .foregroundStyle(.secondary)
                 }
                 if !detail.document.warnings.isEmpty {
-                    DisclosureGroup("Extraction notes (\(detail.document.warnings.count))") {
+                    RowDisclosure(title: "Extraction notes (\(detail.document.warnings.count))") {
                         ScrollView {
                             VStack(alignment: .leading, spacing: 6) {
                                 ForEach(detail.document.warnings, id: \.self) {

@@ -49,6 +49,23 @@ private actor MediaProviderFixture: YouTubeProviding {
 }
 
 private actor MediaFetchFixture: SourceFetching {
+    /// A synthetic 480×360 still, the size YouTube's hqdefault thumbnails come in.
+    static let still: Data = {
+        let output = NSMutableData()
+        guard let context = CGContext(
+            data: nil, width: 480, height: 360, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return Data() }
+        context.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 480, height: 360))
+        guard let image = context.makeImage(), let destination = CGImageDestinationCreateWithData(
+            output, "public.jpeg" as CFString, 1, nil
+        ) else { return Data() }
+        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationFinalize(destination)
+        return output as Data
+    }()
+
     var requestedURLs: [URL] = []
     var html: String?
     func setHTML(_ text: String) {
@@ -57,6 +74,11 @@ private actor MediaFetchFixture: SourceFetching {
 
     func fetch(_ url: URL) throws -> DownloadedContent {
         requestedURLs.append(url)
+        if url.host == "i.ytimg.com" {
+            // Only the always-present size exists, as for many real videos.
+            guard url.lastPathComponent == "hqdefault.jpg" else { throw CaptureError.http(404) }
+            return DownloadedContent(data: Self.still, url: url, mime: "image/jpeg", encoding: nil)
+        }
         if url.path.hasSuffix("audio.m4a") {
             return DownloadedContent(
                 data: Data("synthetic audio bytes".utf8),
@@ -163,12 +185,18 @@ struct MediaCaptureTests {
         #expect(match.citation?.url?.query?.contains("t=65") == true)
         let detail = try await fixture.store.captureDetail(id: #require(match.citation?.captureID))
         #expect(detail.document.coverage == .transcript)
-        #expect(detail.artifacts.map(\.kind) == [.capture, .json, .markdown])
+        #expect(detail.artifacts.map(\.kind) == [.capture, .json, .image, .markdown])
+        let videoID = try #require(await fixture.store.documents().first?.id)
+        #expect(try await fixture.store.libraryItemDetails(for: videoID).previewImage != nil)
         #expect(detail.document.markdown.contains("1:05"))
         _ = try await engine.enqueue("https://youtu.be/abcdefghijk?t=65"); try await engine.run()
         #expect(try await fixture.store.documents().count == 1)
         #expect(await provider.audioCalls == 0)
-        #expect(await fetcher.requestedURLs == [URL(string: "https://www.youtube.com/favicon.ico")])
+        #expect(await fetcher.requestedURLs == [
+            URL(string: "https://i.ytimg.com/vi/abcdefghijk/maxresdefault.jpg"),
+            URL(string: "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"),
+            URL(string: "https://www.youtube.com/favicon.ico"),
+        ])
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open(seed: [])
         #expect(try await reopened.searchSnapshot(query: "cobaltbeacon", candidateLimit: 10)
@@ -205,6 +233,8 @@ struct MediaCaptureTests {
         #expect(await provider.audioCalls == 1)
         #expect(await fetcher.requestedURLs == [
             URL(string: "https://fixture.example/audio.m4a"),
+            URL(string: "https://i.ytimg.com/vi/abcdefghijk/maxresdefault.jpg"),
+            URL(string: "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"),
             URL(string: "https://www.youtube.com/favicon.ico"),
         ])
         #expect(await speech.calls == 2)

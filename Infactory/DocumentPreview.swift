@@ -14,6 +14,7 @@ import SwiftUI
     private(set) var coverage: Coverage?
     private(set) var warnings: [String] = []
     private(set) var authorProvider: String?
+    private(set) var details = LibraryItemDetails()
     private var loadToken = UUID()
 
     func load(from store: DocumentStore) async {
@@ -28,6 +29,7 @@ import SwiftUI
             generatedSummary = false
             canGenerateSummary = false
             categories = []; related = []; coverage = nil; warnings = []; authorProvider = nil
+            details = LibraryItemDetails()
         }
         error = nil
         guard let id else { loading = false; return }
@@ -55,6 +57,7 @@ import SwiftUI
             let filing = try await store.categories(for: id)
             let linked = try await store.relatedLibraryDocuments(to: id)
             let provider = try await store.libraryAuthorProvider(for: id)
+            let itemDetails = try await store.libraryItemDetails(for: id)
             guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
             citation = source
             generatedSummary = summary
@@ -65,6 +68,7 @@ import SwiftUI
             coverage = captured?.coverage
             warnings = captured?.warnings ?? []
             authorProvider = provider
+            details = itemDetails
             if loaded == nil {
                 selectedID = nil
             }
@@ -77,6 +81,9 @@ import SwiftUI
     }
 }
 
+/// An item's detail page, modelled on Safari's Reading List and Finder's Get Info: where it came
+/// from, what you can do with it, where it's filed, then the text itself. The item's primary
+/// category colours the page, as it does in the atlas.
 struct DocumentPreview: View {
     let model: DocumentPreviewModel
     var openSource: (SourceCitation) -> Void = { _ in }
@@ -85,10 +92,26 @@ struct DocumentPreview: View {
     var generateSummary: (MarkdownDocument) -> Void = { _ in }
     var cancelSummary: () -> Void = {}
     var showsLibraryDetails = false
+    /// Progress of the page fetch that will replace this bookmark's note, while it runs.
+    var bookmarkFetch: String?
     var openDocument: (UUID) -> Void = { _ in }
     var editDocument: ((MarkdownDocument) -> Void)?
     var fileDocument: ((MarkdownDocument) -> Void)?
     var showsSummaryActions = true
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var dark: Bool {
+        colorScheme == .dark
+    }
+
+    private var categoryInk: Color? {
+        model.categories.first
+            .map { AtlasPalette.ink(AtlasHierarchy.hue(for: $0.code), dark: dark) }
+    }
+
+    private var sourceURL: URL? {
+        model.details.sourceURL ?? model.citation?.url
+    }
 
     var body: some View {
         if model.loading {
@@ -96,51 +119,41 @@ struct DocumentPreview: View {
         } else if let document = model.document {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    Text(document.name).font(.title2.weight(.semibold))
-                        .textSelection(.enabled)
-                        .accessibilityAddTraits(.isHeader)
-                    if showsLibraryDetails {
-                        libraryMetadata(document)
+                    if let data = model.details.previewImage, let image = NSImage(data: data) {
+                        hero(image)
                     }
-                    if model.citation != nil || model.canGenerateSummary || generatingSummary {
+                    header(document)
+                    if model.citation != nil || sourceURL != nil || model.canGenerateSummary
+                        || generatingSummary
+                    {
                         ViewThatFits(in: .horizontal) {
-                            actions(for: document, compact: false)
-                            actions(for: document, compact: true)
+                            actionBar(document, compact: false)
+                            actionBar(document, compact: true)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .controlSize(.small)
                     }
-                    MarkdownPreview(markdown: document.markdown).textSelection(.enabled)
-                    if model.generatedSummary, !showsLibraryDetails {
-                        Text("Generated with Apple Intelligence. Check the source for details.")
-                            .font(.caption).foregroundStyle(.secondary)
+                    infoCard(document)
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let contentTitle {
+                            Text(contentTitle).font(.title3.weight(.semibold))
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                        MarkdownPreview(markdown: document.markdown, font: .system(size: 14))
                             .textSelection(.enabled)
                     }
                     if showsLibraryDetails, !model.related.isEmpty {
-                        Divider().padding(.top, 8)
-                        Text("From the same sources").font(.headline)
-                        ForEach(model.related) { item in
-                            Button { openDocument(item.id) } label: {
-                                HStack(alignment: .top) {
-                                    Image(systemName: item
-                                        .kind == "source" ? "doc.text" : "note.text")
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Text(item.name).lineLimit(2)
-                                        Text(item.kindLabel).font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "chevron.right").font(.caption)
-                                }
-                            }.buttonStyle(.borderless).padding(.vertical, 4)
-                        }
+                        related
                     }
                 }
-                .frame(maxWidth: 640, alignment: .leading)
-                .padding(28)
+                .frame(maxWidth: 680, alignment: .leading)
+                .padding(.horizontal, 32).padding(.vertical, 28)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .tint(categoryInk)
             .accessibilityLabel("Markdown preview")
+            // The fetched page replaces the bookmark's note in place; fade rather than jump.
+            .id(document.revision)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.25), value: document.revision)
         } else {
             ContentUnavailableView(
                 model.error == nil ? "Select a document" : "Preview unavailable",
@@ -152,85 +165,138 @@ struct DocumentPreview: View {
         }
     }
 
-    private func libraryMetadata(_ document: MarkdownDocument) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let coverage = model.coverage {
-                Text(coverage.label).font(.callout).foregroundStyle(.secondary)
+    private var contentTitle: String? {
+        if model.generatedSummary {
+            return "Summary"
+        }
+        return model.citation == nil ? nil : "Full Text"
+    }
+
+    // MARK: Header
+
+    /// The page as it looked when captured. It repeats the title, so VoiceOver skips it.
+    private func hero(_ image: NSImage) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .aspectRatio(contentMode: .fill)
+            .frame(maxWidth: .infinity)
+            .frame(height: 170, alignment: .top)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5)
             }
-            if !model.categories.isEmpty {
-                Text(model.categories.map(\.label).joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let provider = model.authorProvider, provider != "user" {
-                Text("Generated with \(provider)").font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 12) {
-                if let editDocument {
-                    Button("Edit", systemImage: "pencil") { editDocument(document) }
+            .opacity(dark ? 0.9 : 1)
+            .accessibilityHidden(true)
+    }
+
+    private func header(_ document: MarkdownDocument) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                sourceIcon
+                Text(sourceLine).lineLimit(1)
+                Spacer(minLength: 8)
+                if editDocument != nil || fileDocument != nil || sourceURL != nil {
+                    moreMenu(document)
                 }
-                if let fileDocument {
-                    Button(
-                        model.categories.isEmpty ? "File…" : "Change filing…",
-                        systemImage: "folder"
-                    ) { fileDocument(document) }
-                }
-            }.buttonStyle(.borderless).controlSize(.small)
-            if !model.warnings.isEmpty {
-                DisclosureGroup("Capture limitations") {
-                    ForEach(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
-                        Text(warning).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                    }
-                }.font(.caption)
             }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            Text(document.name)
+                .font(.title.weight(.bold))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .accessibilityAddTraits(.isHeader)
         }
     }
 
-    private func actions(for document: MarkdownDocument, compact: Bool) -> some View {
+    @ViewBuilder private var sourceIcon: some View {
+        if let data = model.details.favicon, let image = NSImage(data: data) {
+            Image(nsImage: image).resizable().interpolation(.high)
+                .frame(width: 16, height: 16)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: sourceURL == nil ? "note.text" : "globe").accessibilityHidden(true)
+        }
+    }
+
+    private var sourceLine: String {
+        let host = sourceURL?.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+        let kind = model.coverage?.label ?? (sourceURL == nil ? "Note" : nil)
+        return [host, kind].compactMap(\.self).joined(separator: " · ")
+    }
+
+    // MARK: Actions
+
+    private func actionBar(_ document: MarkdownDocument, compact: Bool) -> some View {
         HStack(spacing: 8) {
+            if let url = model.citation?.url ?? sourceURL {
+                Link(destination: url) {
+                    actionLabel("Open Original", systemImage: "safari", compact: compact)
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Open the original page in your browser")
+            }
             if let citation = model.citation {
                 Button { openSource(citation) } label: {
-                    actionLabel("Captured source", systemImage: "doc.text", compact: compact)
+                    actionLabel(
+                        "Captured Source",
+                        systemImage: "doc.text.magnifyingglass",
+                        compact: compact
+                    )
                 }
-                .buttonStyle(PreviewActionStyle())
-                .accessibilityLabel("View captured source")
-                .help("View captured source")
-                if let url = citation.url {
-                    Link(destination: url) {
-                        actionLabel(
-                            "Original link",
-                            systemImage: "arrow.up.right.square",
-                            compact: compact
-                        )
-                    }
-                    .buttonStyle(PreviewActionStyle())
-                    .accessibilityLabel("Open original link")
-                    .help("Open original link in your browser")
-                }
+                .buttonStyle(.bordered)
+                .help("Read the text Infactory captured from the page")
             }
             if generatingSummary {
-                Button {} label: {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        Text("Generating…")
-                    }
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Summarizing…").foregroundStyle(.secondary)
                 }
-                .buttonStyle(PreviewActionStyle(prominent: true))
-                .disabled(true)
-                .accessibilityLabel("Generating summary")
-                Button("Cancel", action: cancelSummary).buttonStyle(PreviewActionStyle())
+                .accessibilityElement(children: .combine)
+                Button("Cancel", action: cancelSummary).buttonStyle(.bordered)
             } else if model.canGenerateSummary, showsSummaryActions {
-                Button("Generate summary") { generateSummary(document) }
-                    .buttonStyle(PreviewActionStyle(prominent: true))
-                    .disabled(!summaryEnabled)
-                    .help(
-                        "Summarize the retained source with Apple Intelligence. No download is needed."
-                    )
+                Button { generateSummary(document) } label: {
+                    actionLabel("Summarize", systemImage: "sparkles", compact: compact)
+                }
+                .buttonStyle(.bordered)
+                .disabled(!summaryEnabled)
+                .help("Summarize the retained source. No download is needed.")
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
+        .controlSize(.large)
+        .fixedSize(horizontal: !compact, vertical: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Document actions")
+    }
+
+    private func moreMenu(_ document: MarkdownDocument) -> some View {
+        Menu {
+            if let editDocument {
+                Button("Edit…", systemImage: "pencil") { editDocument(document) }
+            }
+            if let fileDocument {
+                Button(
+                    model.categories.isEmpty ? "File…" : "Change Filing…",
+                    systemImage: "folder"
+                ) { fileDocument(document) }
+            }
+            if let sourceURL {
+                Divider()
+                Button("Copy Link", systemImage: "link") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(sourceURL.absoluteString, forType: .string)
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.title3)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More actions")
+        .accessibilityLabel("More actions")
     }
 
     @ViewBuilder
@@ -238,47 +304,209 @@ struct DocumentPreview: View {
         if compact {
             Label(title, systemImage: systemImage).labelStyle(.iconOnly)
         } else {
-            Text(title)
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    // MARK: Info
+
+    /// Get Info–style facts: right-aligned labels, left-aligned values.
+    private func infoCard(_ document: MarkdownDocument) -> some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+            if let bookmarkFetch {
+                infoRow("Status") {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Fetching the full page")
+                            Text(bookmarkFetch.isEmpty ? "Waiting to start" : bookmarkFetch)
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .help("This bookmark's notes will be replaced by the page and its summary.")
+                }
+            }
+            infoRow("Filed in") { filing(document) }
+            if model.generatedSummary, let provider = model.authorProvider {
+                infoRow("Summary") {
+                    HStack(spacing: 4) {
+                        Label(provider, systemImage: "sparkles")
+                        Text("· check the source for details").foregroundStyle(.secondary)
+                    }
+                }
+            } else if let provider = model.authorProvider, provider != "user" {
+                infoRow("Written by") { Label(provider, systemImage: "sparkles") }
+            } else if model.canGenerateSummary {
+                infoRow("Summary") {
+                    Text("None yet · the full text is saved").foregroundStyle(.secondary)
+                }
+            }
+            if let saved = model.details.saved {
+                infoRow("Saved") {
+                    Text(saved.formatted(date: .abbreviated, time: .shortened))
+                }
+            }
+            if !model.warnings.isEmpty {
+                infoRow("Notes") {
+                    RowDisclosure(
+                        title: "\(model.warnings.count) capture note\(model.warnings.count == 1 ? "" : "s")"
+                    ) {
+                        ForEach(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
+                            Text(warning).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+        .font(.callout)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func infoRow(_ label: String, @ViewBuilder value: () -> some View) -> some View {
+        GridRow {
+            Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            value().frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func filing(_ document: MarkdownDocument) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if model.categories.isEmpty {
+                Text("Unfiled").foregroundStyle(.secondary)
+            } else {
+                ChipFlow(spacing: 6) {
+                    ForEach(
+                        Array(model.categories.enumerated()),
+                        id: \.element.id
+                    ) { index, category in
+                        CategoryChip(category: category, primary: index == 0)
+                    }
+                }
+            }
+            if let fileDocument {
+                Button(model.categories.isEmpty ? "File…" : "Change…") { fileDocument(document) }
+                    .buttonStyle(.link)
+            }
+        }
+    }
+
+    // MARK: Related
+
+    private var related: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("From the Same Sources").font(.title3.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            VStack(spacing: 0) {
+                ForEach(Array(model.related.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 {
+                        Divider().padding(.leading, 40)
+                    }
+                    Button { openDocument(item.id) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.kind == "source" ? "doc.text" : "note.text")
+                                .foregroundStyle(.tint).frame(width: 20)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.name).lineLimit(2)
+                                Text(item.kindLabel).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
 
-private struct PreviewActionStyle: ButtonStyle {
-    var prominent = false
-    @Environment(\.isEnabled) private var enabled
+/// A category membership in its atlas colour. The primary home is filled; other memberships
+/// are outlined.
+struct CategoryChip: View {
+    let category: DecimalCategory
+    var primary = true
     @Environment(\.colorScheme) private var colorScheme
 
-    func makeBody(configuration: Configuration) -> some View {
-        let primary = prominent && enabled
+    var body: some View {
+        let slot = AtlasHierarchy.hue(for: category.code)
         let dark = colorScheme == .dark
-        let foreground = dark ? Color.white : Color.black
-        let background =
-            Color(white: dark ? (configuration.isPressed ? 0.22 : 0.13) :
-                (configuration.isPressed ? 0.85 : 0.94))
-        let border = Color(white: dark ? 0.42 : 0.56)
-        configuration.label
-            .font(.callout.weight(prominent ? .medium : .regular))
-            .foregroundStyle(primary ? Color.white : foreground.opacity(enabled ? 1 : 0.55))
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(primary ? Color.accentColor : background)
-                    .brightness(primary ? (configuration.isPressed ? -0.18 : -0.12) : 0)
+        let ink = AtlasPalette.ink(slot, dark: dark)
+        HStack(spacing: 5) {
+            Text(category.code).monospacedDigit().fontWeight(.semibold)
+            Text(category.name)
+        }
+        .font(.callout)
+        .lineLimit(1)
+        .foregroundStyle(ink)
+        .padding(.horizontal, 9).padding(.vertical, 3)
+        .background(
+            AtlasPalette.fill(slot, dark: dark).opacity(primary ? (dark ? 0.24 : 0.32) : 0.08),
+            in: Capsule()
+        )
+        .overlay { Capsule().strokeBorder(ink.opacity(primary ? 0 : 0.4), lineWidth: 1) }
+        .help(primary ? "Primary home" : "Also filed here")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(category.label)\(primary ? ", primary home" : "")")
+    }
+}
+
+/// Lays chips out in rows, wrapping when the next one doesn't fit.
+struct ChipFlow: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
+        let width = rows.map { $0.reduce(0) { $0 + $1.width } + spacing * CGFloat($0.count - 1) }
+            .max() ?? 0
+        let height = rows.map { $0.map(\.height).max() ?? 0 }.reduce(0, +)
+            + spacing * CGFloat(max(rows.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()
+    ) {
+        var y = bounds.minY
+        var index = 0
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for size in row {
+                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+                index += 1
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(
-                        primary ? .clear : border,
-                        lineWidth: 1
-                    )
+            y += (row.map(\.height).max() ?? 0) + spacing
+        }
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [[CGSize]] {
+        var rows: [[CGSize]] = [[]]
+        var used: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if !rows[rows.count - 1].isEmpty, used + spacing + size.width > width {
+                rows.append([])
+                used = 0
             }
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            used += (rows[rows.count - 1].isEmpty ? 0 : spacing) + size.width
+            rows[rows.count - 1].append(size)
+        }
+        return rows
     }
 }
 
 /// Render local Markdown as native, selectable text. No scripts or remote images are loaded.
 struct MarkdownPreview: View {
     let markdown: String
+    var font: Font = .body
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -314,8 +542,8 @@ struct MarkdownPreview: View {
                         .padding(.top, 8).accessibilityAddTraits(.isHeader)
                 } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
-                        Text("•").accessibilityHidden(true)
-                        Text(Self.inline(String(block.dropFirst(2))))
+                        Text("•").foregroundStyle(.tint).accessibilityHidden(true)
+                        Text(Self.inline(String(block.dropFirst(2)))).lineSpacing(3)
                     }
                 } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
                           let marker = block.firstIndex(of: ".")
@@ -336,7 +564,7 @@ struct MarkdownPreview: View {
                 }
             }
         }
-        .font(.body)
+        .font(font)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -451,5 +679,26 @@ struct MarkdownPreview: View {
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(text)
+    }
+}
+
+/// A disclosure whose whole label toggles it, as in Finder and System Settings. SwiftUI's
+/// default on macOS only responds to the small chevron.
+struct RowDisclosure<Content: View>: View {
+    let title: String
+    @ViewBuilder let content: () -> Content
+    @State private var expanded = false
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $expanded) {
+            // Disclosure content centres by default; notes read as left-aligned paragraphs.
+            VStack(alignment: .leading, spacing: 4) { content() }
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } label: {
+            Button(title) { expanded.toggle() }
+                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+        }
     }
 }

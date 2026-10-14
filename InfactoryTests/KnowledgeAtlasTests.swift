@@ -104,9 +104,21 @@ struct KnowledgeAtlasProjectionTests {
             .category(fixture.ai.id),
         ])
         #expect(child(technology, .category(fixture.ai.id))?.itemCount == 4)
+        #expect(child(technology, .direct(fixture.technology.id))?.title ==
+            "\(fixture.technology.name), not in a subcategory")
 
         let empty = try #require(child(root, .category(fixture.empty.id)))
         #expect(empty.itemCount == 0 && empty.children.isEmpty)
+        // The sidebar dims exactly the categories the map's Hide empty removes.
+        let emptyIDs = AtlasHierarchy.emptyCategoryIDs(root)
+        #expect(emptyIDs.contains(fixture.empty.id))
+        #expect(!emptyIDs.contains(fixture.technology.id))
+        let kept = AtlasHierarchy.withoutEmptyCategories(root)
+        func contains(_ node: AtlasNode, _ id: AtlasNodeID) -> Bool {
+            node.id == id || node.children.contains { contains($0, id) }
+        }
+        #expect(emptyIDs.allSatisfy { !contains(kept, .category($0)) })
+        #expect(emptyIDs.allSatisfy { contains(root, .category($0)) })
         let group = try #require(child(root, .group("70")))
         #expect(group.children.map(\.id) == [.category(fixture.orphan.id)])
         #expect(child(root, .uncategorized)?.itemCount == 2)
@@ -334,9 +346,9 @@ struct KnowledgeAtlasCameraTests {
         #expect(atlas.breadcrumb.map(\.id) == [
             .library, .category(fixture.technology.id), .category(fixture.ai.id),
         ])
-        // The focused region's contents fill the view.
-        let content = try #require(atlas.focusTile).contentRect
-        let screen = atlas.camera.screen(content)
+        // The focused region, title included, fills the view.
+        let region = try #require(atlas.focusTile).rect
+        let screen = atlas.camera.screen(region)
         #expect(screen.width >= 1000 - 25 || screen.height >= 640 - 25)
 
         atlas.back()

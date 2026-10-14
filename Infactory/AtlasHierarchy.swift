@@ -124,7 +124,9 @@ enum AtlasHierarchy {
                 if !children.isEmpty, !items.isEmpty {
                     let direct = AtlasNode(
                         id: .direct(category.id), kind: .direct, code: nil,
-                        title: "Filed in \(code)", children: itemNodes(items, hue: hue), hue: hue
+                        // Not drawn as a box; the title is for VoiceOver and the header.
+                        title: "\(category.name), not in a subcategory",
+                        children: itemNodes(items, hue: hue), hue: hue
                     )
                     children.insert(aggregate(direct), at: 0)
                 } else if children.isEmpty {
@@ -171,6 +173,17 @@ enum AtlasHierarchy {
         node.children.reduce(0) { total, child in
             total + emptyCategoryCount(child)
                 + ([.category, .group].contains(child.kind) && child.itemCount == 0 ? 1 : 0)
+        }
+    }
+
+    /// Categories with nothing placed in their subtree, so other views can mark what the map
+    /// hides.
+    static func emptyCategoryIDs(_ node: AtlasNode) -> Set<UUID> {
+        node.children.reduce(into: Set<UUID>()) { ids, child in
+            ids.formUnion(emptyCategoryIDs(child))
+            if case let .category(id) = child.id, child.itemCount == 0 {
+                ids.insert(id)
+            }
         }
     }
 

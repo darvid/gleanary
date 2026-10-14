@@ -205,13 +205,16 @@ enum PagePreview {
     static let aspectRatio: CGFloat = 2
     static let pixelWidth = 640
 
-    static func thumbnail(_ screenshot: Data) -> Data? {
+    /// Pages keep their top (masthead and hero); video stills crop around the centre, which also
+    /// trims YouTube's letterbox bars.
+    static func thumbnail(_ screenshot: Data, centered: Bool = false) -> Data? {
         guard let source = CGImageSourceCreateWithData(screenshot as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               image.width > 0 else { return nil }
         let cropHeight = min(image.height, Int(CGFloat(image.width) / aspectRatio))
         guard let top = image.cropping(to: CGRect(
-            x: 0, y: 0, width: image.width, height: cropHeight
+            x: 0, y: centered ? (image.height - cropHeight) / 2 : 0,
+            width: image.width, height: cropHeight
         )) else { return nil }
         let width = min(pixelWidth, top.width)
         let height = max(1, Int(CGFloat(top.height) * CGFloat(width) / CGFloat(top.width)))

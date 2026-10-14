@@ -31,6 +31,8 @@ struct CaptureRequest: Codable, Sendable {
     // Nil preserves the incumbent summary-first capture behavior for old durable jobs.
     var summarizeLink: Bool? = nil
     var submittedURL: URL? = nil
+    /// An imported bookmark note this capture upgrades in place, if it is still unedited.
+    var replacingNoteID: UUID? = nil
 
     static func classify(_ input: String) throws -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -119,7 +121,7 @@ struct CaptureJob: Identifiable, Sendable {
 }
 
 enum Coverage: String, Codable, Sendable {
-    case note, article, document, abstractOnly, partial, transcript, visibleThread
+    case note, article, document, abstractOnly, partial, transcript, visibleThread, bookmark
     var label: String {
         switch self {
         case .note: "Pasted or imported text"
@@ -129,6 +131,7 @@ enum Coverage: String, Codable, Sendable {
         case .partial: "Partial extraction"
         case .transcript: "Timestamped transcript"
         case .visibleThread: "Loaded posts · partial thread"
+        case .bookmark: "Bookmark only · page not fetched yet"
         }
     }
 }

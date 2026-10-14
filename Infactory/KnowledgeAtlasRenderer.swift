@@ -26,8 +26,6 @@ enum AtlasPalette {
 struct AtlasRenderer {
     let layout: AtlasLayout
     let camera: AtlasCamera
-    /// The focused region and its ancestors; the header already names them.
-    let focusPath: Set<Int>
     let selectedID: AtlasNodeID?
     let hoveredID: AtlasNodeID?
     let matchCounts: [Int]
@@ -92,6 +90,8 @@ struct AtlasRenderer {
         screen: CGRect,
         in context: inout GraphicsContext
     ) {
+        // A category's own items sit beside its subcategories without a box of their own.
+        guard tile.node.kind != .direct else { return }
         let shape = Path(
             roundedRect: screen,
             cornerRadius: Self.cornerRadius(tile, screen: screen),
@@ -119,9 +119,8 @@ struct AtlasRenderer {
                 lineWidth: hairline
             )
         }
-        if !focusPath.contains(position) {
-            drawRegionLabel(tile, at: position, screen: screen, dimmed: dimmed, in: &context)
-        }
+        // Drawn even when the header names the region: the band is reserved for it either way.
+        drawRegionLabel(tile, at: position, screen: screen, dimmed: dimmed, in: &context)
     }
 
     private func drawRegionLabel(
@@ -147,9 +146,11 @@ struct AtlasRenderer {
 
         // Layouts switch at fixed sizes because overlapping text cannot crossfade cleanly;
         // only detail that appears in empty space fades in.
-        let style: RegionLabelStyle = if band >= 92, width >= 90, tile.node.code != nil {
+        // Each style needs its height plus clear space above the contents; switching later keeps
+        // the title from crowding the first row.
+        let style: RegionLabelStyle = if band >= 104, width >= 90, tile.node.code != nil {
             .hero
-        } else if band >= 58, width >= 110 {
+        } else if band >= 66, width >= 110 {
             .stacked
         } else {
             band >= 30 ? .compactWithCount : .compact
@@ -521,12 +522,14 @@ struct AtlasRenderer {
             )
         }
         if let selectedID, let tile = layout.tile(selectedID) {
-            let screen = snapped(camera.screen(tile.rect))
+            // The tile's own ink, like hover, so the ring belongs to the region instead of
+            // clashing with its hue. A small gap outside keeps it from reading as a border.
+            let gap: CGFloat = 2
             let width: CGFloat = keyboardFocused ? 2.5 : 2
-            // Outside the tile, so selection never covers its content or its own border.
+            let screen = snapped(camera.screen(tile.rect)).insetBy(dx: -gap, dy: -gap)
             context.stroke(
                 border(tile, screen, width: width, inside: false),
-                with: .color(.accentColor),
+                with: .color(AtlasPalette.ink(tile.node.hue, dark: dark)),
                 lineWidth: width
             )
         } else if keyboardFocused {

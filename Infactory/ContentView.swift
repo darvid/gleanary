@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @Bindable var library: LibraryModel
-    /// The #general conversation shown beside the shared sidebar; nil in library-only hosts.
+    /// The Chat conversation shown beside the shared sidebar; nil in library-only hosts.
     var conversation: ConversationModel?
     @State private var chatting: Bool
     var initialSelection: UUID?
@@ -13,6 +13,10 @@ struct ContentView: View {
     @State private var page = 0
     @State private var categories: [DecimalCategory] = []
     @State private var importing = false
+    @State private var importingBookmarks = false
+    @State private var categorizing = false
+    /// An item to select once a scope change has cleared the old selection.
+    @State private var pendingSelection: UUID?
     @State private var editing: MarkdownDocument?
     @State private var filing: MarkdownDocument?
     @State private var preview = DocumentPreviewModel()
@@ -21,6 +25,8 @@ struct ContentView: View {
     /// Area digits folded in the sidebar's Filing section, comma-separated.
     @AppStorage("collapsedFilingAreas") private var collapsedAreas = ""
     @State private var atlas = KnowledgeAtlasModel()
+    /// Shared with the map's Hide empty toggle.
+    @AppStorage("atlasHidesEmptyCategories") private var atlasHidesEmpty = false
     /// The item opened from the Atlas; the Atlas keeps its own state underneath.
     @State private var atlasItem: UUID?
     @FocusState private var searchFocused: Bool
@@ -48,8 +54,12 @@ struct ContentView: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 Divider()
             }
-            main.frame(maxWidth: .infinity, maxHeight: .infinity)
-                .safeAreaInset(edge: .top, spacing: 0) { notice }
+            // Stacked, not a safe-area inset: HSplitView's AppKit columns ignore SwiftUI insets
+            // and would draw under the banner.
+            VStack(spacing: 0) {
+                notice
+                main.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -73,7 +83,9 @@ struct ContentView: View {
         .focusedSceneValue(\.infactoryActions, chatting ? nil : InfactoryActions(
             enabled: library.ready && !library.busy,
             newNote: { editing = MarkdownDocument(name: "Untitled", markdown: "") },
-            attach: { importing = true }, focus: { searchFocused = true }
+            attach: { importing = true }, focus: { searchFocused = true },
+            importBookmarks: { importingBookmarks = true },
+            categorize: { categorizing = true }
         ))
         .fileImporter(isPresented: $importing, allowedContentTypes: [
             .pdf, .html, .plainText, UTType(filenameExtension: "md") ?? .plainText,
@@ -91,11 +103,26 @@ struct ContentView: View {
                 Task { await library.importFiles(files) }
             }
             if urls.contains(where: { !$0.isFileURL }) {
-                library.error = "Paste web links into #general to save and summarize them."
+                library.error = "Paste web links into Chat to save and summarize them."
             }
             return !files.isEmpty
         }
         .sheet(item: $editing) { NoteEditor(document: $0, library: library) }
+        .sheet(isPresented: $importingBookmarks) {
+            BookmarkImportView(
+                library: library,
+                onImported: { await loadCategories() },
+                categorize: {
+                    importingBookmarks = false
+                    // Let the import sheet close before presenting the next one.
+                    Task { try? await Task.sleep(for: .milliseconds(300)); categorizing = true }
+                },
+                inference: currentInference
+            )
+        }
+        .sheet(isPresented: $categorizing, onDismiss: { Task { await loadCategories() } }) {
+            FilingSuggestionsView(library: library, inference: currentInference)
+        }
         .sheet(item: $filing) { document in filingSheet(document) }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
         .sheet(item: $library.browserJob) { job in
@@ -127,6 +154,18 @@ struct ContentView: View {
         .task(id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)") {
             await library.loadPreview(preview)
             await loadCategories()
+            // Dwell before fetching so arrowing through the list doesn't download every page.
+            guard preview.coverage == .bookmark, let id = preview.selectedID else { return }
+            do { try await Task.sleep(for: .seconds(1)) }
+            catch { return }
+            await library.fetchBookmarkIfNeeded(id)
+        }
+        // Summaries follow the AI provider: ChatGPT when enabled, else Apple Intelligence.
+        .task(id: summarizerKey) {
+            await library.useLinkSummarizer(
+                (try? conversation?.chatGPT.inference()) as? any LinkSummarizing
+                    ?? AppleLinkSummarizer()
+            )
         }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
@@ -134,6 +173,7 @@ struct ContentView: View {
             if presentation == .map {
                 showInAtlas(scope ?? .all)
             }
+            revealPendingSelection()
             Task { await library.documentGrid.reload(); await library.refreshCaptures() }
         }
         .onChange(of: presentation) {
@@ -183,7 +223,7 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
-                Text(chatting ? "#general" : scopeTitle).font(.headline).lineLimit(1)
+                Text(chatting ? "Chat" : scopeTitle).font(.headline).lineLimit(1)
             }
         }
         .sharedBackgroundVisibility(.hidden)
@@ -198,7 +238,37 @@ struct ContentView: View {
                 .help("Browse the library as a map or a list")
             }
             .sharedBackgroundVisibility(.hidden)
+            ToolbarItem {
+                // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
+                // Plain ellipsis: Liquid Glass already draws the circular button.
+                Menu("More", systemImage: "ellipsis") {
+                    Button("Attach Documents…", systemImage: "paperclip") { importing = true }
+                    Button("Import Bookmarks…", systemImage: "square.and.arrow.down") {
+                        importingBookmarks = true
+                    }
+                    Divider()
+                    Button("Categorize Unfiled…", systemImage: "wand.and.sparkles") {
+                        categorizing = true
+                    }
+                    Divider()
+                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
+                }
+                .menuIndicator(.hidden)
+                .disabled(!library.ready || library.busy)
+                .help("Import and organize")
+            }
         }
+    }
+
+    private var summarizerKey: String {
+        guard let chatGPT = conversation?.chatGPT else { return "apple" }
+        return chatGPT.useChatGPT ? "chatgpt:" + chatGPT.selectedModel : "apple"
+    }
+
+    /// ChatGPT's filing model when ChatGPT is connected and enabled; otherwise Apple
+    /// Intelligence.
+    private func currentInference() -> any ConversationInferring {
+        (try? conversation?.chatGPT.filingInference()) ?? AppleConversationInference()
     }
 
     /// Gap from the toggle to the sidebar's edge, given the toggle's place beside the traffic
@@ -273,6 +343,28 @@ struct ContentView: View {
         }
     }
 
+    /// Shows a saved item from anywhere, such as the Captures list. Switching to All items
+    /// clears the selection, so the item is selected after that, not before.
+    private func openSavedItem(_ id: UUID) {
+        chatting = false
+        pendingSelection = id
+        if scope == .all {
+            revealPendingSelection()
+        } else {
+            scope = .all
+        }
+    }
+
+    private func revealPendingSelection() {
+        guard let id = pendingSelection else { return }
+        pendingSelection = nil
+        selection = [id]
+        preview.selectedID = id
+        if presentation == .map {
+            openFromAtlas(id)
+        }
+    }
+
     private func openFromAtlas(_ id: UUID) {
         atlas.selectedID = .item(id)
         preview.selectedID = id
@@ -305,7 +397,7 @@ struct ContentView: View {
     private var sidebar: some View {
         List(selection: sidebarSelection) {
             if conversation != nil {
-                Label("#general", systemImage: "bubble.left.and.text.bubble.right")
+                Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
                     .tag(SidebarItem.conversation)
             }
@@ -326,11 +418,18 @@ struct ContentView: View {
                     Label("Captures", systemImage: "tray.and.arrow.down")
                         .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.captures)))
                     Spacer()
+                    // Only failures are counted, so the badge says so instead of looking like a
+                    // total.
                     let issues = library.captureJobs.filter { $0.state == .failed }.count
-                    if issues >
-                        0
-                    {
-                        Text(issues.formatted()).font(.caption).foregroundStyle(.secondary)
+                    if issues > 0 {
+                        Label(issues.formatted(), systemImage: "exclamationmark.circle.fill")
+                            .labelStyle(.titleAndIcon)
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(.orange)
+                            .help(issues == 1 ? "1 capture needs attention"
+                                : "\(issues) captures need attention")
+                            .accessibilityLabel(issues == 1 ? "1 capture needs attention"
+                                : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
             }
@@ -357,6 +456,9 @@ struct ContentView: View {
     /// One line per category: an area's `X0` row carries the icon and its members sit beneath it.
     private func filingRow(_ category: DecimalCategory, icon: String?) -> some View {
         let color = sidebarColor(.category(category.id))
+        // Dimmed, not removed: the map hides empty categories, but they stay reachable here.
+        let hidden = !chatting && presentation == .map && atlasHidesEmpty
+            && atlas.emptyCategoryIDs.contains(category.id)
         return HStack(spacing: 8) {
             if let icon {
                 Image(systemName: icon).foregroundStyle(color.opacity(0.72)).frame(width: 18)
@@ -366,10 +468,12 @@ struct ContentView: View {
             Text(category.code).font(.caption).monospacedDigit()
                 .foregroundStyle(color.opacity(0.5))
         }
+        .opacity(hidden ? 0.4 : 1)
         .padding(.leading, category.code.contains(".") ? 10 : 0)
         .tag(SidebarItem.library(.category(category.id)))
-        .help(category.label)
+        .help(hidden ? "\(category.label) · Empty · hidden in the map" : category.label)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(hidden ? "Empty, hidden in the map" : "")
     }
 
     private func areaExpanded(_ digit: Int) -> Binding<Bool> {
@@ -455,18 +559,31 @@ struct ContentView: View {
                 Button("Retry") { Task { await library.documentGrid.reload() } }.padding()
                 Spacer()
             } else if library.documentGrid.total == 0 {
-                ContentUnavailableView(
-                    library.documentGrid.loading ? "Loading library…" : "No items here",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text(emptyListMessage)
-                ).frame(maxHeight: .infinity)
+                ContentUnavailableView {
+                    Label(
+                        library.documentGrid.loading ? "Loading library…" : "No items here",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                } description: {
+                    Text(emptyListMessage)
+                } actions: {
+                    if !library.documentGrid.loading, scope == nil || scope == .all,
+                       library.documentGrid.query.isEmpty
+                    {
+                        Button("Import Bookmarks…") { importingBookmarks = true }
+                    }
+                }
+                .frame(maxHeight: .infinity)
             } else {
                 List(selection: $selection) {
                     ForEach(pageRange, id: \.self) { index in
                         if let document = library.documentGrid.document(at: index) {
-                            LibraryDocumentRow(document: document).tag(document.id)
+                            LibraryDocumentRow(
+                                document: document,
+                                activity: library.activity(for: document.id)
+                            ).tag(document.id)
                                 .contextMenu {
-                                    Button("Use in #general") { useInConversation([document.id]) }
+                                    Button("Use in Chat") { useInConversation([document.id]) }
                                     Button("Edit…") {
                                         Task { editing = await library.document(id: document.id) }
                                     }
@@ -514,7 +631,7 @@ struct ContentView: View {
                     Spacer()
                     Button("Clear") { selection = [] }.buttonStyle(.borderless).font(.caption)
                 }
-                Button("Use in #general", systemImage: "bubble.left") {
+                Button("Use in Chat", systemImage: "bubble.left") {
                     useInConversation(Array(selection).sorted { $0.uuidString < $1.uuidString })
                 }
                 .disabled(selection.count > 4)
@@ -523,7 +640,7 @@ struct ContentView: View {
                     "Ask a question or compare these items in chat.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("Select items to use in #general. ⌘-click to select more than one.")
+                Text("Select items to use in Chat. ⌘-click to select more than one.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }.padding(.horizontal, 18).padding(.bottom, 16)
@@ -534,67 +651,91 @@ struct ContentView: View {
             model: preview,
             openSource: { source = $0 },
             summaryEnabled: library.canGenerateSummaries,
-            generatingSummary: library.generatingSummaryID != nil,
+            generatingSummary: library.generatingSummaryID != nil
+                && library.generatingSummaryID == preview.selectedID,
             generateSummary: { library.generateSummary(for: $0) },
             cancelSummary: library.cancelSummary,
             showsLibraryDetails: true,
+            bookmarkFetch: preview.selectedID.flatMap { library.bookmarkFetch(for: $0)?.progress },
             openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
-            fileDocument: { filing = $0 }, showsSummaryActions: false
+            fileDocument: { filing = $0 }
         )
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var captureList: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let failed = library.captureJobs.filter { $0.state == .failed }
+        let others = library.captureJobs.filter { $0.state != .failed }
+        return VStack(alignment: .leading, spacing: 0) {
             Text("Captures").font(.title3.weight(.semibold)).padding(18)
             Divider()
             if library.captureJobs.isEmpty {
                 ContentUnavailableView(
                     "No captures yet",
                     systemImage: "tray",
-                    description: Text("Save a URL in #general or import a document.")
+                    description: Text("Save a URL in Chat or import a document.")
                 )
             } else {
-                List(library.captureJobs) { job in
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(job.request.label).font(.headline).lineLimit(2)
-                        Text(job
-                            .error ??
-                            (job.progress.isEmpty ? job.state.rawValue.capitalized : job.progress))
-                            .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                        HStack {
-                            if let id = job.noteID {
-                                Button("Open saved item") {
-                                    scope = .all; Task {
-                                        await Task.yield(); selection = [id]; preview
-                                            .selectedID = id
-                                    }
-                                }
-                            }
-                            if job.state == .failed || job.state == .cancelled {
-                                if job
-                                    .recovery ==
-                                    .browser
-                                {
-                                    Button("Open browser") { library.browserJob = job }
-                                }
-                                if job
-                                    .recovery ==
-                                    .audio
-                                {
-                                    Button("Audio options") { library.audioJob = job }
-                                }
-                                Button("Retry") { Task { await library.retryCapture(job.id) } }
-                                    .disabled(library.busy)
-                            } else if !job.state.terminal {
-                                Button("Stop") { Task { await library.cancelCapture(job.id) } }
-                            }
-                        }.controlSize(.small)
-                    }.padding(.vertical, 8)
+                List {
+                    // The sidebar badge counts these; the same mark finds them here.
+                    if !failed.isEmpty {
+                        Section("Needs Attention") {
+                            ForEach(failed) { captureRow($0) }
+                        }
+                        Section("Recent") {
+                            ForEach(others) { captureRow($0) }
+                        }
+                    } else {
+                        ForEach(others) { captureRow($0) }
+                    }
                 }
             }
         }.navigationSplitViewColumnWidth(min: 260, ideal: 360, max: 480)
+    }
+
+    private func captureRow(_ job: CaptureJob) -> some View {
+        let failed = job.state == .failed
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if failed {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                        .accessibilityLabel("Needs attention")
+                } else if !job.state.terminal {
+                    // A symbol, not a ProgressView: it sits on the title's baseline like the
+                    // attention icon, and its animation follows Reduce Motion.
+                    Image(systemName: "progress.indicator")
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("In progress")
+                }
+                Text(job.request.label).font(.headline).lineLimit(2)
+            }
+            Text(job
+                .error ?? (job.progress.isEmpty ? job.state.rawValue.capitalized : job.progress))
+                .font(.caption)
+                .foregroundStyle(failed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                .textSelection(.enabled)
+            HStack {
+                if let id = job.noteID {
+                    Button("Open saved item") { openSavedItem(id) }
+                }
+                if job.state == .failed || job.state == .cancelled {
+                    if job.recovery == .browser {
+                        Button("Open browser") { library.browserJob = job }
+                    }
+                    if job.recovery == .audio {
+                        Button("Audio options") { library.audioJob = job }
+                    }
+                    Button("Retry") { Task { await library.retryCapture(job.id) } }
+                        .disabled(library.busy)
+                } else if !job.state.terminal {
+                    Button("Stop") { Task { await library.cancelCapture(job.id) } }
+                }
+            }.controlSize(.small)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .contain)
     }
 
     private var pageRange: Range<Int> {
@@ -607,9 +748,9 @@ struct ContentView: View {
             return "Try another term or choose All items to search more broadly."
         }
         if case .category = scope {
-            return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in #general."
+            return "Nothing is filed in \(scopeTitle) yet. File an item from its detail pane, or ask the librarian in Chat."
         }
-        return "Save a source in #general or import a document. Unfiled items can be assigned a filing home."
+        return "Save a source in Chat or import a document. Unfiled items can be assigned a filing home."
     }
 
     private var scopeTitle: String {
@@ -635,10 +776,15 @@ struct ContentView: View {
         }
     }
 
+    /// A warning strip: the multicolor triangle and a warm tint read as a problem at a glance,
+    /// unlike the neutral control surface used for ordinary notices.
     private func errorNotice(_ error: String) -> some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle")
-            Text(error).font(.callout).textSelection(.enabled)
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .symbolRenderingMode(.multicolor)
+                .font(.body)
+                .accessibilityLabel("Problem")
+            Text(error).font(.callout.weight(.medium)).textSelection(.enabled)
             Spacer()
             if library.indexingError != nil {
                 Button("Retry indexing") { library.startIndexing() }.disabled(library.indexing)
@@ -650,7 +796,11 @@ struct ContentView: View {
                 library.error = nil; library.indexingError = nil
             }
             .labelStyle(.iconOnly).buttonStyle(.borderless)
-        }.padding(12).background(Color(nsColor: .controlBackgroundColor))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange.opacity(colorScheme == .dark ? 0.2 : 0.14))
+        .onAppear { AccessibilityNotification.Announcement(error).post() }
+        .onChange(of: error) { AccessibilityNotification.Announcement(error).post() }
     }
 
     private func filingSheet(_ document: MarkdownDocument) -> some View {
@@ -687,6 +837,8 @@ enum LibraryPresentation: String {
 
 private struct LibraryDocumentRow: View {
     let document: DocumentSummary
+    /// Background work on this item, such as fetching a bookmark's page or summarizing it.
+    var activity: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -708,7 +860,15 @@ private struct LibraryDocumentRow: View {
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Text(document.filing ?? "Unfiled").font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1)
-                if let coverage = document.coverage.flatMap(Coverage.init(rawValue:)), [
+                if let activity {
+                    Label {
+                        Text(activity).lineLimit(1)
+                    } icon: {
+                        Image(systemName: "progress.indicator")
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                } else if let coverage = document.coverage.flatMap(Coverage.init(rawValue:)), [
                     .partial,
                     .abstractOnly,
                     .visibleThread

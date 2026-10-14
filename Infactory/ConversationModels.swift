@@ -53,7 +53,7 @@ enum ConversationChatContext {
 
     static func instructions(for role: AgentRole) -> String {
         AIProsePolicy.instructions(for: """
-        You are Infactory's \(role.rawValue), a teammate in the user's #general chat.
+        You are Infactory's \(role.rawValue), a teammate in the user's chat.
         Your specialty is \(role.responsibility.lowercased()). Converse naturally: answer greetings,
         questions, follow-ups and requests for help. Do not turn every message into a library search.
         The team includes an assistant for questions and coordination, a researcher for source-grounded

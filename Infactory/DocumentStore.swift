@@ -263,8 +263,10 @@ actor DocumentStore {
 
     private enum SaveResult { case saved(MarkdownDocument), conflict(deleted: Bool) }
 
+    /// `graph: false` defers knowledge-graph extraction, which costs a model call per note.
     static func writeNote(
         _ document: MarkdownDocument,
+        graph: Bool = true,
         in db: Database
     ) throws -> MarkdownDocument {
         let revision = UUID()
@@ -288,7 +290,9 @@ actor DocumentStore {
         saved.revision = revision
         try replacePassages(saved, in: db)
         try enqueue(saved, in: db)
-        try enqueueGraph(saved, in: db)
+        if graph {
+            try enqueueGraph(saved, in: db)
+        }
         return saved
     }
 

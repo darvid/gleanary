@@ -221,6 +221,35 @@ enum DatabaseSchema {
         migrator.registerMigration("page-preview-v1") { db in
             try db.execute(sql: "ALTER TABLE notes ADD COLUMN previewImage BLOB")
         }
+        // Which model wrote a capture's summary. Older summaries were all Apple Intelligence.
+        migrator.registerMigration("summary-engine-v1") { db in
+            try db.execute(sql: "ALTER TABLE notes ADD COLUMN summaryEngine TEXT")
+        }
+        // Bulk filing suggestions live outside conversation proposals: thousands of them need a
+        // review queue of their own, and nothing is filed until someone accepts.
+        migrator.registerMigration("filing-suggestions-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE filing_suggestions (
+                noteID TEXT PRIMARY KEY NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                categoryID TEXT REFERENCES decimal_categories(id) ON DELETE CASCADE,
+                newCategory TEXT,
+                confidence REAL NOT NULL,
+                engine TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending','accepted','rejected')),
+                batch TEXT,
+                createdAt REAL NOT NULL,
+                CHECK(categoryID IS NOT NULL OR newCategory IS NOT NULL)
+            );
+            CREATE INDEX filing_suggestions_review ON filing_suggestions(status, categoryID);
+            CREATE TABLE classification_cache (
+                key TEXT PRIMARY KEY NOT NULL,
+                code TEXT NOT NULL,
+                newCategory TEXT,
+                confident INTEGER NOT NULL,
+                createdAt REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(database)
     }
 }

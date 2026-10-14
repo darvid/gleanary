@@ -229,17 +229,41 @@ extension DocumentStore {
         }
     }
 
+    /// The page's look and provenance for the detail header.
+    func libraryItemDetails(for id: UUID) throws -> LibraryItemDetails {
+        try readyDatabase().read { db in
+            let row = try Row.fetchOne(
+                db,
+                sql: "SELECT sourceURL, faviconData, previewImage, createdAt FROM notes WHERE id = ?",
+                arguments: [id.uuidString]
+            )
+            return LibraryItemDetails(
+                sourceURL: (row?["sourceURL"] as String?).flatMap(URL.init(string:)),
+                favicon: row?["faviconData"],
+                previewImage: row?["previewImage"],
+                saved: (row?["createdAt"] as Double?).map(Date.init(timeIntervalSince1970:))
+            )
+        }
+    }
+
     func libraryAuthorProvider(for id: UUID) throws -> String? {
         try readyDatabase().read { db in
             try String.fetchOne(
                 db,
                 sql: """
                 SELECT coalesce((SELECT provider FROM authored_artifacts WHERE noteID = n.id),
-                    CASE WHEN \(Self.legacySummarySQL) THEN 'Apple Intelligence' END)
+                    CASE WHEN \(Self.legacySummarySQL) THEN coalesce(n.summaryEngine, 'Apple Intelligence') END)
                 FROM notes n WHERE n.id = ? AND n.deletedAt IS NULL
                 """,
                 arguments: [id.uuidString]
             )
         }
     }
+}
+
+struct LibraryItemDetails: Sendable, Equatable {
+    var sourceURL: URL?
+    var favicon: Data?
+    var previewImage: Data?
+    var saved: Date?
 }
