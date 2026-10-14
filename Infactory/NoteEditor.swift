@@ -1,3 +1,4 @@
+import MarkdownEngine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -69,10 +70,7 @@ struct NoteEditor: View {
                 .font(.title.weight(.bold))
                 .accessibilityLabel("Note name")
                 .padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 8)
-            TextEditor(text: $markdown)
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(.horizontal, 23)
+            MarkdownSourceEditor(text: $markdown, documentID: document.id)
                 .accessibilityLabel("Markdown content")
             if let message {
                 Label(message, systemImage: "exclamationmark.triangle")
@@ -137,6 +135,69 @@ struct NoteEditor: View {
         .task {
             do { history = try await library.history(for: document.id) }
             catch { message = "Could not load revision history: \(error.localizedDescription)" }
+        }
+    }
+}
+
+/// Styles Markdown as it's typed but keeps every character, so the saved note is exactly the
+/// text written.
+struct MarkdownSourceEditor: View {
+    @Binding var text: String
+    /// Scopes the editor's undo history to one note.
+    let documentID: UUID
+
+    var body: some View {
+        NativeTextViewWrapper(
+            text: $text,
+            configuration: MarkdownEditorConfiguration(textInsets: TextInsets(horizontal: 28)),
+            fontSize: NSFont.systemFontSize,
+            documentId: documentID.uuidString
+        )
+        .background(FirstRenderRedraw())
+    }
+}
+
+/// MarkdownEngine 0.14.0 styles a note just after laying it out unstyled, and doesn't redraw the
+/// visible text for the taller result, so the first render stops partway down until a click.
+/// Redraws once the editor is on screen, as a click does.
+private struct FirstRenderRedraw: NSViewRepresentable {
+    func makeNSView(context _: Context) -> NSView {
+        Probe()
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard window != nil else { return }
+            // After SwiftUI's current update, which is when the engine styles the note.
+            DispatchQueue.main.async { [weak self] in
+                guard let textView = self?.editorTextView() else { return }
+                textView.textLayoutManager?.textViewportLayoutController.layoutViewport()
+                textView.setSelectedRange(textView.selectedRange())
+                textView.needsDisplay = true
+            }
+        }
+
+        /// The editor is this view's sibling, so search up from the nearest shared ancestor.
+        private func editorTextView() -> NSTextView? {
+            var ancestor = superview
+            while let view = ancestor {
+                if let textView = Self.textView(in: view) {
+                    return textView
+                }
+                ancestor = view.superview
+            }
+            return nil
+        }
+
+        private static func textView(in view: NSView) -> NSTextView? {
+            // Skips the title field's editor, which is also a text view while it has focus.
+            if let textView = view as? NSTextView, !textView.isFieldEditor {
+                return textView
+            }
+            return view.subviews.lazy.compactMap { textView(in: $0) }.first
         }
     }
 }

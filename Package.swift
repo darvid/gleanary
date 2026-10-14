@@ -12,6 +12,7 @@ let package = Package(
             revision: "bdfad750d2a973af48159119eaf90530d0e30ea7"
         ),
         .package(url: "https://github.com/scinfu/SwiftSoup.git", exact: "2.13.9"),
+        .package(url: "https://github.com/nodes-app/swift-markdown-engine.git", exact: "0.14.0"),
         .package(
             url: "https://github.com/arraypress/swift-youtube-metadata.git",
             revision: "536cf888beae597c83cd18604e64d4486c21f2ba"
@@ -30,6 +31,7 @@ let package = Package(
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
                 .product(name: "YouTubeTranscript", package: "swift-youtube-metadata"),
                 .product(name: "YouTubeKit", package: "YouTubeKit"),
+                .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
             ],
             path: "Infactory",
             exclude: ["Infactory.entitlements", "Info.plist"],

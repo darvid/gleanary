@@ -1,5 +1,5 @@
 {
-  "originHash" : "b93e6e81ab50ef7541f551cba0ddb43230b34f184af99bc4dcb8154729553d39",
+  "originHash" : "036008f3679ec1a361a036bb9f2eeffbfe6d4de44c958d51f896235de8c7f197",
   "pins" : [
     {
       "identity" : "grape",
@@ -19,11 +19,38 @@
       }
     },
     {
+      "identity" : "highlighterswift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/smittytone/HighlighterSwift",
+      "state" : {
+        "revision" : "fe7aae9c9b31d3b296fd3d2dd575e1a207bb29e0",
+        "version" : "3.1.0"
+      }
+    },
+    {
+      "identity" : "swift-markdown-engine",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/nodes-app/swift-markdown-engine.git",
+      "state" : {
+        "revision" : "5ed9dd8d7eea0c77e93a91462836f4a3ef52424c",
+        "version" : "0.14.0"
+      }
+    },
+    {
       "identity" : "swift-youtube-metadata",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/arraypress/swift-youtube-metadata.git",
       "state" : {
         "revision" : "536cf888beae597c83cd18604e64d4486c21f2ba"
+      }
+    },
+    {
+      "identity" : "swiftmath",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/mgriebling/SwiftMath",
+      "state" : {
+        "revision" : "fa8244ed032f4a1ade4cb0571bf87d2f1a9fd2d7",
+        "version" : "1.7.3"
       }
     },
     {

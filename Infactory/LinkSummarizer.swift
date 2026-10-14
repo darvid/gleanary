@@ -25,6 +25,18 @@ struct UnavailableSummarizer: LinkSummarizing {
     }
 }
 
+/// ChatGPT is enabled but its models hadn't loaded when the summarizer was chosen, so it loads
+/// them when a summary is asked for instead of failing with a missing model.
+struct DeferredChatGPTSummarizer: LinkSummarizing {
+    let engineName = "ChatGPT"
+    let connection: ChatGPTConnection
+
+    func summarize(_ document: CapturedDocument) async throws -> String {
+        let summarizer = try await connection.requestInference() as? any LinkSummarizing
+        return try await (summarizer ?? AppleLinkSummarizer()).summarize(document)
+    }
+}
+
 /// A summary failure attributed to the engine that produced it.
 struct SummaryFailure: LocalizedError {
     let engine: String
