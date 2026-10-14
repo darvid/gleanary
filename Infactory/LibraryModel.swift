@@ -29,6 +29,9 @@ final class LibraryModel {
     var query = ""
     var captureJobs: [CaptureJob] = []
     var captureNotice: CaptureNotice?
+    /// A capture someone asked for that failed, named in the window's notice. Bookmark page
+    /// fetches report on their item instead, since they run unasked in the background.
+    var captureFailure: CaptureJob?
     var browserJob: CaptureJob?
     var audioJob: CaptureJob?
     var hasSearched = false
@@ -319,6 +322,12 @@ final class LibraryModel {
             .hasPrefix(IngestionEngine.summarizingProgress) == true
     }
 
+    /// The last page fetch for this bookmark, when it failed and hasn't been retried.
+    func bookmarkFetchFailure(for noteID: UUID) -> CaptureJob? {
+        guard bookmarkFetch(for: noteID) == nil else { return nil }
+        return captureJobs.first { $0.request.replacingNoteID == noteID && $0.state == .failed }
+    }
+
     /// The background page fetch upgrading this bookmark, while it runs.
     func bookmarkFetch(for noteID: UUID) -> CaptureJob? {
         captureJobs.first { $0.request.replacingNoteID == noteID && !$0.state.terminal }
@@ -326,7 +335,8 @@ final class LibraryModel {
 
     /// Opening an imported bookmark fetches its page; the capture upgrades the same note.
     func fetchBookmarkIfNeeded(_ id: UUID) async {
-        guard ready else { return }
+        // A failed fetch waits for Try Again rather than failing again on every visit.
+        guard ready, bookmarkFetchFailure(for: id) == nil else { return }
         do {
             guard try await ingestion.enqueueBookmarkFetch(noteID: id) != nil else { return }
             await refreshCaptures()
@@ -484,6 +494,19 @@ final class LibraryModel {
         catch { self.error = error.localizedDescription }
     }
 
+    /// Clears the given failed captures, or all of them.
+    func clearFailedCaptures(_ ids: [UUID]? = nil) async {
+        do {
+            try await store.clearFailedCaptures(ids)
+            if let failure = captureFailure, ids?.contains(failure.id) ?? true {
+                captureFailure = nil
+            }
+            needsArtifactCleanup = true
+            await refreshCaptures()
+            await cleanDeletedArtifacts()
+        } catch { self.error = error.localizedDescription }
+    }
+
     func retryCapture(_ id: UUID) async {
         guard ready, !busy else { return }
         busy = true
@@ -535,7 +558,8 @@ final class LibraryModel {
                 switch failure.recovery {
                 case .browser: browserJob = failure
                 case .audio: audioJob = failure
-                case nil: error = failure.error ?? "Capture failed."
+                case nil where failure.request.replacingNoteID == nil: captureFailure = failure
+                case nil: break
                 }
             }
             captureJobs = refreshedJobs

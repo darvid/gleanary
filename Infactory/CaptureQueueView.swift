@@ -25,6 +25,7 @@ struct CaptureQueueView: View {
                                             .progress))
                                         .font(.caption).foregroundStyle(.secondary)
                                         .textSelection(.enabled)
+                                        .fadesOnChange(job.error ?? job.progress)
                                 }
                                 Spacer()
                                 if !job.state.terminal {

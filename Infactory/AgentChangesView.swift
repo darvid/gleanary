@@ -22,6 +22,7 @@ struct AgentChangesCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(Self.breakdown(changes)).font(.callout.weight(.medium))
                 Text(status).font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+                    .fadesOnChange(status)
             }
             Spacer(minLength: 8)
             if pending {

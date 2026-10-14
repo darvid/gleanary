@@ -91,7 +91,7 @@ struct GraphActivityView: View {
             Text("Activity").font(.title3.weight(.semibold))
             CaptureQueueView(library: library)
             HStack {
-                Text(library.status).font(.caption)
+                Text(library.status).font(.caption).fadesOnChange(library.status)
                 Spacer()
                 if library.indexingError != nil {
                     Button("Retry indexing") { library.startIndexing() }.disabled(library.indexing)

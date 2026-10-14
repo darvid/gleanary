@@ -96,12 +96,14 @@ struct FilingSuggestionsView: View {
                 ) {
                     Text(stopping ? "Stopping…"
                         : "Suggesting homes with \(library.categorizationEngine ?? label)…")
+                        .fadesOnChange(stopping)
                 } currentValueLabel: {
                     Text(stopping
                         ? "Waiting for requests already sent · \(progress.checked.formatted()) checked"
                         :
                         "\(progress.checked.formatted()) of \(progress.total.formatted()) checked")
                         .monospacedDigit()
+                        .countsOnChange(progress.checked)
                 }
                 HStack(spacing: 8) {
                     Button(stopping ? "Stopping…" : "Stop") { library.stopCategorizing() }
@@ -147,6 +149,7 @@ struct FilingSuggestionsView: View {
         HStack {
             Text("\(suggestions.count.formatted()) suggestions to review")
                 .font(.headline)
+                .countsOnChange(suggestions.count)
             Spacer()
             if let lastBatch {
                 Button("Undo \(lastBatch.count.formatted())") {

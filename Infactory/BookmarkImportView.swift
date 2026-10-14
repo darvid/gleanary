@@ -58,6 +58,7 @@ struct BookmarkImportView: View {
                     Text("Importing \(draft.file.bookmarks.count.formatted()) bookmarks…")
                 } currentValueLabel: {
                     Text("\(imported.formatted()) checked").monospacedDigit()
+                        .countsOnChange(imported)
                 }
                 Spacer()
             } else if let draft, plan != nil {
@@ -197,6 +198,7 @@ struct BookmarkImportView: View {
                         Text("The Librarian is placing folders…").font(.callout)
                     } currentValueLabel: {
                         Text("\(librarianAnswered) of \(librarianTotal) folders").monospacedDigit()
+                            .countsOnChange(librarianAnswered)
                     }
                 }
             }

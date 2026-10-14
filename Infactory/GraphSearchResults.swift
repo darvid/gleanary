@@ -45,6 +45,7 @@ struct GraphSearchResults: View {
             Divider()
             HStack {
                 Text(library.intelligenceStatus).font(.caption).foregroundStyle(.secondary)
+                    .fadesOnChange(library.intelligenceStatus)
                 Spacer()
                 Button("Summarize top 3") { Task { await library.summarize() } }
                     .disabled(library.busy || library.matches.isEmpty || !library

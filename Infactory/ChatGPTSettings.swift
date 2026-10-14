@@ -61,6 +61,7 @@ struct ChatGPTSettings: View {
                 }
             } else {
                 Text(localStatus).font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+                    .fadesOnChange(localStatus)
                     .textSelection(.enabled).padding(.bottom, 8)
             }
             Text("ChatGPT").font(.headline).padding(.top, 24).padding(.bottom, 4)

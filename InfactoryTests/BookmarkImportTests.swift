@@ -193,6 +193,45 @@ struct BookmarkImportTests {
 }
 
 extension BookmarkImportTests {
+    /// A background fetch that fails reports on its item, not in the window's notice, and
+    /// waits for Try Again instead of failing again on every visit.
+    @Test @MainActor func aFailedBookmarkFetchStaysOnItsItem() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open(seed: [])
+        // `.invalid` never resolves, so the fetch fails without reaching any server.
+        let bookmark = try ImportedBookmark(
+            url: #require(URL(string: "https://fixture.invalid/page")),
+            title: "Unreachable", excerpt: "Only the export's excerpt."
+        )
+        let original = try await ArtifactStore(root: root.appending(path: "artifacts"))
+            .retain(Data("export".utf8), kind: .text, name: "x.csv")
+        let report = try await store.importBookmarks(
+            [bookmark], plan: BookmarkFolderPlan(bookmarks: [bookmark], existing: []),
+            original: original
+        )
+        let noteID = try #require(report.unfiledIDs.first)
+        let library = LibraryModel(store: store)
+        await library.load()
+        await library.fetchBookmarkIfNeeded(noteID)
+        for _ in 0 ..< 100 where library.bookmarkFetchFailure(for: noteID) == nil {
+            try await Task.sleep(for: .milliseconds(100))
+            await library.refreshCaptures()
+        }
+        let failure = try #require(library.bookmarkFetchFailure(for: noteID))
+        #expect(failure.error != nil)
+        #expect(library.captureFailure == nil)
+        #expect(library.error == nil)
+        await library.fetchBookmarkIfNeeded(noteID)
+        #expect(try await store.captureJobs().count == 1)
+        // Clearing forgets the failure; the bookmark itself stays, ready to fetch again.
+        await library.clearFailedCaptures([failure.id])
+        #expect(try await store.captureJobs().isEmpty)
+        #expect(library.bookmarkFetchFailure(for: noteID) == nil)
+        #expect(try await store.unfetchedBookmarkURL(noteID: noteID) != nil)
+        #expect(try await store.documents().map(\.id) == [noteID])
+    }
+
     /// Renders the review sheet; set INFACTORY_LIBRARY_SCREENSHOTS to keep the images.
     @Test @MainActor func reviewSheetRendersFolderDestinations() async throws {
         defer { try? FileManager.default.removeItem(at: root) }

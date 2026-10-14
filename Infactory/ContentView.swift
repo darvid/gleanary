@@ -9,6 +9,8 @@ struct ContentView: View {
     var initialSelection: UUID?
     @State private var scope: LibraryScope? = .all
     @State private var sidebarVisible = true
+    @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
+    @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
     @State private var page = 0
     @State private var categories: [DecimalCategory] = []
@@ -58,9 +60,10 @@ struct ContentView: View {
         // sidebar toggle never moves and content never scrolls into the titlebar.
         HStack(spacing: 0) {
             if sidebarVisible {
-                sidebar.frame(width: Self.sidebarWidth)
+                sidebar.frame(width: sidebarWidth)
                     .transition(.move(edge: .leading).combined(with: .opacity))
-                Divider()
+                // Above the content, so the handle's right half isn't covered by it.
+                Divider().overlay { sidebarResizeHandle }.zIndex(1)
             }
             // Stacked, not a safe-area inset: HSplitView's AppKit columns ignore SwiftUI insets
             // and would draw under the banner.
@@ -71,15 +74,18 @@ struct ContentView: View {
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
             if showingFiling, !chatting {
-                Divider()
-                FilingInspector(
-                    document: preview.document, categories: categories, store: library.store,
-                    file: file,
-                    close: { withAnimation(.snappy(duration: 0.25)) { showingFiling = false } }
-                )
-                .frame(width: Self.inspectorWidth)
+                // One unit, so the edge slides in with the panel instead of appearing first.
+                HStack(spacing: 0) {
+                    Divider()
+                    FilingInspector(
+                        document: preview.document, categories: categories, store: library.store,
+                        file: file,
+                        close: { withAnimation(.snappy(duration: 0.25)) { showingFiling = false } }
+                    )
+                    .frame(width: Self.inspectorWidth)
+                }
                 .background(Color(nsColor: .windowBackgroundColor))
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+                .transition(.move(edge: .trailing))
             }
         }
         // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
@@ -231,7 +237,31 @@ struct ContentView: View {
         .onExitCommand { library.documentGrid.query = "" }
     }
 
-    static let sidebarWidth: CGFloat = 220
+    /// Drag the sidebar's edge within this range; double-click it to go back to the default.
+    static let sidebarWidths: ClosedRange<Double> = 180 ... 340
+    static let defaultSidebarWidth: Double = 220
+
+    /// A few points either side of the divider take the drag, with the system resize cursor.
+    private var sidebarResizeHandle: some View {
+        Color.clear
+            .frame(width: 8)
+            .contentShape(Rectangle())
+            .pointerStyle(.columnResize)
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = sidebarDragStart ?? sidebarWidth
+                        sidebarDragStart = start
+                        sidebarWidth = min(
+                            max(start + value.translation.width, Self.sidebarWidths.lowerBound),
+                            Self.sidebarWidths.upperBound
+                        )
+                    }
+                    .onEnded { _ in sidebarDragStart = nil }
+            )
+            .onTapGesture(count: 2) { sidebarWidth = Self.defaultSidebarWidth }
+            .accessibilityHidden(true)
+    }
 
     @ViewBuilder private var main: some View {
         if chatting, let conversation {
@@ -254,7 +284,7 @@ struct ContentView: View {
                 .help(sidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)")
                 if sidebarVisible {
                     // Continues the sidebar's edge through the toolbar, as ChatGPT does.
-                    Spacer().frame(width: Self.titleIndent)
+                    Spacer().frame(width: titleIndent)
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
@@ -322,10 +352,18 @@ struct ContentView: View {
     }
 
     /// Gap from the toggle to the sidebar's edge, given the toggle's place beside the traffic
-    /// lights.
-    static let titleIndent: CGFloat = 105
+    /// lights, so the toolbar divider continues the sidebar's.
+    private var titleIndent: CGFloat {
+        max(0, sidebarWidth - Self.defaultSidebarWidth + 105)
+    }
 
     @ViewBuilder private var notice: some View {
+        if let failure = library.captureFailure {
+            VStack(spacing: 0) {
+                captureFailureNotice(failure)
+                Divider()
+            }
+        }
         if let error = library.error ?? library.indexingError {
             VStack(spacing: 0) {
                 errorNotice(error)
@@ -560,6 +598,7 @@ struct ContentView: View {
                     if issues > 0 {
                         Label(issues.formatted(), systemImage: "exclamationmark.circle.fill")
                             .labelStyle(.titleAndIcon)
+                            .countsOnChange(issues)
                             .font(.caption.weight(.medium)).monospacedDigit()
                             .foregroundStyle(.orange)
                             .help(issues == 1 ? "1 capture needs attention"
@@ -670,6 +709,7 @@ struct ContentView: View {
                     Text(scopeTitle).font(.title3.weight(.semibold))
                     Spacer()
                     Text(library.documentGrid.total.formatted()).font(.caption.monospacedDigit())
+                        .countsOnChange(library.documentGrid.total)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
@@ -823,6 +863,14 @@ struct ContentView: View {
             cancelSummary: summaryCancel,
             showsLibraryDetails: true,
             bookmarkFetch: preview.selectedID.flatMap { library.bookmarkFetch(for: $0)?.progress },
+            bookmarkFetchFailure: preview.selectedID
+                .flatMap { library.bookmarkFetchFailure(for: $0) }
+                .map { $0.error ?? "The page could not be fetched." },
+            retryBookmarkFetch: {
+                guard let id = preview.selectedID,
+                      let failure = library.bookmarkFetchFailure(for: id) else { return }
+                Task { await library.retryCapture(failure.id) }
+            },
             openDocument: openDocument ?? { id in selection = [id]; preview.selectedID = id },
             editDocument: { editing = $0 },
             fileDocument: { _ in withAnimation(.snappy(duration: 0.25)) { showingFiling = true } }
@@ -846,8 +894,18 @@ struct ContentView: View {
                 List {
                     // The sidebar badge counts these; the same mark finds them here.
                     if !failed.isEmpty {
-                        Section("Needs Attention") {
+                        Section {
                             ForEach(failed) { captureRow($0) }
+                        } header: {
+                            HStack {
+                                Text("Needs Attention")
+                                Spacer()
+                                Button("Clear All") {
+                                    Task { await library.clearFailedCaptures() }
+                                }
+                                .buttonStyle(.borderless).controlSize(.small)
+                                .help("Forget every failed capture. Saved items aren't affected.")
+                            }
                         }
                         Section("Recent") {
                             ForEach(others) { captureRow($0) }
@@ -877,8 +935,10 @@ struct ContentView: View {
                 }
                 Text(job.request.label).font(.headline).lineLimit(2)
             }
-            Text(job
-                .error ?? (job.progress.isEmpty ? job.state.rawValue.capitalized : job.progress))
+            let status = job.error
+                ?? (job.progress.isEmpty ? job.state.rawValue.capitalized : job.progress)
+            Text(status)
+                .fadesOnChange(status)
                 .font(.caption)
                 .foregroundStyle(failed ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 .textSelection(.enabled)
@@ -895,6 +955,10 @@ struct ContentView: View {
                     }
                     Button("Retry") { Task { await library.retryCapture(job.id) } }
                         .disabled(library.busy)
+                    if job.state == .failed {
+                        Button("Clear") { Task { await library.clearFailedCaptures([job.id]) } }
+                            .help("Forget this failed capture")
+                    }
                 } else if !job.state.terminal {
                     Button("Stop") { Task { await library.cancelCapture(job.id) } }
                 }
@@ -944,6 +1008,41 @@ struct ContentView: View {
 
     /// A warning strip: the multicolor triangle and a warm tint read as a problem at a glance,
     /// unlike the neutral control surface used for ordinary notices.
+    /// Names the source, since the window may have moved on since it was asked for.
+    private func captureFailureNotice(_ job: CaptureJob) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .symbolRenderingMode(.multicolor).font(.body)
+                .accessibilityLabel("Problem")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't save “\(job.request.label)”").font(.callout.weight(.medium))
+                    .lineLimit(1).truncationMode(.middle)
+                if let reason = job.error {
+                    Text(reason).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer()
+            Button("Show in Captures") {
+                library.captureFailure = nil
+                chatting = false
+                scope = .captures
+            }
+            Button("Try Again") {
+                library.captureFailure = nil
+                Task { await library.retryCapture(job.id) }
+            }
+            .disabled(library.busy)
+            Button("Dismiss", systemImage: "xmark") { library.captureFailure = nil }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange.opacity(colorScheme == .dark ? 0.2 : 0.14))
+        .onAppear {
+            AccessibilityNotification.Announcement("Couldn't save \(job.request.label)").post()
+        }
+    }
+
     private func errorNotice(_ error: String) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -1015,6 +1114,7 @@ private struct LibraryDocumentRow: View {
                 if let activity {
                     Label {
                         Text(activity).lineLimit(1)
+                            .fadesOnChange(activity)
                     } icon: {
                         Image(systemName: "progress.indicator")
                             .symbolEffect(.variableColor.iterative, options: .repeating)
