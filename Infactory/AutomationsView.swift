@@ -7,32 +7,33 @@ struct AutomationsView: View {
     @State private var reviewing: AutomationKind?
 
     var body: some View {
-        Form {
-            Section {
+        // Cards on the window rather than a grouped Form, which centers itself at a fixed width
+        // unlike the app's other pages.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
                 Text(
                     "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Apart from summaries, nothing changes until you review it."
                 )
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            }
-            if let error = model.error {
-                Section {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .symbolRenderingMode(.multicolor)
-                        .textSelection(.enabled)
+                if let error = model.error {
+                    AutomationCard {
+                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                ForEach(AutomationKind.allCases) { kind in
+                    AutomationSection(
+                        model: model,
+                        config: model.config(kind),
+                        review: { reviewing = kind }
+                    )
                 }
             }
-            ForEach(AutomationKind.allCases) { kind in
-                AutomationSection(
-                    model: model,
-                    config: model.config(kind),
-                    review: { reviewing = kind }
-                )
-            }
+            .padding(24)
         }
-        .formStyle(.grouped)
-        .frame(maxWidth: 760)
-        .frame(maxWidth: .infinity)
         .task { await model.load() }
         .sheet(item: $reviewing) { kind in
             AgentChangesReview(
@@ -63,9 +64,9 @@ private struct AutomationSection: View {
     }
 
     var body: some View {
-        Section {
+        AutomationCard {
             header
-            LabeledContent("Schedule") {
+            AutomationRow("Schedule") {
                 Picker("Schedule", selection: binding(\.interval)) {
                     ForEach(kind.intervals, id: \.self) {
                         Text(AutomationKind.intervalLabel($0)).tag($0)
@@ -73,28 +74,30 @@ private struct AutomationSection: View {
                 }
                 .labelsHidden().fixedSize()
             }
-            LabeledContent("Allowed to") { Text(kind.policy) }
-            LabeledContent("Last run") { lastRunStatus }
+            AutomationRow("Allowed to") { Text(kind.policy).foregroundStyle(.secondary) }
+            AutomationRow("Last run") { lastRunStatus }
             if config.enabled, !running, let next = config.nextRunAt {
-                LabeledContent("Next run") {
+                AutomationRow("Next run") {
                     Text(next > Date() ? next
                         .formatted(.relative(presentation: .named)) : "Shortly")
                         .foregroundStyle(.secondary)
                 }
             }
             if let pending = model.pending[kind], !pending.isEmpty {
-                LabeledContent {
-                    Button("Review \(pending.count.formatted())…", action: review)
-                        .buttonStyle(.borderedProminent).controlSize(.small)
-                } label: {
+                AutomationRow {
                     Label(
                         "\(AgentChangesCard.breakdown(pending)) waiting",
                         systemImage: "checklist"
                     )
+                } content: {
+                    Button("Review \(pending.count.formatted())…", action: review)
+                        .buttonStyle(.borderedProminent).controlSize(.small)
                 }
             }
-            DisclosureGroup("Options") { options }
+            Divider()
+            DisclosureGroup("Options") { options.padding(.top, 8) }
             if let runs = model.runs[kind], !runs.isEmpty {
+                Divider()
                 DisclosureGroup("History") {
                     ForEach(runs.prefix(10)) { RunRow(model: model, run: $0) }
                 }
@@ -117,6 +120,7 @@ private struct AutomationSection: View {
             }
             Spacer(minLength: 12)
             Toggle(kind.title, isOn: binding(\.enabled)).labelsHidden().toggleStyle(.switch)
+                .controlSize(.small)
         }
         .padding(.vertical, 4)
     }
@@ -150,14 +154,27 @@ private struct AutomationSection: View {
             .joined(separator: " · ")
     }
 
-    @ViewBuilder private var options: some View {
-        Stepper(value: binding(\.batchLimit), in: 1 ... 200, step: kind == .linkChecker ? 10 : 5) {
-            LabeledContent("Items per run", value: config.batchLimit.formatted())
-        }
-        if kind.usesModel {
-            Toggle("Allow ChatGPT when it's the AI provider", isOn: binding(\.cloudAllowed))
-            Stepper(value: binding(\.dailyCalls), in: 10 ... 2000, step: 10) {
-                LabeledContent("Model calls per day", value: config.dailyCalls.formatted())
+    private var options: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            AutomationRow("Items per run") {
+                Stepper(
+                    value: binding(\.batchLimit),
+                    in: 1 ... 200,
+                    step: kind == .linkChecker ? 10 : 5
+                ) {
+                    Text(config.batchLimit.formatted()).monospacedDigit()
+                }
+            }
+            if kind.usesModel {
+                AutomationRow("Allow ChatGPT when it's the AI provider") {
+                    Toggle("Allow ChatGPT", isOn: binding(\.cloudAllowed))
+                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                }
+                AutomationRow("Model calls per day") {
+                    Stepper(value: binding(\.dailyCalls), in: 10 ... 2000, step: 10) {
+                        Text(config.dailyCalls.formatted()).monospacedDigit()
+                    }
+                }
             }
         }
     }
@@ -172,6 +189,44 @@ private struct AutomationSection: View {
             updated[keyPath: path] = value
             model.update(updated)
         }
+    }
+}
+
+/// A rounded panel on the window, like a grouped form's section.
+private struct AutomationCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) { content }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.5)))
+    }
+}
+
+/// A label on the leading edge and its value or control on the trailing edge.
+private struct AutomationRow<Label: View, Content: View>: View {
+    @ViewBuilder let label: Label
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Divider()
+            HStack(spacing: 12) {
+                label
+                Spacer(minLength: 12)
+                content
+            }
+            .frame(minHeight: 22)
+        }
+    }
+}
+
+extension AutomationRow where Label == Text {
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+        label = Text(title)
+        self.content = content()
     }
 }
 
