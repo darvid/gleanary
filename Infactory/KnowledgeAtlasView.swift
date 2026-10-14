@@ -97,7 +97,11 @@ struct KnowledgeAtlasView: View {
                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
             }
-        }.accessibilityElement(children: .contain).accessibilityLabel("Atlas location")
+        }
+        // The header spaces its items 10pt apart, so the last chevron would sit nearer its parent
+        // than the title; this evens it out.
+        .padding(.trailing, atlas.breadcrumb.count > 1 ? -4 : 0)
+        .accessibilityElement(children: .contain).accessibilityLabel("Atlas location")
     }
 
     /// Empty categories draw as dashed outlines, so the toggle uses the same shape.

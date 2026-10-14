@@ -397,7 +397,21 @@ struct ContentView: View {
         }
     }
 
-    private var libraryColumns: some View {
+    @ViewBuilder private var libraryColumns: some View {
+        if scope == .captures, visibleCaptures.isEmpty {
+            // One empty state for the whole area, rather than one per column at different heights.
+            ContentUnavailableView(
+                "No captures yet",
+                systemImage: "tray",
+                description: Text("Save a URL in Chat or import a document.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            splitColumns
+        }
+    }
+
+    private var splitColumns: some View {
         HSplitView {
             Group {
                 if scope == .captures {
@@ -945,35 +959,27 @@ struct ContentView: View {
         let others = visibleCaptures.filter { $0.state != .failed }
         // No heading of its own: the toolbar already says Captures.
         return VStack(alignment: .leading, spacing: 0) {
-            if visibleCaptures.isEmpty {
-                ContentUnavailableView(
-                    "No captures yet",
-                    systemImage: "tray",
-                    description: Text("Save a URL in Chat or import a document.")
-                )
-            } else {
-                List {
-                    // The sidebar badge counts these; the same mark finds them here.
-                    if !failed.isEmpty {
-                        Section {
-                            ForEach(failed) { captureRow($0) }
-                        } header: {
-                            HStack {
-                                Text("Needs Attention")
-                                Spacer()
-                                Button("Clear All") {
-                                    Task { await library.clearFailedCaptures() }
-                                }
-                                .buttonStyle(.borderless).controlSize(.small)
-                                .help("Forget every failed capture. Saved items aren't affected.")
+            List {
+                // The sidebar badge counts these; the same mark finds them here.
+                if !failed.isEmpty {
+                    Section {
+                        ForEach(failed) { captureRow($0) }
+                    } header: {
+                        HStack {
+                            Text("Needs Attention")
+                            Spacer()
+                            Button("Clear All") {
+                                Task { await library.clearFailedCaptures() }
                             }
+                            .buttonStyle(.borderless).controlSize(.small)
+                            .help("Forget every failed capture. Saved items aren't affected.")
                         }
-                        Section("Recent") {
-                            ForEach(others) { captureRow($0) }
-                        }
-                    } else {
+                    }
+                    Section("Recent") {
                         ForEach(others) { captureRow($0) }
                     }
+                } else {
+                    ForEach(others) { captureRow($0) }
                 }
             }
         }.navigationSplitViewColumnWidth(min: 260, ideal: 360, max: 480)
