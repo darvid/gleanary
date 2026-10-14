@@ -32,6 +32,10 @@ final class LibraryModel {
     /// A capture someone asked for that failed, named in the window's notice. Bookmark page
     /// fetches report on their item instead, since they run unasked in the background.
     var captureFailure: CaptureJob?
+    /// Why summaries stopped being written, when the AI provider itself is the problem (a
+    /// model or plan that's no longer available), so it's said once rather than on every item.
+    var summaryProblem: String?
+    @ObservationIgnored private var dismissedSummaryProblem: String?
     var browserJob: CaptureJob?
     var audioJob: CaptureJob?
     var hasSearched = false
@@ -363,6 +367,24 @@ final class LibraryModel {
     /// Captures and Generate Summary use this summarizer, following the AI provider setting.
     func useLinkSummarizer(_ summarizer: any LinkSummarizing) async {
         await ingestion.useSummarizer(summarizer)
+        // A new provider or model may well fix it; say so again only if it fails again.
+        summaryProblem = nil
+        dismissedSummaryProblem = nil
+    }
+
+    func dismissSummaryProblem() {
+        dismissedSummaryProblem = summaryProblem
+        summaryProblem = nil
+    }
+
+    /// Provider-wide reasons a capture's summary failed, as opposed to one page's content.
+    nonisolated static let providerProblems: [ChatGPTError] = [
+        .modelDenied, .planNotAuthorized, .signInRequired, .usageLimit, .requestRejected,
+    ]
+
+    nonisolated static func providerProblem(in progress: String) -> String? {
+        guard progress.hasPrefix("Saved full text without a summary") else { return nil }
+        return providerProblems.compactMap(\.errorDescription).first { progress.contains($0) }
     }
 
     /// A short status for background work on an item, shown on its library row.
@@ -598,6 +620,15 @@ final class LibraryModel {
                 .map { ($0.id, $0.state) })
             let refreshedJobs = try await store.captureJobs()
             let sequence = try await store.libraryChangeSequence()
+            if let problem = refreshedJobs.lazy.filter({
+                $0
+                    .state == .ready && previousStates[$0.id] != nil && previousStates[$0.id] !=
+                    .ready
+            }).compactMap({ Self.providerProblem(in: $0.progress) }).first,
+                problem != dismissedSummaryProblem
+            {
+                summaryProblem = problem
+            }
             // A bookmark upgrade updates the open item in place; it isn't a new save to announce.
             if let completed = refreshedJobs.first(where: {
                 $0.state == .ready && previousStates[$0.id] != .ready && $0.noteID != nil

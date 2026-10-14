@@ -374,6 +374,12 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var notice: some View {
+        if let problem = library.summaryProblem {
+            VStack(spacing: 0) {
+                summaryProblemNotice(problem)
+                Divider()
+            }
+        }
         if let failure = library.captureFailure {
             VStack(spacing: 0) {
                 captureFailureNotice(failure)
@@ -593,6 +599,24 @@ struct ContentView: View {
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
                     .tag(SidebarItem.conversation)
             }
+            // The agents' scheduled work sits with Chat, above the library's content.
+            HStack {
+                let color: Color = colorScheme == .dark || (automating && !chatting)
+                    ? .white : .black
+                Label("Automations", systemImage: "clock.arrow.2.circlepath")
+                    .labelStyle(LibrarySidebarLabelStyle(color: color))
+                Spacer()
+                // Proposals waiting for review, like Captures' count of failures.
+                let waiting = library.automations.pendingCount
+                if waiting > 0 {
+                    Text(waiting.formatted())
+                        .font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(color.opacity(0.72))
+                        .countsOnChange(waiting)
+                        .accessibilityLabel(waiting == 1 ? "1 proposal to review"
+                            : "\(waiting) proposals to review")
+                }
+            }.tag(SidebarItem.automations)
             Section("Library") {
                 Label("All items", systemImage: "tray.full")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
@@ -628,23 +652,6 @@ struct ContentView: View {
                 Label("Archive", systemImage: "archivebox")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.archived)))
                     .tag(SidebarItem.library(.archived))
-                HStack {
-                    let color: Color = colorScheme == .dark || (automating && !chatting)
-                        ? .white : .black
-                    Label("Automations", systemImage: "clock.arrow.2.circlepath")
-                        .labelStyle(LibrarySidebarLabelStyle(color: color))
-                    Spacer()
-                    // Proposals waiting for review, like Captures' count of failures.
-                    let waiting = library.automations.pendingCount
-                    if waiting > 0 {
-                        Text(waiting.formatted())
-                            .font(.caption.weight(.medium)).monospacedDigit()
-                            .foregroundStyle(color.opacity(0.72))
-                            .countsOnChange(waiting)
-                            .accessibilityLabel(waiting == 1 ? "1 proposal to review"
-                                : "\(waiting) proposals to review")
-                    }
-                }.tag(SidebarItem.automations)
             }
             Section("Filing") {
                 ForEach(CategoryArea.group(categories)) { area in
@@ -924,13 +931,18 @@ struct ContentView: View {
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// What you saved yourself, plus anything that failed. Background bookmark fetches report on
+    /// their item, so a successful one isn't listed here.
+    private var visibleCaptures: [CaptureJob] {
+        library.captureJobs.filter { $0.request.replacingNoteID == nil || $0.state == .failed }
+    }
+
     private var captureList: some View {
-        let failed = library.captureJobs.filter { $0.state == .failed }
-        let others = library.captureJobs.filter { $0.state != .failed }
+        let failed = visibleCaptures.filter { $0.state == .failed }
+        let others = visibleCaptures.filter { $0.state != .failed }
+        // No heading of its own: the toolbar already says Captures.
         return VStack(alignment: .leading, spacing: 0) {
-            Text("Captures").font(.title3.weight(.semibold)).padding(18)
-            Divider()
-            if library.captureJobs.isEmpty {
+            if visibleCaptures.isEmpty {
                 ContentUnavailableView(
                     "No captures yet",
                     systemImage: "tray",
@@ -1055,6 +1067,31 @@ struct ContentView: View {
 
     /// A warning strip: the multicolor triangle and a warm tint read as a problem at a glance,
     /// unlike the neutral control surface used for ordinary notices.
+    /// Said once for the whole library: every capture since saved its full text without a summary.
+    private func summaryProblemNotice(_ problem: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .symbolRenderingMode(.multicolor).font(.body)
+                .accessibilityLabel("Problem")
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Summaries aren't being written").font(.callout.weight(.medium))
+                Text("\(problem) New saves keep their full text until this is fixed.")
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            SettingsLink { Text("Open Settings…") }
+            Button("Dismiss", systemImage: "xmark") { library.dismissSummaryProblem() }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(Color.orange.opacity(colorScheme == .dark ? 0.2 : 0.14))
+        .onAppear {
+            AccessibilityNotification.Announcement("Summaries aren't being written. \(problem)")
+                .post()
+        }
+    }
+
     /// Names the source, since the window may have moved on since it was asked for.
     private func captureFailureNotice(_ job: CaptureJob) -> some View {
         HStack(spacing: 10) {
