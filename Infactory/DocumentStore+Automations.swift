@@ -40,6 +40,7 @@ extension DocumentStore {
                 config.cloudAllowed = row["cloudAllowed"]
                 config.dailyCalls = row["dailyCalls"]
                 config.recheck = row["recheck"]
+                config.archivesDeadLinks = row["archivesDeadLinks"]
                 config.lastRunAt = (row["lastRunAt"] as Double?)
                     .map(Date.init(timeIntervalSince1970:))
             }
@@ -51,15 +52,15 @@ extension DocumentStore {
         try readyDatabase().write { db in
             try db.execute(sql: """
             INSERT INTO automations(id, enabled, interval, batchLimit, cloudAllowed, dailyCalls,
-                recheck, lastRunAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                recheck, archivesDeadLinks, lastRunAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, interval = excluded.interval,
                 batchLimit = excluded.batchLimit, cloudAllowed = excluded.cloudAllowed,
                 dailyCalls = excluded.dailyCalls, recheck = excluded.recheck,
-                lastRunAt = excluded.lastRunAt
+                archivesDeadLinks = excluded.archivesDeadLinks, lastRunAt = excluded.lastRunAt
             """, arguments: [
                 config.kind.rawValue, config.enabled, config.interval, config.batchLimit,
-                config.cloudAllowed, config.dailyCalls, config.recheck,
+                config.cloudAllowed, config.dailyCalls, config.recheck, config.archivesDeadLinks,
                 config.lastRunAt?.timeIntervalSince1970,
             ])
         }
@@ -162,6 +163,7 @@ extension DocumentStore {
         appliedRevision: UUID?,
         runID: UUID,
         at date: Date,
+        snapshot: String? = nil,
         in db: Database
     ) throws {
         let ordinal = try Int.fetchOne(
@@ -170,13 +172,13 @@ extension DocumentStore {
         ) ?? 0
         try db.execute(sql: """
         INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
-            after, reason, baseRevision, appliedRevision, status, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)
+            after, reason, baseRevision, appliedRevision, snapshot, status, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)
         """, arguments: [
             UUID().uuidString, runID.uuidString, ordinal, draft.kind.rawValue,
             draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code, draft.before,
             draft.after, draft.reason, draft.baseRevision?.uuidString,
-            appliedRevision?.uuidString, date.timeIntervalSince1970,
+            appliedRevision?.uuidString, snapshot, date.timeIntervalSince1970,
         ])
     }
 
@@ -675,6 +677,42 @@ extension DocumentStore {
             SELECT EXISTS(SELECT 1 FROM agent_changes WHERE kind = 'archive' AND noteID = ?
                 AND status IN ('pending', 'rejected'))
             """, arguments: [noteID.uuidString]) ?? false
+        }
+    }
+
+    /// Whether archiving this item was ever proposed or done by an automation, so archiving
+    /// on its own never overrides a choice you made: an Undo, unarchiving it afterwards, a
+    /// rejection, or a proposal you haven't reviewed yet.
+    func archiveEverConsidered(_ noteID: UUID) throws -> Bool {
+        try readyDatabase().read { db in
+            try Bool.fetchOne(db, sql: """
+            SELECT EXISTS(SELECT 1 FROM agent_changes WHERE kind = 'archive' AND noteID = ?)
+            """, arguments: [noteID.uuidString]) ?? false
+        }
+    }
+
+    /// Archives a live item and records the change for Undo, in one transaction. False when
+    /// it's already archived or gone.
+    func archiveAutomatically(
+        _ draft: AgentChangeDraft,
+        runID: UUID,
+        at date: Date
+    ) throws -> Bool {
+        guard let noteID = draft.noteID else { return false }
+        return try readyDatabase().write { db in
+            guard try Bool.fetchOne(db, sql: """
+            SELECT EXISTS(SELECT 1 FROM notes WHERE id = ? AND deletedAt IS NULL
+                AND archivedAt IS NULL)
+            """, arguments: [noteID.uuidString]) == true else { return false }
+            let stamp = date.timeIntervalSince1970
+            try db.execute(
+                sql: "UPDATE notes SET archivedAt = ?, archiveReason = ? WHERE id = ?",
+                arguments: [stamp, draft.after, noteID.uuidString]
+            )
+            try Self.insertAppliedChange(
+                draft, appliedRevision: nil, runID: runID, at: date, snapshot: String(stamp), in: db
+            )
+            return true
         }
     }
 
