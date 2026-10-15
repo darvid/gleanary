@@ -224,6 +224,10 @@ button radius. Code blocks use a rectangular control surface.
 ## Components
 
 - **Navigation:** `.sidebar` list with Library/Filing sections, SF Symbols, and category codes. Filing rows carry their Atlas colour: a 7pt dot before the name, or the area row's folder icon tinted with it. Graph and Mind Map are not Library navigation destinations. Go › Back/Forward (⌘[ / ⌘]) and the mouse's back and forward buttons step through visited places: Chat or a scope, the Atlas region, and an opened item. Free zooming updates the current place rather than adding one.
+- **Empty filing categories:** the map's Hide empty preference also dims
+  empty sidebar homes in Chat and Automations. Both load and refresh the
+  shared category snapshot without requiring a visit to the map first.
+  Empty homes remain reachable.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
 - **Preview actions:** Open Original uses `.borderedProminent`;
@@ -277,6 +281,13 @@ button radius. Code blocks use a rectangular control surface.
   bibliography stays in the saved document but is replaced by these
   controls in chat; inline citations remain clickable. Other references
   retain the existing generic document presentation.
+- **Research note titles:** new Researcher summaries and comparisons get
+  concise, topic-focused titles generated from the verified result, not a
+  copied source headline. Three to eight words is guidance; 12 words and
+  80 characters are safety ceilings. The selected provider generates and
+  separately evidence-checks the title before saving the note (two extra
+  bounded model calls). Source names, content, and citation links stay
+  unchanged; existing note titles are not rewritten.
 - **Library agent changes:** with ChatGPT connected, multi-item requests such as retitling an inbox run a bounded tool loop that only proposes. Its reply carries one card (checklist symbol, a count per kind, "Proposed. Nothing changes until you apply.", and Review Changes…). The review sheet lists every change with a checkbox, grouped Titles, Summaries, New categories, Filing, Links, Moved links, Archive and New notes; old titles are struck through, new categories use the green New badge, and a filing into a proposed category selects with it. Applying rejects the unselected rest; the card then shows counts and Undo. The card sits under the task's last agent reply, whichever agent wrote it. A Writer refresh adds a Document revisions group first: the document's title and a line count ("12 lines added, 4 removed") over a line diff that is open by default, removed lines struck through on a red tint with a minus, added lines on a green tint with a plus, link targets hidden so citations read "(2)", and unchanged runs folded to a count.
 - **Writer scope:** while a compose request waits for confirmation, its last agent reply carries a scope card (the same 10pt card surface): "Scope for this document" with "N of M checked" rolling as boxes change and Check All/Uncheck All, then a list of up to 240pt of checkbox rows (title, then filing and why it was gathered, after a comma) with an open-item button; possible strays carry an orange "Possibly off-topic" capsule and start unchecked. Below, a Style picker and an Allow general knowledge checkbox, a one-line limit note when too many are checked, and Cancel and Write Document (prominent). Stage progress under the composer keeps the stage still and rolls its count ("Extracting 12 of 37").
 - **Atlas source cards:** a source and its single-source generated

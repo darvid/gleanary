@@ -33,6 +33,10 @@ struct AutoCategorizerTests {
 /// Papers go to 51, gardens to a new home, mysteries nowhere, and anything else gets an
 /// invented code that validation must drop.
 private actor FakeFiler: ConversationInferring {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities = InferenceCapabilities(
         identifier: "fixture.filer", local: false, structured: true, streaming: false
     )
@@ -293,6 +297,10 @@ extension AutoCategorizerTests {
 
 /// Answers slowly so a run can be stopped mid-way.
 private actor SlowFiler: ConversationInferring {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities = InferenceCapabilities(
         identifier: "fixture.slow", local: false, structured: true, streaming: false
     )

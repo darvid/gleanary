@@ -9,6 +9,16 @@ import Synchronization
 import Testing
 
 private struct ConversationFixtureInference: ConversationInferring {
+    var generatedTitle = "Local-first knowledge notes"
+    var titleFails = false
+
+    func researchTitle(for _: String) throws -> String {
+        if titleFails {
+            throw LinkSummaryError.invalidOutput
+        }
+        return generatedTitle
+    }
+
     var unavailable = false
     var wait = false
     var intent = ConversationPlan(steps: [.init(action: .chat)])
@@ -784,6 +794,61 @@ private struct NoTranscriptProvider: YouTubeProviding {
             action: "undo"
         ) }
         #expect(try await store.categories(for: note.id).first?.id == other.id)
+    }
+
+    @Test func researchUsesGeneratedTitleAndPreservesSourceNameAndProvenance() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = try await store.save(MarkdownDocument(
+            name: "A long source headline and publication branding",
+            markdown: "Coding agents use version control to coordinate work."
+        ))
+        var inference = ConversationFixtureInference()
+        inference.generatedTitle = "Version control for coding agents"
+        inference.intent = ConversationPlan(steps: [.init(
+            action: .research,
+            targets: [original.id]
+        )])
+        let coordinator = AgentCoordinator(store: store, inference: inference)
+        let task = try await store.beginConversation(
+            "Summarize",
+            owner: .researcher,
+            sources: [original.id]
+        )
+        try await coordinator.execute(
+            taskID: task,
+            request: "Summarize",
+            selected: [original.id],
+            changed: {}
+        )
+        let reply = try #require(await store.conversationMessages()
+            .last { $0.author == "researcher" })
+        let resultID = try #require(reply.references.first)
+        #expect(resultID != original.id)
+        #expect(try await store.document(id: resultID)?.name == inference.generatedTitle)
+        #expect(try await store.document(id: original.id) == original)
+        #expect(reply.references.dropFirst() == [original.id])
+        #expect(reply.text.contains(original.name))
+        #expect(reply.text.contains("gleanary://note/\(original.id.uuidString)"))
+        // Failure to name the note must not publish a partially generated artifact.
+        inference.titleFails = true
+        let failing = AgentCoordinator(store: store, inference: inference)
+        let failedTask = try await store.beginConversation(
+            "Summarize again",
+            owner: .researcher,
+            sources: [original.id]
+        )
+        await #expect(throws: LinkSummaryError.invalidOutput) {
+            try await failing.execute(
+                taskID: failedTask,
+                request: "Summarize again",
+                selected: [original.id],
+                changed: {}
+            )
+        }
+        #expect(try await !store.conversationMessages()
+            .contains { $0.taskID == failedTask && $0.author == "researcher" })
+        #expect(try await store.document(id: original.id) == original)
     }
 
     @Test @MainActor func researcherReferencesSeparateGeneratedResultFromItsSavedOriginal(

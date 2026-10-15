@@ -1156,6 +1156,90 @@ extension ChatGPTTests {
         _ = try await session.signOut()
     }
 
+    @Test func researchNoteTitlesAreGeneratedAndEvidenceChecked() async throws {
+        let account = registration()
+        let proposal = EvidenceSummaryDraft(
+            overview: .init(text: "Agent-focused version control", evidenceIDs: ["E1"]),
+            takeaways: []
+        )
+        let transport = try FixtureChatGPTStream([
+            String(decoding: JSONEncoder().encode(proposal), as: UTF8.self),
+            #"{"supported":[true]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        let inference = ChatGPTConversationInference(session: session, model: "fixture-model")
+        #expect(try await inference.researchTitle(
+            for: "The source describes version control designed for coding agents."
+        ) == "Agent-focused version control")
+        let requests = await transport.requests
+        #expect(requests.count == 2)
+        let titleRequest = try #require(requests.first?.httpBody)
+        let titleJSON = try #require(JSONSerialization
+            .jsonObject(with: titleRequest) as? [String: Any])
+        #expect(try String(decoding: titleRequest, as: UTF8.self)
+            .contains("concise, specific topic phrase"))
+        #expect(titleJSON["model"] as? String == "fixture-model")
+        _ = try await session.signOut()
+        await #expect(throws: ChatGPTError.self) {
+            try await inference.researchTitle(for: "More synthetic evidence.")
+        }
+        #expect(await transport.requests.count == 2)
+    }
+
+    @Test func invalidResearchTitleFailsBeforeReviewWithTheCorrectProvider() async throws {
+        let account = registration()
+        let proposal = EvidenceSummaryDraft(
+            overview: .init(text: String(repeating: "x", count: 81), evidenceIDs: ["E1"]),
+            takeaways: []
+        )
+        let transport = try FixtureChatGPTStream([
+            String(decoding: JSONEncoder().encode(proposal), as: UTF8.self),
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        await #expect(throws: ChatGPTError.invalidOutput) {
+            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+                .researchTitle(for: "The source describes a prototype.")
+        }
+        #expect(await transport.requests.count == 1)
+        _ = try await session.signOut()
+    }
+
+    @Test func unsupportedResearchNoteTitleIsNotAccepted() async throws {
+        let account = registration()
+        let proposal = EvidenceSummaryDraft(
+            overview: .init(text: "Unproven performance guarantees", evidenceIDs: ["E1"]),
+            takeaways: []
+        )
+        let transport = try FixtureChatGPTStream([
+            String(decoding: JSONEncoder().encode(proposal), as: UTF8.self),
+            #"{"supported":[false]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        await #expect(throws: LinkSummaryError.unsupportedSummary) {
+            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+                .researchTitle(for: "The source describes a prototype.")
+        }
+        _ = try await session.signOut()
+    }
+
     @Test func chatGPTSummariesKeepTenPointsAndVerifyEveryBatch() async throws {
         let account = registration()
         let text = (1 ... 11).map { "Synthetic finding \($0) is supported by its test." }

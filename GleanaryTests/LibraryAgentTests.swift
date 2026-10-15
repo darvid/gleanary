@@ -6,6 +6,10 @@ import Testing
 
 /// Plays back scripted turns and records what the loop sent, standing in for ChatGPT.
 private actor ScriptedAgent: ConversationInferring, AgentResponding {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities = InferenceCapabilities(
         identifier: "fixture.agent", local: false, structured: true, streaming: true
     )

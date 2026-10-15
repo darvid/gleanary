@@ -48,13 +48,15 @@ struct ContentView: View {
         library: LibraryModel,
         conversation: ConversationModel? = nil,
         initialSelection: UUID? = nil,
-        previewModel: DocumentPreviewModel? = nil
+        previewModel: DocumentPreviewModel? = nil,
+        atlasModel: KnowledgeAtlasModel? = nil
     ) {
         self.library = library
         self.conversation = conversation
         _chatting = State(initialValue: conversation != nil && initialSelection == nil)
         self.initialSelection = initialSelection
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
+        _atlas = State(initialValue: atlasModel ?? KnowledgeAtlasModel())
     }
 
     var body: some View {
@@ -184,6 +186,13 @@ struct ContentView: View {
             }
             await loadCategories()
             await library.refreshCaptures()
+        }
+        .task(id: "\(library.ready)/\(library.documentGrid.generation)/\(chatting)/\(automating)") {
+            // The map normally owns this load, but Chat and Automations share its sidebar
+            // even when no map has been mounted during this launch.
+            if library.ready, chatting || automating {
+                await atlas.load(from: library.store)
+            }
         }
         .task(id: library.documentGrid.query) {
             guard library.ready else { return }
@@ -741,7 +750,7 @@ struct ContentView: View {
     private func filingRow(_ category: DecimalCategory, icon: String?) -> some View {
         let color = sidebarColor(.category(category.id))
         // Dimmed, not removed: the map hides empty categories, but they stay reachable here.
-        let hidden = !chatting && presentation == .map && atlasHidesEmpty
+        let hidden = presentation == .map && atlasHidesEmpty
             && atlas.emptyCategoryIDs.contains(category.id)
         // The category's Atlas colour, as on its chips and in the filing inspector.
         let ink = AtlasPalette.ink(
