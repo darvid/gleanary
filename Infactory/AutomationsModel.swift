@@ -51,7 +51,9 @@ import Observation
             var updatedPending: [AutomationKind: [AgentChange]] = [:]
             var updatedBacklog: [AutomationKind: Int] = [:]
             for kind in AutomationKind.allCases {
+                // A run in progress shows as Running… above the history, not as an empty row.
                 updatedRuns[kind] = try await store.automationRuns(kind)
+                    .filter { $0.status != .running }
                 updatedPending[kind] = try await store.pendingAutomationChanges(kind)
                 updatedBacklog[kind] = try await engine.backlog(config(kind))
             }
@@ -191,7 +193,7 @@ import Observation
     }
 
     func canUndo(_ run: AutomationRun) -> Bool {
-        run.kind == .inboxSummarizer && run.changed > 0
+        run.kind.undoable && run.changed > 0
     }
 
     private func perform(_ config: AutomationConfig) async {
@@ -209,6 +211,7 @@ import Observation
 @MainActor final class AutomationHooks {
     weak var library: LibraryModel?
     var judge: (any LinkJudging)?
+    var filer: (any ConversationInferring)?
 
     /// Imports, deletions and a summary someone asked for come first.
     var shouldYield: Bool {

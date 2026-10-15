@@ -101,13 +101,19 @@ extension DocumentStore {
         }
     }
 
-    func failCapture(_ job: CaptureJob, error: String, recovery: CaptureRecovery? = nil) throws {
+    func failCapture(
+        _ job: CaptureJob,
+        error: String,
+        recovery: CaptureRecovery? = nil,
+        retryable: Bool = false
+    ) throws {
         try readyDatabase().write { db in
             try db.execute(
-                sql: "UPDATE ingestion_jobs SET state = 'failed', error = ?, recovery = ?, progress = '', updatedAt = ? WHERE id = ? AND token = ? AND state IN ('fetching','extracting')",
+                sql: "UPDATE ingestion_jobs SET state = 'failed', error = ?, recovery = ?, retryable = ?, progress = '', updatedAt = ? WHERE id = ? AND token = ? AND state IN ('fetching','extracting')",
                 arguments: [
                     error,
                     recovery?.rawValue,
+                    retryable && recovery == nil,
                     Date().timeIntervalSince1970,
                     job.id.uuidString,
                     job.token.uuidString,
@@ -128,7 +134,8 @@ extension DocumentStore {
     func retryCapture(_ id: UUID) throws {
         try readyDatabase().write { db in
             try db.execute(
-                sql: "UPDATE ingestion_jobs SET state = 'queued', token = ?, progress = 'Retry queued', error = NULL, recovery = NULL WHERE id = ? AND state IN ('failed','cancelled')",
+                // Trying again by hand restarts the automatic retry's wait, not its count.
+                sql: "UPDATE ingestion_jobs SET state = 'queued', token = ?, progress = 'Retry queued', error = NULL, recovery = NULL, retryAt = NULL WHERE id = ? AND state IN ('failed','cancelled')",
                 arguments: [UUID().uuidString, id.uuidString]
             )
         }
@@ -474,7 +481,9 @@ extension DocumentStore {
             progress: row["progress"],
             error: row["error"],
             noteID: note.map(uuid),
-            recovery: (row["recovery"] as String?).flatMap(CaptureRecovery.init(rawValue:))
+            recovery: (row["recovery"] as String?).flatMap(CaptureRecovery.init(rawValue:)),
+            retryable: row["retryable"],
+            autoRetries: row["autoRetries"]
         )
     }
 }

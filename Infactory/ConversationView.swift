@@ -137,9 +137,7 @@ struct ConversationView: View {
         ToolbarSpacer(.flexible)
         ToolbarItem {
             Menu("More", systemImage: "ellipsis") {
-                Section(modelStatus) {
-                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
-                }
+                SettingsLink { Label("Settings…", systemImage: "gearshape") }
                 Divider()
                 Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
                     confirmingClear = true
@@ -151,13 +149,6 @@ struct ConversationView: View {
         }
     }
 
-    private var modelStatus: String {
-        if model.chatGPT.useChatGPT {
-            return "Using ChatGPT plan"
-        }
-        return library.intelligenceAvailable ? "On-device" : "Local, model unavailable"
-    }
-
     private var feed: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -167,11 +158,6 @@ struct ConversationView: View {
                             followLatest = false; Task { await model.loadOlder() }
                         }
                     }
-                    if model.messages.isEmpty {
-                        Text("Paste a URL, attach a document, or write a message.")
-                            .foregroundStyle(Color.primary.opacity(0.72))
-                            .padding(.vertical, 48)
-                    }
                     ForEach(model.messages) { message in
                         messageRow(message)
                             .id(message.id)
@@ -180,6 +166,15 @@ struct ConversationView: View {
                 }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
             }
             .defaultScrollAnchor(.bottom)
+            .overlay {
+                if model.messages.isEmpty {
+                    ContentUnavailableView(
+                        "No messages yet",
+                        systemImage: "bubble.left.and.text.bubble.right",
+                        description: Text("Paste a URL, attach a document, or write a message.")
+                    )
+                }
+            }
             .onScrollGeometryChange(for: Bool.self) { geometry in
                 Self.isAtLatest(
                     contentHeight: geometry.contentSize.height,

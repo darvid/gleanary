@@ -57,7 +57,7 @@ struct AgentChangesCard: View {
             (.title, "title", "titles"), (.summary, "summary", "summaries"),
             (.filing, "filing", "filings"), (.category, "new category", "new categories"),
             (.link, "link", "links"), (.archive, "archive", "archives"),
-            (.relink, "moved link", "moved links"),
+            (.relink, "moved link", "moved links"), (.note, "new note", "new notes"),
         ]
         return labels.compactMap { kind, one, many in
             let count = changes.count { $0.kind == kind }
@@ -140,7 +140,7 @@ struct AgentChangesReview: View {
     /// Every kind, in the order the sheet groups them; a test keeps it complete, since a kind
     /// left out would be applied without ever being shown.
     static let kindOrder: [AgentChange.Kind] = [
-        .title, .summary, .category, .filing, .link, .relink, .archive,
+        .title, .summary, .category, .filing, .link, .relink, .archive, .note,
     ]
 
     private static func heading(_ kind: AgentChange.Kind, count: Int) -> String {
@@ -152,6 +152,7 @@ struct AgentChangesReview: View {
         case .link: count == 1 ? "Link" : "Links"
         case .archive: "Archive"
         case .relink: count == 1 ? "Moved link" : "Moved links"
+        case .note: count == 1 ? "New note" : "New notes"
         }
     }
 
@@ -218,6 +219,9 @@ struct AgentChangesReview: View {
                         .foregroundStyle(.secondary).accessibilityLabel("now at")
                     Text(change.after).lineLimit(1).truncationMode(.middle)
                 }
+            case .note:
+                Label(change.after, systemImage: "doc.badge.plus").fontWeight(.medium)
+                    .lineLimit(1)
             case .summary:
                 Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
                 RowDisclosure(title: "New text") {

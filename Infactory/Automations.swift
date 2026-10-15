@@ -4,8 +4,12 @@ import Foundation
 /// them but don't write new ones.
 enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     case inboxSummarizer = "inbox-summarizer"
+    case bookmarkFetcher = "bookmark-fetcher"
     case linkChecker = "link-checker"
     case crossLinker = "cross-linker"
+    case unfiledFiler = "unfiled-filer"
+    case captureRetry = "capture-retry"
+    case weeklyDigest = "weekly-digest"
 
     var id: String {
         rawValue
@@ -14,8 +18,12 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .inboxSummarizer: "Inbox summarizer"
+        case .bookmarkFetcher: "Bookmark fetcher"
         case .linkChecker: "Link checker"
         case .crossLinker: "Cross-linker"
+        case .unfiledFiler: "Unfiled filer"
+        case .captureRetry: "Failed-capture retry"
+        case .weeklyDigest: "Weekly digest"
         }
     }
 
@@ -23,10 +31,18 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .inboxSummarizer:
             "Summarizes Inbox items that have their full text but no summary yet."
+        case .bookmarkFetcher:
+            "Fetches the pages of imported bookmarks that were never opened, a few at a time, newest first."
         case .linkChecker:
             "Checks that saved sources' original links still work, proposes updating ones that moved, and archiving ones that stay gone."
         case .crossLinker:
             "Looks for related items among those with no links yet, and proposes links with a reason."
+        case .unfiledFiler:
+            "Suggests a home for items that aren't filed anywhere, as filings you review."
+        case .captureRetry:
+            "Tries failed captures again when the problem looked temporary: after an hour, a day, then a week."
+        case .weeklyDigest:
+            "Writes a new note listing what you saved in the last week, grouped by category, with a link to each item."
         }
     }
 
@@ -34,37 +50,60 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var policy: String {
         switch self {
         case .inboxSummarizer: "Writes summaries; you can undo a run"
+        case .bookmarkFetcher: "Fetches pages into their bookmarks; you can undo a run"
         case .linkChecker: "Proposes link updates and archiving; you review first"
         case .crossLinker: "Proposes links; you review first"
+        case .unfiledFiler: "Proposes filings; you review first"
+        case .captureRetry: "Retries captures, never ones that need you to sign in or choose"
+        case .weeklyDigest: "Writes a new note, never edits others; you can undo it"
         }
     }
 
     var symbol: String {
         switch self {
         case .inboxSummarizer: "text.badge.star"
+        case .bookmarkFetcher: "arrow.down.doc"
         case .linkChecker: "link.badge.plus"
         case .crossLinker: "point.3.connected.trianglepath.dotted"
+        case .unfiledFiler: "tray.and.arrow.down"
+        case .captureRetry: "arrow.clockwise"
+        case .weeklyDigest: "newspaper"
         }
     }
 
     var role: AgentRole {
         switch self {
         case .inboxSummarizer: .researcher
-        case .linkChecker: .librarian
+        case .bookmarkFetcher, .linkChecker, .unfiledFiler, .captureRetry: .librarian
         case .crossLinker: .curator
+        case .weeklyDigest: .assistant
         }
     }
 
     /// Runs soon after something new is saved, not only on its schedule. Checking a link just
-    /// fetched would tell nothing new.
+    /// fetched would tell nothing new; saving never makes a bookmark, a failure or a week.
     var followsNewItems: Bool {
-        self != .linkChecker
+        switch self {
+        case .inboxSummarizer, .crossLinker, .unfiledFiler: true
+        case .bookmarkFetcher, .linkChecker, .captureRetry, .weeklyDigest: false
+        }
     }
 
     /// Whether this automation revisits items it already checked, so its recheck interval
-    /// means something.
+    /// means something. The filer looks again at items nothing fitted, in case homes changed.
     var rechecks: Bool {
-        self != .inboxSummarizer
+        switch self {
+        case .linkChecker, .crossLinker, .unfiledFiler: true
+        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest: false
+        }
+    }
+
+    /// Whether a run's own changes can be put back from its history.
+    var undoable: Bool {
+        switch self {
+        case .inboxSummarizer, .bookmarkFetcher, .weeklyDigest: true
+        case .linkChecker, .crossLinker, .unfiledFiler, .captureRetry: false
+        }
     }
 
     static let defaultRecheck: TimeInterval = 30 * 24 * 60 * 60
@@ -80,35 +119,79 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// Summaries for fetched bookmarks count too, when Capture settings write them.
     var usesModel: Bool {
-        self != .linkChecker
+        switch self {
+        case .inboxSummarizer, .bookmarkFetcher, .crossLinker, .unfiledFiler: true
+        case .linkChecker, .captureRetry, .weeklyDigest: false
+        }
     }
 
+    /// Fetching bookmarks and retrying failures only finish what you started, and undo or
+    /// stop on their own; the rest wait until you turn them on.
     var enabledByDefault: Bool {
-        false
+        self == .bookmarkFetcher || self == .captureRetry
     }
 
     var defaultInterval: TimeInterval {
-        self == .inboxSummarizer ? 10 * 60 : 24 * 60 * 60
+        switch self {
+        case .inboxSummarizer: 10 * 60
+        case .bookmarkFetcher: 30 * 60
+        case .captureRetry: 60 * 60
+        case .linkChecker, .crossLinker, .unfiledFiler: 24 * 60 * 60
+        case .weeklyDigest: 7 * 24 * 60 * 60
+        }
     }
 
     var intervals: [TimeInterval] {
         switch self {
         case .inboxSummarizer: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60, 24 * 60 * 60]
-        case .linkChecker, .crossLinker: [6 * 60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
+        case .bookmarkFetcher: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60]
+        // The first retry waits an hour, so checking more often gains nothing.
+        case .captureRetry: [60 * 60, 6 * 60 * 60, 24 * 60 * 60]
+        case .linkChecker, .crossLinker, .unfiledFiler: [
+                6 * 60 * 60,
+                24 * 60 * 60,
+                7 * 24 * 60 * 60,
+            ]
+        case .weeklyDigest: [7 * 24 * 60 * 60]
         }
     }
 
     var defaultBatch: Int {
         switch self {
         case .inboxSummarizer: 10
+        // Each fetch loads a page, its preview and maybe a summary.
+        case .bookmarkFetcher: 5
         case .linkChecker: 50
         case .crossLinker: 20
+        case .unfiledFiler: 40
+        case .captureRetry: 10
+        // The most items one digest lists.
+        case .weeklyDigest: 200
+        }
+    }
+
+    /// The choices for items per run, and the stepper's step.
+    var batchRange: ClosedRange<Int> {
+        switch self {
+        case .inboxSummarizer: 1 ... 200
+        case .bookmarkFetcher, .captureRetry: 1 ... 50
+        case .weeklyDigest: 10 ... 1000
+        case .linkChecker, .crossLinker, .unfiledFiler: 1 ... 1000
+        }
+    }
+
+    var batchStep: Int {
+        switch self {
+        case .bookmarkFetcher, .captureRetry: 1
+        case .linkChecker, .weeklyDigest: 10
+        case .inboxSummarizer, .crossLinker, .unfiledFiler: 5
         }
     }
 
     var defaultDailyCalls: Int {
-        self == .linkChecker ? 0 : 200
+        usesModel ? 200 : 0
     }
 
     static func intervalLabel(_ interval: TimeInterval) -> String {

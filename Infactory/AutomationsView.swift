@@ -44,7 +44,7 @@ struct AutomationsView: View {
     }
 
     static let intro =
-        "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Apart from summaries, nothing changes until you review it."
+        "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Summaries, fetched pages, retried captures and digests happen on their own; links, filing and archiving wait for your review."
 
     private var list: some View {
         VStack(spacing: 0) {
@@ -197,12 +197,17 @@ private struct AutomationDetail: View {
                 }
                 AutomationCard {
                     AutomationRow("Schedule") {
-                        Picker("Schedule", selection: binding(\.interval)) {
-                            ForEach(kind.intervals, id: \.self) {
-                                Text(AutomationKind.intervalLabel($0)).tag($0)
+                        if kind.intervals.count == 1 {
+                            Text(AutomationKind.intervalLabel(config.interval))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Schedule", selection: binding(\.interval)) {
+                                ForEach(kind.intervals, id: \.self) {
+                                    Text(AutomationKind.intervalLabel($0)).tag($0)
+                                }
                             }
+                            .labelsHidden().fixedSize()
                         }
-                        .labelsHidden().fixedSize()
                     }
                     if kind.rechecks {
                         Divider()
@@ -214,9 +219,7 @@ private struct AutomationDetail: View {
                             }
                             .labelsHidden().fixedSize()
                         }
-                        .help(kind == .linkChecker
-                            ? "How long a link that works waits before it's checked again. Failing links are retried the next day either way."
-                            : "How long an item waits before it's looked at for links again.")
+                        .help(kind.recheckHelp)
                     }
                     Divider()
                     AutomationRow("Last run") { lastRunStatus }
@@ -232,9 +235,7 @@ private struct AutomationDetail: View {
                     AutomationRow("Due now") {
                         Text(dueNow).foregroundStyle(.secondary).fadesOnChange(dueNow)
                     }
-                    .help(
-                        "New items haven't been checked yet, so they always come first; then the ones checked longest ago."
-                    )
+                    .help(kind.dueHelp)
                     Divider()
                     AutomationRow("Allowed to") {
                         Text(kind.policy).foregroundStyle(.secondary)
@@ -304,17 +305,13 @@ private struct AutomationDetail: View {
     @ViewBuilder private var options: some View {
         AutomationRow {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Items per run")
+                Text(kind == .weeklyDigest ? "Items listed at most" : "Items per run")
                 Text(batchNote).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .fadesOnChange(batchNote)
             }
         } content: {
-            Stepper(
-                value: binding(\.batchLimit),
-                in: 1 ... (kind == .inboxSummarizer ? 200 : AutomationEngine.largestBatch),
-                step: kind == .linkChecker ? 10 : 5
-            ) {
+            Stepper(value: binding(\.batchLimit), in: kind.batchRange, step: kind.batchStep) {
                 Text(config.batchLimit.formatted()).monospacedDigit()
             }
         }
@@ -346,8 +343,13 @@ private struct AutomationDetail: View {
 
     /// Says when runs take more than the setting, and why.
     private var batchNote: String {
-        if kind == .inboxSummarizer {
-            return "Also limited by model calls per day."
+        switch kind {
+        case .inboxSummarizer: return "Also limited by model calls per day."
+        case .bookmarkFetcher:
+            return "One page at a time. Summaries count toward model calls per day."
+        case .captureRetry: return "Each is tried at most three times."
+        case .weeklyDigest: return "The newest are listed when more were saved."
+        case .linkChecker, .crossLinker, .unfiledFiler: break
         }
         let planned = model.plannedBatch(kind)
         let interval = AutomationKind.recheckLabel(config.recheck).lowercased()
@@ -496,7 +498,7 @@ private struct RunRow: View {
         }
     }
 
-    /// Review for proposals still waiting; Undo for summaries this run wrote.
+    /// Review for proposals still waiting; Undo for what this run wrote.
     @ViewBuilder private func trailing(for outcome: AutomationEntry.Outcome) -> some View {
         if outcome == .proposed, model.pending[run.kind]?.contains(where: { $0.taskID == run.id })
             == true
@@ -505,7 +507,7 @@ private struct RunRow: View {
         } else if outcome == .changed, model.canUndo(run) {
             Button("Undo") { Task { await model.undo(run) } }
                 .controlSize(.small)
-                .help("Put back the summaries this run wrote, where the item hasn't changed since")
+                .help(run.kind.undoHelp)
         }
     }
 }
@@ -575,9 +577,7 @@ extension AutomationRun {
             parts.append(status == .failed ? "Failed" : "Stopped")
         }
         if changed > 0 {
-            parts.append(kind == .inboxSummarizer
-                ? "Wrote \(changed) summar\(changed == 1 ? "y" : "ies")"
-                : "Changed \(changed) item\(changed == 1 ? "" : "s")")
+            parts.append(changedLine)
         }
         if proposed > 0 {
             parts.append("Proposed \(proposed) change\(proposed == 1 ? "" : "s") for review")
@@ -596,11 +596,26 @@ extension AutomationRun {
         return parts.joined(separator: ", ")
     }
 
+    /// What the run itself changed, in the automation's own words.
+    private var changedLine: String {
+        switch kind {
+        case .inboxSummarizer: "Wrote \(changed) summar\(changed == 1 ? "y" : "ies")"
+        case .bookmarkFetcher: "Fetched \(changed) page\(changed == 1 ? "" : "s")"
+        case .captureRetry: "Saved \(changed) capture\(changed == 1 ? "" : "s")"
+        case .weeklyDigest: "Wrote a digest of \(AutomationEngine.itemCount(examined))"
+        case .linkChecker, .crossLinker, .unfiledFiler:
+            "Changed \(changed) item\(changed == 1 ? "" : "s")"
+        }
+    }
+
     var fineLine: String {
         switch kind {
         case .linkChecker: fine == 1 ? "1 link still works" : "\(fine) links still work"
         case .crossLinker: fine == 1 ? "1 item had nothing to link" : "\(fine) items had nothing to link"
-        case .inboxSummarizer: "\(fine) needed nothing"
+        case .unfiledFiler:
+            fine == 1 ? "1 item had no new home to suggest" : "\(fine) items had no new home to suggest"
+        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest:
+            "\(fine) needed nothing"
         }
     }
 }
@@ -641,12 +656,48 @@ extension AutomationEntry.Outcome {
 }
 
 private extension AutomationKind {
+    /// What Recheck items means for this automation.
+    var recheckHelp: String {
+        switch self {
+        case .linkChecker:
+            "How long a link that works waits before it's checked again. Failing links are retried the next day either way."
+        case .unfiledFiler:
+            "How long an item nothing fitted waits before it's looked at again, in case your categories changed."
+        default: "How long an item waits before it's looked at for links again."
+        }
+    }
+
+    /// What Due now counts.
+    var dueHelp: String {
+        switch self {
+        case .bookmarkFetcher: "Imported bookmarks never fetched, newest first."
+        case .captureRetry:
+            "Failed captures whose next try is due: an hour, a day, then a week after each failure."
+        case .weeklyDigest: "Items saved since the last digest, at most a week back."
+        case .inboxSummarizer, .linkChecker, .crossLinker, .unfiledFiler:
+            "New items haven't been checked yet, so they always come first; then the ones checked longest ago."
+        }
+    }
+
+    var undoHelp: String {
+        switch self {
+        case .bookmarkFetcher:
+            "Put back the bookmarks this run fetched, where the item hasn't changed since"
+        case .weeklyDigest: "Remove this digest, unless you've edited it"
+        default: "Put back the summaries this run wrote, where the item hasn't changed since"
+        }
+    }
+
     /// Each automation's own colour, as Shortcuts gives each automation one.
     var color: Color {
         switch self {
         case .inboxSummarizer: .purple
+        case .bookmarkFetcher: .blue
         case .linkChecker: .orange
         case .crossLinker: .teal
+        case .unfiledFiler: .brown
+        case .captureRetry: .pink
+        case .weeklyDigest: .indigo
         }
     }
 }

@@ -105,7 +105,13 @@ final class LibraryModel {
                 similar: { document, limit in
                     try await Self.similar(to: document, limit: limit, in: engine)
                 },
-                shouldYield: { await hooks.shouldYield }
+                shouldYield: { await hooks.shouldYield },
+                fetchBookmark: { id, summarize in
+                    try await ingestion.enqueueBookmarkFetch(noteID: id, summarize: summarize)
+                },
+                capturesSummarize: { captureSettings().summarize },
+                startCapture: { id in await hooks.library?.runAutomationCapture(id) },
+                filer: { await hooks.filer }
             )),
             schedules: schedulesAutomations
         )
@@ -128,6 +134,21 @@ final class LibraryModel {
     /// The model that judges the cross-linker's candidates, following the AI provider.
     func useLinkJudge(_ judge: (any LinkJudging)?) {
         automationHooks.judge = judge
+    }
+
+    /// The model the unfiled filer asks, the one Categorize Unfiled uses.
+    func useFiler(_ filer: (any ConversationInferring)?) {
+        automationHooks.filer = filer
+    }
+
+    /// Captures an automation queued, whose outcome its run reports instead of the window.
+    @ObservationIgnored private var automationCaptures = Set<UUID>()
+
+    /// Runs a capture an automation queued, such as a bookmark fetch or a retry.
+    func runAutomationCapture(_ id: UUID) async {
+        automationCaptures.insert(id)
+        await refreshCaptures()
+        startCaptures()
     }
 
     private func automationChangedLibrary() async {
@@ -642,10 +663,15 @@ final class LibraryModel {
                     noteName: store.document(id: noteID)?.name ?? completed.request.label
                 )
             }
+            // One an automation ran is left to its run's history and to Captures.
             if let failure = refreshedJobs.first(where: {
                 $0.state == .failed && previousStates[$0.id] != .failed
+                    && !automationCaptures.contains($0.id)
             }) {
                 announce(failure)
+            }
+            automationCaptures = automationCaptures.filter { id in
+                refreshedJobs.contains { $0.id == id && !$0.state.terminal }
             }
             if refreshedJobs.contains(where: {
                 $0

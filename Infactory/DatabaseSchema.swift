@@ -393,6 +393,60 @@ enum DatabaseSchema {
             CREATE INDEX IF NOT EXISTS agent_changes_note ON agent_changes(noteID, kind);
             """)
         }
+        migrator.registerMigration("automation-upkeep-v1", migrate: automationUpkeep)
         try migrator.migrate(database)
+    }
+
+    /// The bookmark fetcher, failed-capture retry, unfiled filer and weekly digest. Failed
+    /// captures keep whether they may pass on their own and the retry's progress; changes gain
+    /// the digest's new note, so that table is rebuilt again.
+    private static func automationUpkeep(_ db: Database) throws {
+        try db.execute(sql: """
+        ALTER TABLE ingestion_jobs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ingestion_jobs ADD COLUMN autoRetries INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE ingestion_jobs ADD COLUMN retryAt REAL;
+        -- A bookmark's page fetches, looked up for every bookmark the fetcher considers.
+        CREATE INDEX IF NOT EXISTS ingestion_jobs_replacing
+            ON ingestion_jobs(json_extract(CAST(request AS TEXT), '$.replacingNoteID'));
+        -- What was saved in a week, for the digest.
+        CREATE INDEX IF NOT EXISTS notes_created ON notes(createdAt) WHERE deletedAt IS NULL;
+        CREATE TABLE agent_changes_v4 (
+            id TEXT PRIMARY KEY NOT NULL,
+            taskID TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN
+                ('title','summary','filing','category','archive','link','relink','note')),
+            noteID TEXT,
+            targetID TEXT,
+            code TEXT,
+            before TEXT NOT NULL,
+            after TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            baseRevision TEXT,
+            appliedRevision TEXT,
+            snapshot TEXT,
+            status TEXT NOT NULL
+                CHECK(status IN ('pending','applied','rejected','stale','undone')),
+            createdAt REAL NOT NULL
+        );
+        INSERT INTO agent_changes_v4 SELECT id, taskID, ordinal, kind, noteID, targetID, code,
+            before, after, reason, baseRevision, appliedRevision, snapshot, status, createdAt
+            FROM agent_changes;
+        DROP TABLE agent_changes;
+        ALTER TABLE agent_changes_v4 RENAME TO agent_changes;
+        CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+        CREATE INDEX agent_changes_note ON agent_changes(noteID, kind);
+        """)
+        // Failures from before this kept no reason code; judge them by their message.
+        for row in try Row.fetchAll(db, sql: """
+        SELECT id, error FROM ingestion_jobs WHERE state = 'failed' AND recovery IS NULL
+        """) {
+            guard let message: String = row["error"], CaptureFailure.retryable(message: message)
+            else { continue }
+            try db.execute(
+                sql: "UPDATE ingestion_jobs SET retryable = 1 WHERE id = ?",
+                arguments: [row["id"] as String]
+            )
+        }
     }
 }

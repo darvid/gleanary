@@ -65,19 +65,35 @@ actor BookmarkCategorizer {
         self.inference = inference
     }
 
-    func run(
-        progress: @escaping @Sendable (CategorizationProgress) async -> Void = { _ in }
-    ) async throws -> CategorizationProgress {
-        let candidates = try await store.filingCandidates()
+    /// What items are classified against: the homes, a few titles from each, and a key that
+    /// changes with the engine or the categories, so a cached answer is reused only while it
+    /// still means the same.
+    struct Taxonomy: Sendable {
+        let categories: [DecimalCategory]
+        let examples: [UUID: [String]]
+        let engine: String
+        let key: String
+    }
+
+    func taxonomy() async throws -> Taxonomy {
         let categories = try await store.categories()
         guard !BookmarkClassification.choices(categories).isEmpty else {
             throw CategorizationError.noCategories
         }
-        let examples = try await Self.exampleTitles(store.filingExamples())
         let engine = inference.capabilities.identifier
-        let taxonomy = ContentHash.of(
-            engine + "\n" + categories.map(\.label).joined(separator: "\n")
+        return try await Taxonomy(
+            categories: categories,
+            examples: Self.exampleTitles(store.filingExamples()),
+            engine: engine,
+            key: ContentHash.of(engine + "\n" + categories.map(\.label).joined(separator: "\n"))
         )
+    }
+
+    func run(
+        progress: @escaping @Sendable (CategorizationProgress) async -> Void = { _ in }
+    ) async throws -> CategorizationProgress {
+        let candidates = try await store.filingCandidates()
+        let taxonomy = try await taxonomy()
         var state = CategorizationProgress(total: candidates.count)
         await progress(state)
         let size = inference.classificationBatchSize
@@ -90,12 +106,7 @@ actor BookmarkCategorizer {
                 guard next < batches.count else { return }
                 let batch = batches[next]
                 next += 1
-                group.addTask {
-                    try await self.classify(
-                        batch, categories: categories, examples: examples,
-                        engine: engine, taxonomy: taxonomy
-                    )
-                }
+                group.addTask { try await self.classify(batch, taxonomy: taxonomy) }
             }
             for _ in 0 ..< max(1, inference.classificationConcurrency) {
                 start()
@@ -113,57 +124,72 @@ actor BookmarkCategorizer {
         return state
     }
 
-    private func classify(
-        _ batch: [FilingCandidate],
-        categories: [DecimalCategory],
-        examples: [UUID: [String]],
-        engine: String,
-        taxonomy: String
-    ) async throws -> CategorizationProgress {
-        var result = CategorizationProgress(checked: batch.count)
-        let keys = batch.map { ContentHash.of(taxonomy + "\n" + $0.text) }
+    /// One batch's answers, keyed by position: from earlier runs where possible, else from
+    /// one model call whose answers are cached as they arrive.
+    struct BatchAnswers: Sendable {
+        var answers: [Int: CachedClassification] = [:]
+        var reused = 0
+        /// Items whose answer came back unusable.
+        var failed = 0
+        /// Whether a model call was made.
+        var called = false
+    }
+
+    func answers(_ batch: [FilingCandidate], taxonomy: Taxonomy) async throws -> BatchAnswers {
+        var result = BatchAnswers()
+        let keys = batch.map { ContentHash.of(taxonomy.key + "\n" + $0.text) }
         let cached = try await store.cachedClassifications(keys)
         let misses = batch.indices.filter { cached[keys[$0]] == nil }
-        var answers: [Int: CachedClassification] = [:]
         for index in batch.indices {
             if let answer = cached[keys[index]] {
-                answers[index] = answer
+                result.answers[index] = answer
                 result.reused += 1
             }
         }
-        if !misses.isEmpty {
-            // A batch scheduled just before Stop must not send a request.
-            try Task.checkCancellation()
-            let items = misses.enumerated().map { offset, index in
-                BookmarkClassification.Item(number: offset + 1, text: batch[index].text)
-            }
-            do {
-                var fresh: [String: CachedClassification] = [:]
-                for answer in try await inference.classifyBookmarks(
-                    items, categories: categories, examples: examples
-                ) {
-                    let index = misses[answer.item - 1]
-                    let value = CachedClassification(
-                        code: answer.code,
-                        newCategory: answer.newCategory.isEmpty ? nil : answer.newCategory,
-                        confident: answer.confident
-                    )
-                    answers[index] = value
-                    fresh[keys[index]] = value
-                }
-                try await store.cacheClassifications(fresh)
-                result.failed += misses.count - fresh.count
-            } catch let error where Self.stopsRun(error) {
-                throw error
-            } catch {
-                // One unusable reply skips its batch; the rest of the run continues.
-                result.failed += misses.count
-            }
+        guard !misses.isEmpty else { return result }
+        // A batch scheduled just before Stop must not send a request.
+        try Task.checkCancellation()
+        let items = misses.enumerated().map { offset, index in
+            BookmarkClassification.Item(number: offset + 1, text: batch[index].text)
         }
-        let byCode = Dictionary(
-            categories.map { ($0.code, $0.id) }, uniquingKeysWith: { first, _ in first }
+        result.called = true
+        do {
+            var fresh: [String: CachedClassification] = [:]
+            for answer in try await inference.classifyBookmarks(
+                items, categories: taxonomy.categories, examples: taxonomy.examples
+            ) {
+                let index = misses[answer.item - 1]
+                let value = CachedClassification(
+                    code: answer.code,
+                    newCategory: answer.newCategory.isEmpty ? nil : answer.newCategory,
+                    confident: answer.confident
+                )
+                result.answers[index] = value
+                fresh[keys[index]] = value
+            }
+            try await store.cacheClassifications(fresh)
+            result.failed += misses.count - fresh.count
+        } catch let error where Self.stopsRun(error) {
+            throw error
+        } catch {
+            // One unusable reply skips its batch; the rest of the run continues.
+            result.failed += misses.count
+        }
+        return result
+    }
+
+    private func classify(
+        _ batch: [FilingCandidate],
+        taxonomy: Taxonomy
+    ) async throws -> CategorizationProgress {
+        let found = try await answers(batch, taxonomy: taxonomy)
+        var result = CategorizationProgress(
+            checked: batch.count, reused: found.reused, failed: found.failed
         )
-        let drafts = answers.compactMap { index, answer -> FilingSuggestionDraft? in
+        let byCode = Dictionary(
+            taxonomy.categories.map { ($0.code, $0.id) }, uniquingKeysWith: { first, _ in first }
+        )
+        let drafts = found.answers.compactMap { index, answer -> FilingSuggestionDraft? in
             let categoryID = byCode[answer.code]
             guard categoryID != nil || answer.newCategory != nil else { return nil }
             return FilingSuggestionDraft(
@@ -173,7 +199,7 @@ actor BookmarkCategorizer {
                 // The on-device model's own confidence didn't track accuracy on held-out
                 // bookmarks, so its suggestions are always reviewed rather than bulk-accepted.
                 confidence: answer.confident && !inference.capabilities.local ? 0.9 : 0.5,
-                engine: engine
+                engine: taxonomy.engine
             )
         }
         try await store.saveFilingSuggestions(drafts)
