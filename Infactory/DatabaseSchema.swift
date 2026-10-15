@@ -394,6 +394,12 @@ enum DatabaseSchema {
             """)
         }
         migrator.registerMigration("automation-upkeep-v1", migrate: automationUpkeep)
+        migrator.registerMigration("automation-archive-v1") { db in
+            // Whether the link checker archives dead links itself rather than asking first.
+            try db.execute(
+                sql: "ALTER TABLE automations ADD COLUMN archivesDeadLinks INTEGER NOT NULL DEFAULT 0"
+            )
+        }
         migrator.registerMigration("writer-v1", migrate: writer)
         // The weekly digest can be written up by the Writer. Its model-call budget was never
         // shown before, so the 0 saved for it becomes the usual 200.

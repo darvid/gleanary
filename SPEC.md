@@ -441,7 +441,7 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 
 - Summaries, drafts, fetching unfetched bookmarks and retrying failed captures may `apply`.
 - Linking, retitling, refiling or editing existing content defaults to `propose`. The user may promote an individual automation to `apply` for title and filing changes only, and every applied change keeps its Undo.
-- Archive proposals are always `propose` (§7.5). Automations never trash or delete.
+- Archive proposals default to `propose` (§7.5). The one exception: the link checker may be set to archive dead links itself, with Undo (see the link checker rules). Automations never trash or delete.
 - Cloud inference requires the existing ChatGPT enablement and consent; an automation set to local-only never sends content off the Mac.
 
 **Progress markers.** Selections that walk the library ("oldest first") must not revisit the same items every run. Store per-item, per-check timestamps (for example `accessCheckedAt` and `linksCheckedAt`), and select items that were never checked or were checked longer ago than the automation's recheck interval.
@@ -470,7 +470,7 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 |---|---|---|---|
 | Inbox summarizer | Researcher | Inbox items with full text and no summary → summarize | Apply |
 | Bookmark fetcher | Librarian | Imported bookmarks never fetched, a few per run → fetch page | Apply |
-| Link checker | Librarian | Sources by oldest `accessCheckedAt` → check the original URL | Report; propose URL updates and archives |
+| Link checker | Librarian | Sources by oldest `accessCheckedAt` → check the original URL | Report; propose URL updates and archives (or archive dead links, if set) |
 | Cross-linker | Curator | Items with no links, by oldest `linksCheckedAt` → propose links with a one-line rationale | Propose |
 | Unfiled filer | Librarian | Unfiled items → propose a primary category | Propose |
 | Failed-capture retry | Librarian | Failed captures with a retryable error → retry with backoff (1 hour, 1 day, 1 week), then leave in Needs Attention | Apply |
@@ -522,9 +522,11 @@ Default settings, chosen so the two automations that only finish work you starte
 | Permanent redirect (301/308) | Propose updating the source URL |
 | 404, 410, or a domain that no longer resolves | Mark the source unreachable |
 | 401/403, login wall or paywall | Mark restricted; never propose archiving for this alone |
+| Refused by the URL policy (a local or private address) | Not a failure; never archived or proposed for archiving |
 | Timeout or 5xx | Transient; check again later |
 
 - Propose archiving only after the source has been unreachable on at least three checks spanning at least seven days.
+- A **Dead links** option chooses between **Ask first** (the default, which proposes) and **Archive automatically**. Archiving automatically uses the same rule, records each archive as an applied change so the run's Undo unarchives it, and never archives an item whose archiving was proposed or done before: a proposal waiting for review stays there, and an Undo, rejection or later unarchive is respected.
 - When proposing, look up the Internet Archive's Wayback Machine availability API and attach the nearest snapshot's link if one exists.
 - The UI must state that the original link is gone but the locally captured copy is intact; "unreachable" does not mean the item's content is lost.
 - Checks go through the existing URL policy and fetcher (no cookies or credentials, private and local addresses blocked) and are rate-limited per host.
@@ -550,7 +552,7 @@ Two states, because they mean different things:
   - They're listed under **Archive** in the sidebar with their reason (for example "Original link unreachable since 2 Oct 2026") and the date archived.
   - **Unarchive** restores the item exactly.
   - Search offers "Include archived".
-  - Automations may propose archiving; only the user applies it.
+  - Automations may propose archiving; only the user applies it, except dead links when the user sets the link checker to archive them automatically (§7.4), each with Undo.
 - **Trash** means the user is deleting the item.
   - Trashed items are hidden everywhere, listed under **Trash**, restorable for 30 days, then purged through the existing permanent-removal path, which already cleans up artifacts.
   - Only the user can trash an item, never an automation or agent.

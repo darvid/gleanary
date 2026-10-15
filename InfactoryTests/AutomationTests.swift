@@ -433,6 +433,94 @@ private actor FirstRelatedJudge: LinkJudging {
         #expect(restricted.outcome == .restricted)
     }
 
+    @Test func deadLinksArchiveThemselvesWhenAllowedWithUndo() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, ids) = try await library(["gone"])
+        let clock = TestClock()
+        let automation = engine(
+            store,
+            probe: FixedProbe(.gone("The page returned HTTP 404")),
+            clock: clock
+        )
+        let checker = config(.linkChecker) { $0.archivesDeadLinks = true }
+        for _ in 0 ..< 3 {
+            let early = await automation.run(checker)
+            #expect(early.changed == 0)
+            #expect(early.entries.first?.detail.contains("before it's archived") == true)
+            clock.advance(days: 1.1)
+        }
+        // Three failures, but within a few days: not archived until they span a week.
+        #expect(try await !store.isArchived(ids[0]))
+        clock.advance(days: 5)
+        let late = await automation.run(checker)
+        #expect(late.changed == 1)
+        #expect(late.proposed == 0)
+        #expect(late.entries.first?.outcome == .changed)
+        #expect(late.entries.first?.detail.contains("web.archive.org") == true)
+        #expect(try await store.isArchived(ids[0]))
+        #expect(try await store.pendingAutomationChanges(.linkChecker).isEmpty)
+        #expect(late.kind.undoable)
+
+        let undone = try await store.undoAgentChanges(store.appliedRunChanges(late.id))
+        #expect(undone == 1)
+        #expect(try await !store.isArchived(ids[0]))
+        // Undone is a choice: never archived on its own again.
+        clock.advance(days: 2)
+        #expect(await automation.run(checker).changed == 0)
+        #expect(try await !store.isArchived(ids[0]))
+    }
+
+    @Test func deadLinksWaitingForReviewAreLeftThere() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, ids) = try await library(["gone"])
+        let clock = TestClock()
+        let automation = engine(
+            store,
+            probe: FixedProbe(.gone("The domain no longer resolves")),
+            clock: clock
+        )
+        for _ in 0 ..< 4 {
+            _ = await automation.run(config(.linkChecker))
+            clock.advance(days: 3)
+        }
+        #expect(try await store.pendingAutomationChanges(.linkChecker).count == 1)
+        clock.advance(days: 2)
+        let run = await automation.run(config(.linkChecker) { $0.archivesDeadLinks = true })
+        #expect(run.changed == 0)
+        #expect(try await !store.isArchived(ids[0]))
+        #expect(try await store.pendingAutomationChanges(.linkChecker).count == 1)
+    }
+
+    @Test func linksInfactoryWontCheckAreNeverArchived() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, ids) = try await library(["local"])
+        let clock = TestClock()
+        let automation = engine(store, probe: FixedProbe(.refused), clock: clock)
+        let checker = config(.linkChecker) { $0.archivesDeadLinks = true }
+        for _ in 0 ..< 5 {
+            _ = await automation.run(checker)
+            clock.advance(days: 31)
+        }
+        #expect(try await !store.isArchived(ids[0]))
+        #expect(try await store.pendingAutomationChanges(.linkChecker).isEmpty)
+        #expect(try await store.itemCheck(ids[0], kind: "access")?.failures == 0)
+        let entry = try #require(await automation.run(checker).entries.first)
+        #expect(entry.outcome == .restricted)
+        let local = try #require(URL(string: "http://localhost/x"))
+        #expect(await WebLinkProber().probe(local) == .refused)
+    }
+
+    @Test func deadLinkSettingPersistsAndStartsOff() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, _) = try await library([])
+        #expect(try await store.automationConfigs().allSatisfy { !$0.archivesDeadLinks })
+        var checker = AutomationConfig(kind: .linkChecker)
+        checker.archivesDeadLinks = true
+        try await store.saveAutomation(checker)
+        let saved = try await store.automationConfigs().first { $0.kind == .linkChecker }
+        #expect(saved?.archivesDeadLinks == true)
+    }
+
     @Test func reviewSheetShowsEveryKindOfChange() {
         #expect(AgentChangesReview.kindOrder.count == AgentChange.Kind.allCases.count)
         #expect(Set(AgentChangesReview.kindOrder) == Set(AgentChange.Kind.allCases))

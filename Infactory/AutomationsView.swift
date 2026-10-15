@@ -44,17 +44,15 @@ struct AutomationsView: View {
     }
 
     static let intro =
-        "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Summaries, fetched pages, retried captures and digests happen on their own; links, filing and archiving wait for your review."
+        "Automations run while Infactory is open, a batch at a time, and pause while you're importing or summarizing. Summaries, fetched pages, retried captures and digests happen on their own; links, filing and archiving wait for your review, unless the link checker is set to archive dead links."
 
     private var list: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Automations").font(.title3.weight(.semibold))
-                Text(Self.intro).font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18)
+            // The window title names the page, so the list opens with what automations do.
+            Text(Self.intro).font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(18)
             Divider()
             List(selection: $selected) {
                 ForEach(AutomationKind.allCases) { kind in
@@ -238,7 +236,7 @@ private struct AutomationDetail: View {
                     .help(kind.dueHelp)
                     Divider()
                     AutomationRow("Allowed to") {
-                        Text(kind.policy).foregroundStyle(.secondary)
+                        Text(policy).foregroundStyle(.secondary).fadesOnChange(policy)
                     }
                 }
                 section("Options") { AutomationCard { options } }
@@ -316,6 +314,28 @@ private struct AutomationDetail: View {
                 Text(config.batchLimit.formatted()).monospacedDigit()
             }
         }
+        if kind == .linkChecker {
+            Divider()
+            AutomationRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Dead links")
+                    Text(
+                        "After \(AutomationEngine.archiveFailures) failed checks over a week. Never for links that need a login."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            } content: {
+                Picker("Dead links", selection: binding(\.archivesDeadLinks)) {
+                    Text("Ask first").tag(false)
+                    Text("Archive automatically").tag(true)
+                }
+                .labelsHidden().fixedSize()
+            }
+            .help(
+                "Archived items keep their saved copy and show under Archive; Undo or Unarchive puts them back."
+            )
+        }
         if kind == .weeklyDigest {
             Divider()
             AutomationRow {
@@ -346,6 +366,11 @@ private struct AutomationDetail: View {
 
     private var writerNote: String {
         "Groups the week by topic in your default writing style, citing each item. More than \(WriterLimits.localScope) items need ChatGPT, and the newest \(WriterLimits.maximumScope) are written up; when it can't run, the digest lists the items as usual."
+    }
+
+    private var policy: String {
+        kind == .linkChecker && config.archivesDeadLinks
+            ? "Archives dead links and proposes link updates; you can undo a run" : kind.policy
     }
 
     /// How much is waiting, and how many runs at the current batch size will get through it.
@@ -631,7 +656,8 @@ extension AutomationRun {
         case .bookmarkFetcher: "Fetched \(changed) page\(changed == 1 ? "" : "s")"
         case .captureRetry: "Saved \(changed) capture\(changed == 1 ? "" : "s")"
         case .weeklyDigest: "Wrote a digest of \(AutomationEngine.itemCount(examined))"
-        case .linkChecker, .crossLinker, .unfiledFiler:
+        case .linkChecker: "Archived \(changed) dead link\(changed == 1 ? "" : "s")"
+        case .crossLinker, .unfiledFiler:
             "Changed \(changed) item\(changed == 1 ? "" : "s")"
         }
     }
@@ -712,6 +738,7 @@ private extension AutomationKind {
         case .bookmarkFetcher:
             "Put back the bookmarks this run fetched, where the item hasn't changed since"
         case .weeklyDigest: "Remove this digest, unless you've edited it"
+        case .linkChecker: "Unarchive the items this run archived"
         default: "Put back the summaries this run wrote, where the item hasn't changed since"
         }
     }
