@@ -602,3 +602,34 @@ extension ChatGPTConversationInference: LinkJudging {
         catch { throw ChatGPTError.invalidOutput }
     }
 }
+
+/// The Writer's gather plan and per-section extraction with ChatGPT. Each call carries one
+/// section of one source.
+extension ChatGPTConversationInference: WriterInferring {
+    func brief(request: String, categories: [DecimalCategory]) async throws -> WriterBrief {
+        let fence = try await session.authorizationFence()
+        let brief: WriterBrief = try await structured(
+            prompt: WriterBrief.prompt(request: request, categories: categories),
+            instructions: WriterBrief.instructions,
+            name: "writer_brief",
+            schema: WriterBrief.jsonSchema(categories: categories),
+            fence: fence
+        )
+        try await session.validateFence(fence)
+        return brief
+    }
+
+    func extractFacts(_ chunk: ExtractionChunk) async throws -> [ExtractedFact] {
+        struct Facts: Decodable { let facts: [ExtractedFact] }
+        let fence = try await session.authorizationFence()
+        let result: Facts = try await structured(
+            prompt: chunk.prompt,
+            instructions: ExtractionChunk.instructions,
+            name: "source_facts",
+            schema: ExtractionChunk.jsonSchema(fields: chunk.fields),
+            fence: fence
+        )
+        try await session.validateFence(fence)
+        return result.facts
+    }
+}

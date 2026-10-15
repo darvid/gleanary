@@ -40,6 +40,7 @@ extension DocumentStore {
                 config.cloudAllowed = row["cloudAllowed"]
                 config.dailyCalls = row["dailyCalls"]
                 config.recheck = row["recheck"]
+                config.usesWriter = row["usesWriter"]
                 config.lastRunAt = (row["lastRunAt"] as Double?)
                     .map(Date.init(timeIntervalSince1970:))
             }
@@ -51,15 +52,15 @@ extension DocumentStore {
         try readyDatabase().write { db in
             try db.execute(sql: """
             INSERT INTO automations(id, enabled, interval, batchLimit, cloudAllowed, dailyCalls,
-                recheck, lastRunAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                recheck, usesWriter, lastRunAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled, interval = excluded.interval,
                 batchLimit = excluded.batchLimit, cloudAllowed = excluded.cloudAllowed,
                 dailyCalls = excluded.dailyCalls, recheck = excluded.recheck,
-                lastRunAt = excluded.lastRunAt
+                usesWriter = excluded.usesWriter, lastRunAt = excluded.lastRunAt
             """, arguments: [
                 config.kind.rawValue, config.enabled, config.interval, config.batchLimit,
-                config.cloudAllowed, config.dailyCalls, config.recheck,
+                config.cloudAllowed, config.dailyCalls, config.recheck, config.usesWriter,
                 config.lastRunAt?.timeIntervalSince1970,
             ])
         }
@@ -190,6 +191,28 @@ extension DocumentStore {
         }
     }
 
+    /// Which of these runs still have applied changes, and which had theirs all undone.
+    func runUndoState(_ runIDs: [UUID]) throws -> (applied: Set<UUID>, undone: Set<UUID>) {
+        guard !runIDs.isEmpty else { return ([], []) }
+        return try readyDatabase().read { db in
+            let marks = runIDs.map { _ in "?" }.joined(separator: ",")
+            var applied = Set<UUID>()
+            var undone = Set<UUID>()
+            for row in try Row.fetchAll(db, sql: """
+            SELECT taskID, sum(status = 'applied') AS applied, sum(status = 'undone') AS undone
+            FROM agent_changes WHERE taskID IN (\(marks)) GROUP BY taskID
+            """, arguments: StatementArguments(runIDs.map(\.uuidString))) {
+                guard let id = UUID(uuidString: row["taskID"]) else { continue }
+                if (row["applied"] as Int) > 0 {
+                    applied.insert(id)
+                } else if (row["undone"] as Int) > 0 {
+                    undone.insert(id)
+                }
+            }
+            return (applied, undone)
+        }
+    }
+
     // MARK: Item checks
 
     @discardableResult
@@ -307,6 +330,28 @@ extension DocumentStore {
     }
 
     /// Titles for many items in one query, for listing proposals.
+    /// Which of these items no longer exist, such as a digest removed by Undo.
+    func missingNotes(_ ids: [UUID]) throws -> Set<UUID> {
+        guard !ids.isEmpty else { return [] }
+        return try readyDatabase().read { db in
+            var live = Set<UUID>()
+            for chunk in stride(from: 0, to: ids.count, by: 500).map({
+                Array(ids[$0 ..< min($0 + 500, ids.count)])
+            }) {
+                let marks = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                for id in try String.fetchAll(
+                    db, sql: "SELECT id FROM notes WHERE deletedAt IS NULL AND id IN (\(marks))",
+                    arguments: StatementArguments(chunk.map(\.uuidString))
+                ) {
+                    if let uuid = UUID(uuidString: id) {
+                        live.insert(uuid)
+                    }
+                }
+            }
+            return Set(ids).subtracting(live)
+        }
+    }
+
     func noteTitles(_ ids: [UUID]) throws -> [UUID: String] {
         guard !ids.isEmpty else { return [:] }
         return try readyDatabase().read { db in

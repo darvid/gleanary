@@ -34,7 +34,56 @@ struct ConversationView: View {
                             summaryEnabled: false,
                             generatingSummary: false,
                             generateSummary: { _ in },
-                            cancelSummary: {}
+                            cancelSummary: {},
+                            suggestHome: HomeSuggester(
+                                suggest: { try await model.suggestHome(for: $0) },
+                                file: { id, suggestion in
+                                    let ids = try await model.fileAsSuggested(id, suggestion)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                    return ids
+                                },
+                                undo: { ids in
+                                    try await model.undoSuggestedFiling(ids)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                },
+                                addHome: { id, home in
+                                    let added = try await model.addSuggestedHome(id, home)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                    return added
+                                },
+                                removeHome: { id, home in
+                                    try await model.removeSuggestedHome(id, home)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                }
+                            ),
+                            editHomes: FilingEditor(
+                                remove: { id, home in
+                                    let before = try await model.store
+                                        .removeHome(id, categoryID: home.id)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                    return before
+                                },
+                                makePrimary: { id, home in
+                                    let before = try await model.store
+                                        .makePrimaryHome(id, categoryID: home.id)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                    return before
+                                },
+                                restore: { id, homes in
+                                    try await model.store.restoreHomes(id, homes)
+                                    await preview.load(from: model.store)
+                                    await model.didMutate?()
+                                }
+                            ),
+                            refreshDocument: { document in
+                                Task { await model.refreshDocument(document.id) }
+                            }
                         )
                         if let id = preview.selectedID {
                             CategoryMembershipView(
@@ -262,17 +311,32 @@ struct ConversationView: View {
                 }) { proposal in
                     proposalCard(proposal)
                 }
-            if let taskID = message.taskID, message.author == AgentRole.librarian.rawValue,
-               let changes = model.agentChanges[taskID], !changes.isEmpty,
-               model.messages.last(where: {
-                   $0.taskID == taskID && $0.author == AgentRole.librarian.rawValue
-               })?.id == message.id
-            {
-                AgentChangesCard(
-                    changes: changes,
-                    review: { reviewingChanges = ReviewedChangeset(id: taskID) },
-                    undo: { Task { await model.undoAgentChanges(changes) } }
-                )
+            if let taskID = message.taskID, isLastReply(message) {
+                if let changes = model.agentChanges[taskID], !changes.isEmpty {
+                    AgentChangesCard(
+                        changes: changes,
+                        review: { reviewingChanges = ReviewedChangeset(id: taskID) },
+                        undo: { Task { await model.undoAgentChanges(changes) } }
+                    )
+                }
+                if let scope = model.writerScopes[taskID] {
+                    WriterScopeCard(
+                        request: scope,
+                        styles: WritingStyleChoice.current().styles,
+                        busy: model.running,
+                        open: open,
+                        confirm: { selection, style, general in
+                            Task {
+                                await model.confirmScope(
+                                    taskID, selection: selection, style: style,
+                                    generalKnowledge: general
+                                )
+                            }
+                        },
+                        cancel: { Task { await model.cancelScope(taskID) } }
+                    )
+                    .id(scope.taskID)
+                }
             }
         }
         .accessibilityElement(children: .contain)
@@ -280,6 +344,13 @@ struct ConversationView: View {
 
     /// The person's own messages sit right-aligned in a bubble, as in ChatGPT, so the agents'
     /// replies read as the main column. Times only show on hover, for every message.
+    /// Cards for a task sit under its last agent reply, whichever agent wrote it.
+    private func isLastReply(_ message: ConversationMessage) -> Bool {
+        message.author != "user" && model.messages.last(where: {
+            $0.taskID == message.taskID && $0.author != "user"
+        })?.id == message.id
+    }
+
     private func userBubble(_ message: ConversationMessage) -> some View {
         Text(message.text).textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
@@ -433,9 +504,8 @@ struct ConversationView: View {
                 HStack(spacing: 8) {
                     // The mini spinner's glyph sits ~0.5pt above the caption's lowercase centre.
                     ProgressView().controlSize(.mini).offset(y: 0.5)
-                    Text(task.progress.isEmpty ? "Working…" : task.progress)
+                    StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
                         .font(.caption).foregroundStyle(.secondary)
-                        .fadesOnChange(task.progress)
                 }
                 // The composer's send button doubles as Stop; keep Escape without a second control.
                 .background {
@@ -605,7 +675,7 @@ private struct CategoryMembershipView: View {
 }
 
 enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
-    case inference, capture, filing
+    case inference, capture, filing, writing
     var id: String {
         rawValue
     }
@@ -615,6 +685,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
         case .inference: "AI & accounts"
         case .capture: "Capture"
         case .filing: "Filing"
+        case .writing: "Writing"
         }
     }
 
@@ -623,6 +694,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
         case .inference: "sparkles"
         case .capture: "tray.and.arrow.down"
         case .filing: "folder"
+        case .writing: "doc.richtext"
         }
     }
 }
@@ -679,6 +751,13 @@ struct ConversationSettings: View {
                 value: KnowledgeSettingsPage.filing
             ) {
                 FilingSettings(model: model).padding(24)
+            }
+            Tab(
+                KnowledgeSettingsPage.writing.title,
+                systemImage: KnowledgeSettingsPage.writing.symbol,
+                value: KnowledgeSettingsPage.writing
+            ) {
+                WritingSettingsView()
             }
         }
         .frame(width: Self.size.width, height: Self.size.height)

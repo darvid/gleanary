@@ -58,6 +58,7 @@ struct AgentChangesCard: View {
             (.filing, "filing", "filings"), (.category, "new category", "new categories"),
             (.link, "link", "links"), (.archive, "archive", "archives"),
             (.relink, "moved link", "moved links"), (.note, "new note", "new notes"),
+            (.revision, "document revision", "document revisions"),
         ]
         return labels.compactMap { kind, one, many in
             let count = changes.count { $0.kind == kind }
@@ -140,7 +141,7 @@ struct AgentChangesReview: View {
     /// Every kind, in the order the sheet groups them; a test keeps it complete, since a kind
     /// left out would be applied without ever being shown.
     static let kindOrder: [AgentChange.Kind] = [
-        .title, .summary, .category, .filing, .link, .relink, .archive, .note,
+        .revision, .title, .summary, .category, .filing, .link, .relink, .archive, .note,
     ]
 
     private static func heading(_ kind: AgentChange.Kind, count: Int) -> String {
@@ -153,6 +154,7 @@ struct AgentChangesReview: View {
         case .archive: "Archive"
         case .relink: count == 1 ? "Moved link" : "Moved links"
         case .note: count == 1 ? "New note" : "New notes"
+        case .revision: count == 1 ? "Document revision" : "Document revisions"
         }
     }
 
@@ -228,6 +230,8 @@ struct AgentChangesReview: View {
                     MarkdownPreview(markdown: change.after, font: .callout)
                         .textSelection(.enabled)
                 }
+            case .revision:
+                RevisionRow(title: itemTitle(change), before: change.before, after: change.after)
             }
             if !change.reason.isEmpty {
                 Text(change.reason).font(.caption).foregroundStyle(.secondary)
@@ -238,6 +242,36 @@ struct AgentChangesReview: View {
 
     private func itemTitle(_ change: AgentChange) -> String {
         change.noteID.flatMap { titles[$0] } ?? "Item"
+    }
+}
+
+/// A refreshed document's new text as a line diff, open by default: the diff is the review.
+private struct RevisionRow: View {
+    let title: String
+    let lines: [TextDiff.Line]
+    @State private var expanded = true
+
+    init(title: String, before: String, after: String) {
+        self.title = title
+        lines = TextDiff.lines(before: before, after: after)
+    }
+
+    var body: some View {
+        let counts = TextDiff.counts(lines)
+        Text(title).fontWeight(.medium).lineLimit(1)
+        DisclosureGroup(isExpanded: $expanded) {
+            ScrollView {
+                TextDiffView(lines: lines).padding(.vertical, 4)
+            }
+            .frame(maxHeight: 300)
+        } label: {
+            Text("\(Self.lineCount(counts.added)) added, \(Self.lineCount(counts.removed)) removed")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private static func lineCount(_ count: Int) -> String {
+        count == 1 ? "1 line" : "\(count) lines"
     }
 }
 

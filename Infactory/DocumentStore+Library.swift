@@ -22,6 +22,7 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
         case "source": "Source"
         case "summary": "Summary"
         case "comparison": "Comparison"
+        case "document": "Document"
         default: "Note"
         }
     }

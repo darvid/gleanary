@@ -1,7 +1,7 @@
 import Foundation
 
 enum AgentRole: String, Codable, Sendable, CaseIterable {
-    case assistant, researcher, curator, librarian
+    case assistant, researcher, curator, librarian, writer
 
     var title: String {
         rawValue.capitalized
@@ -13,6 +13,7 @@ enum AgentRole: String, Codable, Sendable, CaseIterable {
         case .researcher: "Source-grounded summaries and comparisons"
         case .curator: "Retrieval and reviewable connections"
         case .librarian: "Capture, notes and Johnny Decimal filing"
+        case .writer: "Finished documents in your writing style"
         }
     }
 }
@@ -57,7 +58,8 @@ enum ConversationChatContext {
         Your specialty is \(role.responsibility.lowercased()). Converse naturally: answer greetings,
         questions, follow-ups and requests for help. Do not turn every message into a library search.
         The team includes an assistant for questions and coordination, a researcher for source-grounded
-        analysis, a curator for retrieval and connections, and a librarian for capture and filing.
+        analysis, a curator for retrieval and connections, a librarian for capture and filing, and a
+        writer who composes finished documents from many saved sources in the user's writing style.
         Infactory can search the user's saved library directly from this conversation; the assistant
         facilitates that work without requiring a specialist mention. Knowledge operations are
         dispatched by the application from a validated intent plan, not by wording conventions.
@@ -180,7 +182,7 @@ struct ConversationRoute: Sendable {
               input.utf8.count <= 32000 else { throw CaptureError.emptyInput }
         let expression =
             try NSRegularExpression(
-                pattern: #"(?i)(?<!\w)@(assistant|researcher|curator|librarian)\b"#
+                pattern: #"(?i)(?<!\w)@(assistant|researcher|curator|librarian|writer)\b"#
             )
         let matches = expression.matches(in: input, range: NSRange(input.startIndex..., in: input))
         var roles: [AgentRole] = []
@@ -212,13 +214,14 @@ struct ConversationPlan: Codable, Sendable {
         case chat, clarify, ingest, search, inspect, research, saveNote
         case categories = "filingScheme"
         case file, related,
-             link, review, unsupported, organize
+             link, review, unsupported, organize, compose, refresh
 
         var owner: AgentRole {
             switch self {
             case .ingest, .inspect, .saveNote, .categories, .file, .organize: .librarian
             case .search, .related, .link: .curator
             case .research: .researcher
+            case .compose, .refresh: .writer
             case .chat, .clarify, .review, .unsupported: .assistant
             }
         }
@@ -387,10 +390,9 @@ struct ConversationPlan: Codable, Sendable {
                 throw ConversationError.invalidPlan
             }
         }
-        if steps
-            .contains(where: { [.chat, .clarify, .unsupported, .organize].contains($0.action) }),
-            steps.count != 1
-        {
+        if steps.contains(where: {
+            [.chat, .clarify, .unsupported, .organize, .compose, .refresh].contains($0.action)
+        }), steps.count != 1 {
             throw ConversationError.invalidPlan
         }
         if steps.contains(where: { $0.action == .ingest }),
@@ -420,8 +422,11 @@ struct ConversationPlan: Codable, Sendable {
     review (show pending changes, never approve/reject/undo from model output); organize (bulk or
     multi-step changes to existing items: retitle, rewrite summaries, refile several items, or
     reorganize a category; the app runs an agent that proposes a reviewable changeset; always the
-    only step); unsupported (requested mutation/tool not implemented: merges, deletes, renaming or
-    deleting categories, web research).
+    only step); compose (write a finished document such as a guide, overview, comparison page or
+    digest from many saved sources; the writer gathers them and the user confirms the scope; always
+    the only step; argument is empty); refresh (update a document the writer composed earlier, the
+    selected record, from current sources; always the only step); unsupported (requested
+    mutation/tool not implemented: merges, deletes, renaming or deleting categories, web research).
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.

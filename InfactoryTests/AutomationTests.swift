@@ -694,9 +694,16 @@ extension AutomationTests {
         let original = try #require(await store.document(id: ids[1]))
         let automation = engine(store, ingestion: ingestion)
         #expect(try await automation.backlog(config(.bookmarkFetcher)) == 3)
-        let run = await automation.run(config(.bookmarkFetcher) { $0.batchLimit = 2 })
+        let steps = StepLog()
+        let run = await automation.run(config(.bookmarkFetcher) { $0.batchLimit = 2 }) {
+            await steps.add($0)
+        }
         #expect(run.status == .succeeded)
         #expect(run.changed == 2)
+        // Says which page it's on, so a slow fetch doesn't look stuck.
+        let said = await steps.lines
+        #expect(said.count == 2)
+        #expect(said.first?.hasPrefix("Fetching 1 of 2: ") == true)
         #expect(run.entries.map(\.itemID) == [ids[2], ids[1]])
         #expect(run.entries.allSatisfy { $0.outcome == .changed })
         // Upgraded in place, through the same capture path as opening the bookmark.
@@ -943,8 +950,14 @@ extension AutomationTests {
         #expect(try await !store.crossLinkCandidates(limit: 50, checkedBefore: Date.distantFuture)
             .contains(digestID))
 
+        #expect(try await store.runUndoState([run.id]).applied == [run.id])
         #expect(try await store.undoAgentChanges(store.appliedRunChanges(run.id)) == 1)
         #expect(try await store.document(id: digestID) == nil)
+        // History then shows the run as undone, with no Undo left to offer.
+        let state = try await store.runUndoState([run.id])
+        #expect(state.applied.isEmpty && state.undone == [run.id])
+        // Its link in History is shown as gone; the items it listed are still there.
+        #expect(try await store.missingNotes([digestID] + ids) == [digestID])
         // Undone, so the week is covered again.
         #expect(await automation.run(config(.weeklyDigest)).changed == 1)
     }
@@ -989,5 +1002,14 @@ private extension Array {
             try await results.append(transform(element))
         }
         return results
+    }
+}
+
+/// Progress lines an automation run reported, in order.
+private actor StepLog {
+    private(set) var lines: [String] = []
+
+    func add(_ line: String) {
+        lines.append(line)
     }
 }

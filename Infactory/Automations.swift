@@ -42,7 +42,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .captureRetry:
             "Tries failed captures again when the problem looked temporary: after an hour, a day, then a week."
         case .weeklyDigest:
-            "Writes a new note listing what you saved in the last week, grouped by category, with a link to each item."
+            "Writes a new note about what you saved in the last week, with a link to each item: a list grouped by category, or written up by the Writer."
         }
     }
 
@@ -191,7 +191,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     }
 
     var defaultDailyCalls: Int {
-        usesModel ? 200 : 0
+        usesModel || self == .weeklyDigest ? 200 : 0
     }
 
     static func intervalLabel(_ interval: TimeInterval) -> String {
@@ -218,6 +218,8 @@ struct AutomationConfig: Sendable, Equatable, Identifiable {
     /// How long after a successful check an item is due again. Batches are sized so every
     /// item is checked within this.
     var recheck: TimeInterval
+    /// The weekly digest only: the Writer writes the week up instead of listing it.
+    var usesWriter = false
     var lastRunAt: Date?
 
     var id: AutomationKind {

@@ -17,6 +17,8 @@ import SwiftUI
     private(set) var warnings: [String] = []
     private(set) var authorProvider: String?
     private(set) var details = LibraryItemDetails()
+    /// Composed by the Writer, so Refresh can re-run its request.
+    private(set) var composed = false
     private var loadToken = UUID()
 
     func load(from store: DocumentStore) async {
@@ -33,6 +35,7 @@ import SwiftUI
             categories = []; related = []; links = []; coverage = nil; warnings = []
             authorProvider = nil
             details = LibraryItemDetails()
+            composed = false
         }
         error = nil
         guard let id else { loading = false; return }
@@ -62,6 +65,7 @@ import SwiftUI
             let itemLinks = try await store.linkedItems(for: id)
             let provider = try await store.libraryAuthorProvider(for: id)
             let itemDetails = try await store.libraryItemDetails(for: id)
+            let isComposed = try await store.isComposedDocument(id)
             guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
             citation = source
             generatedSummary = summary
@@ -74,6 +78,7 @@ import SwiftUI
             warnings = captured?.warnings ?? []
             authorProvider = provider
             details = itemDetails
+            composed = isComposed
             if loaded == nil {
                 selectedID = nil
             }
@@ -108,6 +113,12 @@ struct DocumentPreview: View {
     /// Archives the item when true, unarchives it when false.
     var archiveDocument: ((MarkdownDocument, Bool) -> Void)?
     var fileDocument: ((MarkdownDocument) -> Void)?
+    /// Asks the Librarian where this item belongs; nil where no one can be asked.
+    var suggestHome: HomeSuggester?
+    /// Removes a home or makes one primary from its chip; nil keeps the chips read-only.
+    var editHomes: FilingEditor?
+    /// Re-runs a Writer document's request; offered only for composed documents.
+    var refreshDocument: ((MarkdownDocument) -> Void)?
     var showsSummaryActions = true
     @Environment(\.colorScheme) private var colorScheme
 
@@ -210,7 +221,7 @@ struct DocumentPreview: View {
                 Text(sourceLine).lineLimit(1)
                 Spacer(minLength: 8)
                 if editDocument != nil || fileDocument != nil || archiveDocument != nil
-                    || sourceURL != nil
+                    || sourceURL != nil || (refreshDocument != nil && model.composed)
                 {
                     moreMenu(document)
                 }
@@ -287,6 +298,12 @@ struct DocumentPreview: View {
         Menu {
             if let editDocument {
                 Button("Edit…", systemImage: "pencil") { editDocument(document) }
+            }
+            if let refreshDocument, model.composed {
+                Button("Refresh Document", systemImage: "arrow.triangle.2.circlepath") {
+                    refreshDocument(document)
+                }
+                .help("Gather again, re-read new or changed sources and review the changes")
             }
             if let fileDocument {
                 Button(
@@ -385,7 +402,14 @@ struct DocumentPreview: View {
                     .help("The bookmark is kept as it was imported.")
                 }
             }
-            infoRow("Filed in") { filing(document) }
+            infoRow("Filed in") {
+                FilingRow(
+                    document: document, categories: model.categories,
+                    change: fileDocument.map { change in { change(document) } },
+                    suggester: suggestHome, editor: editHomes
+                )
+                .id(document.id)
+            }
             if model.generatedSummary, let provider = model.authorProvider {
                 infoRow("Summary") {
                     HStack(spacing: 4) {
@@ -429,27 +453,6 @@ struct DocumentPreview: View {
         GridRow {
             Text(label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
             value().frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    private func filing(_ document: MarkdownDocument) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if model.categories.isEmpty {
-                Text("Unfiled").foregroundStyle(.secondary)
-            } else {
-                ChipFlow(spacing: 6) {
-                    ForEach(
-                        Array(model.categories.enumerated()),
-                        id: \.element.id
-                    ) { index, category in
-                        CategoryChip(category: category, primary: index == 0)
-                    }
-                }
-            }
-            if let fileDocument {
-                Button(model.categories.isEmpty ? "File…" : "Change…") { fileDocument(document) }
-                    .buttonStyle(.link)
-            }
         }
     }
 
@@ -791,5 +794,286 @@ private struct SummarizingButton: View {
         .help(cancel == nil ? "Summarizing the fetched page" : "Stop summarizing")
         .accessibilityLabel("Summarizing")
         .accessibilityHint(cancel == nil ? "" : "Stops summarizing")
+    }
+}
+
+/// Changes an item's homes from their chips; each returns the homes before, for Undo.
+struct FilingEditor {
+    let remove: (UUID, DecimalCategory) async throws -> [FilingMembership]
+    let makePrimary: (UUID, DecimalCategory) async throws -> [FilingMembership]
+    let restore: (UUID, [FilingMembership]) async throws -> Void
+}
+
+/// How an item's info card asks the Librarian for a home, files it there and undoes that.
+struct HomeSuggester {
+    let suggest: (UUID) async throws -> HomeSuggestion?
+    /// Returns the applied changes, for Undo.
+    let file: (UUID, HomeSuggestion) async throws -> [UUID]
+    let undo: ([UUID]) async throws -> Void
+    /// Adds a secondary home; false when it was already there.
+    let addHome: (UUID, DecimalCategory) async throws -> Bool
+    let removeHome: (UUID, DecimalCategory) async throws -> Void
+}
+
+/// The item's homes with Change… and Suggest. Suggest asks the Librarian and shows its answer
+/// inline; nothing changes until File Here, and Undo puts the old filing back.
+private struct FilingRow: View {
+    enum Step {
+        case idle, asking
+        case suggested(HomeSuggestion)
+        case filed(HomeSuggestion, [UUID])
+        /// A home removed or made primary from its chip, with the homes before for Undo.
+        case edited(String, [FilingMembership])
+        case failed(String)
+    }
+
+    let document: MarkdownDocument
+    let categories: [DecimalCategory]
+    let change: (() -> Void)?
+    let suggester: HomeSuggester?
+    var editor: FilingEditor?
+    @State private var step = Step.idle
+    @State private var hovered: UUID?
+    /// Secondary homes added from "Also fits", so each can be undone.
+    @State private var added: Set<UUID> = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if categories.isEmpty {
+                    Text("Unfiled").foregroundStyle(.secondary)
+                } else {
+                    ChipFlow(spacing: 6) {
+                        ForEach(Array(categories.enumerated()), id: \.element.id) { index, home in
+                            chip(home, primary: index == 0)
+                        }
+                    }
+                }
+                if let change {
+                    Button(categories.isEmpty ? "File…" : "Change…", action: change)
+                        .buttonStyle(.link)
+                }
+                if suggester != nil, case .idle = step {
+                    Button { ask() } label: { Label("Suggest", systemImage: "sparkles") }
+                        .buttonStyle(.link)
+                        .help("Ask the Librarian for the best home")
+                }
+            }
+            answer
+        }
+    }
+
+    @ViewBuilder private var answer: some View {
+        switch step {
+        case .idle: EmptyView()
+        case .asking:
+            Label {
+                Text("Asking the Librarian…")
+            } icon: {
+                Image(systemName: "progress.indicator")
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
+            }
+            .font(.callout).foregroundStyle(.secondary)
+        case let .suggested(suggestion):
+            suggestionCard(suggestion)
+        case let .filed(suggestion, ids):
+            HStack(spacing: 8) {
+                Text("Filed in \(suggestion.category?.label ?? "the suggested home").")
+                    .foregroundStyle(.secondary)
+                Button("Undo") { undo(ids) }.buttonStyle(.link)
+            }
+            .font(.callout)
+        case let .edited(message, before):
+            HStack(spacing: 8) {
+                Text(message).foregroundStyle(.secondary)
+                Button("Undo") { restore(before) }.buttonStyle(.link)
+            }
+            .font(.callout)
+        case let .failed(message):
+            HStack(spacing: 8) {
+                Text(message).foregroundStyle(.secondary).fixedSize(
+                    horizontal: false,
+                    vertical: true
+                )
+                Button("Dismiss") { step = .idle }.buttonStyle(.link)
+            }
+            .font(.callout)
+        }
+    }
+
+    private func suggestionCard(_ suggestion: HomeSuggestion) -> some View {
+        let current = categories.first?.id == suggestion.category?.id && !suggestion.isNew
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles").foregroundStyle(.secondary).accessibilityHidden(true)
+                if let home = suggestion.category {
+                    CategoryChip(category: home)
+                    if suggestion.isNew {
+                        NewCategoryBadge()
+                    }
+                } else {
+                    Text("No home fits yet").foregroundStyle(.secondary)
+                }
+            }
+            if !suggestion.rationale.isEmpty {
+                Text(suggestion.rationale).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if !suggestion.alsoFits.isEmpty {
+                alsoFits(suggestion.alsoFits)
+            }
+            HStack(spacing: 12) {
+                if current {
+                    Text("It's already filed here.").font(.callout).foregroundStyle(.secondary)
+                } else if suggestion.category != nil {
+                    Button(suggestion.isNew ? "Create and File Here" : "File Here") {
+                        file(suggestion)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                }
+                Button("Dismiss") { step = .idle }.buttonStyle(.link).font(.callout)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Suggested home")
+    }
+
+    /// A home's chip. With an editor, hovering shows a remove button and right-clicking offers
+    /// Make Primary Home and Remove.
+    @ViewBuilder private func chip(_ home: DecimalCategory, primary: Bool) -> some View {
+        let base = CategoryChip(category: home, primary: primary)
+        if editor != nil {
+            base
+                .overlay(alignment: .topTrailing) {
+                    if hovered == home.id {
+                        Button { edit(home, remove: true) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .symbolRenderingMode(.palette)
+                                .foregroundStyle(Color(nsColor: .windowBackgroundColor), .secondary)
+                        }
+                        .buttonStyle(.plain).font(.callout)
+                        .offset(x: 6, y: -6)
+                        .help("Remove from \(home.label)")
+                        .transition(.opacity)
+                    }
+                }
+                .onHover { inside in
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        if inside {
+                            hovered = home.id
+                        } else if hovered == home.id {
+                            hovered = nil
+                        }
+                    }
+                }
+                .contextMenu {
+                    if !primary {
+                        Button("Make Primary Home") { edit(home, remove: false) }
+                    }
+                    Button("Remove from \(home.label)", role: .destructive) {
+                        edit(home, remove: true)
+                    }
+                }
+                .accessibilityAction(named: "Remove from \(home.label)") { edit(home, remove: true)
+                }
+        } else {
+            base
+        }
+    }
+
+    private func edit(_ home: DecimalCategory, remove: Bool) {
+        guard let editor else { return }
+        hovered = nil
+        Task {
+            do {
+                if remove {
+                    let before = try await editor.remove(document.id, home)
+                    step = .edited("Removed from \(home.label).", before)
+                } else {
+                    let before = try await editor.makePrimary(document.id, home)
+                    step = .edited("Made \(home.label) the primary home.", before)
+                }
+            } catch { step = .failed(error.localizedDescription) }
+        }
+    }
+
+    private func restore(_ before: [FilingMembership]) {
+        guard let editor else { return }
+        Task {
+            do {
+                try await editor.restore(document.id, before)
+                step = .idle
+            } catch { step = .failed(error.localizedDescription) }
+        }
+    }
+
+    /// Other homes it could live in too, each added as a secondary home on its own.
+    private func alsoFits(_ homes: [DecimalCategory]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Also fits").font(.caption).foregroundStyle(.secondary)
+            ForEach(homes) { home in
+                HStack(spacing: 8) {
+                    CategoryChip(category: home, primary: false)
+                    if added.contains(home.id) {
+                        Text("Added").font(.callout).foregroundStyle(.secondary)
+                        Button("Undo") { setHome(home, on: false) }.buttonStyle(.link)
+                    } else if categories.contains(where: { $0.id == home.id }) {
+                        Text("Already here").font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Button("Also File Here") { setHome(home, on: true) }
+                            .buttonStyle(.link)
+                            .help("Add as another home; the main home stays")
+                    }
+                }
+            }
+        }
+    }
+
+    private func setHome(_ home: DecimalCategory, on: Bool) {
+        guard let suggester else { return }
+        Task {
+            do {
+                if on {
+                    if try await suggester.addHome(document.id, home) {
+                        added.insert(home.id)
+                    }
+                } else {
+                    try await suggester.removeHome(document.id, home)
+                    added.remove(home.id)
+                }
+            } catch { step = .failed(error.localizedDescription) }
+        }
+    }
+
+    private func ask() {
+        guard let suggester else { return }
+        step = .asking
+        Task {
+            do {
+                step = try await suggester.suggest(document.id).map { .suggested($0) }
+                    ?? .failed("Suggestions need Apple Intelligence or ChatGPT.")
+            } catch { step = .failed(error.localizedDescription) }
+        }
+    }
+
+    private func file(_ suggestion: HomeSuggestion) {
+        guard let suggester else { return }
+        Task {
+            do { step = try await .filed(suggestion, suggester.file(document.id, suggestion)) }
+            catch { step = .failed(error.localizedDescription) }
+        }
+    }
+
+    private func undo(_ ids: [UUID]) {
+        guard let suggester else { return }
+        Task {
+            do {
+                try await suggester.undo(ids)
+                step = .idle
+            } catch { step = .failed(error.localizedDescription) }
+        }
     }
 }

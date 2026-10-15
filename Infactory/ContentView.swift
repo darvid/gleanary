@@ -209,6 +209,12 @@ struct ContentView: View {
             library.useLinkJudge(linkJudge())
             library.useFiler(currentInference())
         }
+        .task {
+            // The chat Writer's own model, asked for when the digest runs: it loads ChatGPT's
+            // models if they aren't yet, and says why when ChatGPT can't be used.
+            guard let chatGPT = conversation?.chatGPT else { return }
+            library.useWriter { try await chatGPT.requestInference() }
+        }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
             library.documentGrid.scope = scope ?? .all
@@ -300,8 +306,11 @@ struct ContentView: View {
             }
         }
         .sharedBackgroundVisibility(.hidden)
-        if !chatting, !automating {
+        // Chat draws its own More menu; the library and Automations share this one.
+        if !chatting {
             ToolbarSpacer(.flexible)
+        }
+        if !chatting, !automating {
             ToolbarItem {
                 Picker("Presentation", selection: $presentation) {
                     Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
@@ -311,6 +320,8 @@ struct ContentView: View {
                 .help("Browse the library as a map or a list")
             }
             .sharedBackgroundVisibility(.hidden)
+        }
+        if !chatting {
             ToolbarItem {
                 // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
                 // Plain ellipsis: Liquid Glass already draws the circular button.
@@ -977,7 +988,30 @@ struct ContentView: View {
                     await library.loadPreview(preview)
                 }
             },
-            fileDocument: { _ in withAnimation(.snappy(duration: 0.25)) { showingFiling = true } }
+            fileDocument: { _ in withAnimation(.snappy(duration: 0.25)) { showingFiling = true } },
+            suggestHome: conversation.map(homeSuggester),
+            editHomes: FilingEditor(
+                remove: { id, home in
+                    let before = try await library.store.removeHome(id, categoryID: home.id)
+                    await refreshFiling()
+                    return before
+                },
+                makePrimary: { id, home in
+                    let before = try await library.store.makePrimaryHome(id, categoryID: home.id)
+                    await refreshFiling()
+                    return before
+                },
+                restore: { id, homes in
+                    try await library.store.restoreHomes(id, homes)
+                    await refreshFiling()
+                }
+            ),
+            refreshDocument: conversation.map { conversation in
+                { document in
+                    chatting = true
+                    Task { await conversation.refreshDocument(document.id) }
+                }
+            }
         )
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1200,6 +1234,38 @@ struct ContentView: View {
     }
 
     static let inspectorWidth: CGFloat = 300
+
+    /// Suggest on the info card: the Librarian's answer, filed through reviewable changes so
+    /// Undo works; the library and its categories refresh after.
+    private func homeSuggester(_ conversation: ConversationModel) -> HomeSuggester {
+        HomeSuggester(
+            suggest: { try await conversation.suggestHome(for: $0) },
+            file: { id, suggestion in
+                let ids = try await conversation.fileAsSuggested(id, suggestion)
+                await refreshFiling()
+                return ids
+            },
+            undo: { ids in
+                try await conversation.undoSuggestedFiling(ids)
+                await refreshFiling()
+            },
+            addHome: { id, home in
+                let added = try await conversation.addSuggestedHome(id, home)
+                await refreshFiling()
+                return added
+            },
+            removeHome: { id, home in
+                try await conversation.removeSuggestedHome(id, home)
+                await refreshFiling()
+            }
+        )
+    }
+
+    private func refreshFiling() async {
+        await library.refreshConversationChanges()
+        await library.loadPreview(preview)
+        await loadCategories()
+    }
 
     private func file(_ document: MarkdownDocument, into categoryID: UUID) async {
         do {

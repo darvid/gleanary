@@ -4,18 +4,22 @@ actor AgentCoordinator {
     let store: DocumentStore
     let ingestion: IngestionEngine
     private(set) var inference: any ConversationInferring
-    private let search: SearchEngine
-    private var executing = false
+    let search: SearchEngine
+    let writingStyles: @Sendable () -> WritingStyleChoice
+    /// One task runs at a time; the Writer's confirmed scope resumes under the same guard.
+    var executing = false
 
     init(
         store: DocumentStore,
         fetcher: any SourceFetching = SourceFetcher(),
         inference: any ConversationInferring = AppleConversationInference(),
         screenshotter: (any PageScreenshotting)? = nil,
-        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
+        captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
+        writingStyles: @escaping @Sendable () -> WritingStyleChoice = { WritingStyleChoice() }
     ) {
         self.store = store
         self.inference = inference
+        self.writingStyles = writingStyles
         ingestion = IngestionEngine(
             store: store, fetcher: fetcher, screenshotter: screenshotter,
             settings: captureSettings
@@ -43,6 +47,8 @@ actor AgentCoordinator {
         let plan: ConversationPlan
         if existingCaptureID != nil || route.url?.absoluteString == route.text {
             plan = ConversationPlan(steps: [.init(action: .ingest)])
+        } else if Self.isRefresh(route, selected: selected) {
+            plan = ConversationPlan(steps: [.init(action: .refresh)])
         } else {
             try await store.updateConversationTask(taskID, progress: "Understanding request")
             await changed()
@@ -66,7 +72,9 @@ actor AgentCoordinator {
                 changed: changed
             )
         } else {
-            var references = selected
+            // Composing gathers its own scope; only items the person picked join it, not the
+            // follow-up context from the last reply.
+            var references = Self.composes(plan) && !userSelected ? [] : selected
             for (index, step) in plan.steps.enumerated() {
                 try Task.checkCancellation()
                 if !step.targets.isEmpty {
@@ -93,6 +101,13 @@ actor AgentCoordinator {
             }
         }
         try Task.checkCancellation()
+        // A gathered scope waits for the person; confirming it resumes this same task.
+        if plan.steps.first?.action == .compose,
+           try await store.writerRequest(taskID: taskID)?.status == .awaiting
+        {
+            await changed()
+            return
+        }
         try await store.updateConversationTask(
             taskID,
             state: "succeeded",
@@ -100,6 +115,16 @@ actor AgentCoordinator {
             event: "completed"
         )
         await changed()
+    }
+
+    private static func composes(_ plan: ConversationPlan) -> Bool {
+        plan.steps.first?.action == .compose
+    }
+
+    /// "@writer refresh" with one document selected re-runs that document's request directly.
+    private static func isRefresh(_ route: ConversationRoute, selected: [UUID]) -> Bool {
+        route.roles == [.writer] && selected.count == 1
+            && route.text.lowercased().hasPrefix("refresh")
     }
 
     func cancelCapture(_ id: UUID) async throws {
@@ -292,7 +317,7 @@ actor AgentCoordinator {
                 references: references,
                 changed: changed
             )
-        case .saveNote, .organize:
+        case .saveNote, .organize, .compose, .refresh:
             try await write(
                 step,
                 taskID: taskID,
@@ -315,6 +340,25 @@ actor AgentCoordinator {
             throw ConversationError.invalidPlan
         }
         await changed()
+    }
+
+    /// The Writer composes from gathered sources, or refreshes the one selected document.
+    private func writer(
+        _ step: ConversationPlan.Step,
+        taskID: UUID,
+        route: ConversationRoute,
+        references: [UUID],
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        guard step.action == .refresh else {
+            return try await compose(
+                taskID: taskID, request: route.text, selected: references, changed: changed
+            )
+        }
+        guard references.count == 1, let id = references.first else {
+            return try await askForTargets(taskID: taskID)
+        }
+        try await refresh(taskID: taskID, noteID: id, changed: changed)
     }
 
     private func readRecords(
@@ -358,11 +402,16 @@ actor AgentCoordinator {
         references: [UUID],
         changed: @escaping @Sendable () async -> Void
     ) async throws {
-        if step.action == .organize {
+        switch step.action {
+        case .organize:
             try await organize(
                 taskID: taskID, request: route.text, selected: references, changed: changed
             )
-        } else {
+        case .compose, .refresh:
+            try await writer(
+                step, taskID: taskID, route: route, references: references, changed: changed
+            )
+        default:
             try await saveThought(taskID: taskID, step: step)
         }
     }
@@ -508,6 +557,22 @@ actor AgentCoordinator {
             records: records,
             categories: store.categories()
         )
+    }
+
+    /// The Librarian's suggested home for one item, asked from the item's info card rather
+    /// than chat. Nothing is applied; nil when no model can be asked.
+    func suggestHome(for id: UUID) async throws -> HomeSuggestion? {
+        let suggestion = try await suggestedFiling(
+            taskID: UUID(), ids: [id],
+            request: "Suggest the best home for this item, a more specific one if it fits better than where it is now."
+        )
+        return suggestion.map { found in
+            let home = found.newCategory ?? found.category
+            return HomeSuggestion(
+                category: home, isNew: found.newCategory != nil, rationale: found.rationale,
+                alsoFits: found.alternatives.filter { $0.id != home?.id }
+            )
+        }
     }
 
     private struct FilingSuggestion {
@@ -829,4 +894,15 @@ private struct CaptureTaskFailure: LocalizedError {
     var errorDescription: String? {
         message
     }
+}
+
+/// Where the Librarian would file an item, and why. A new category is only created if the
+/// person accepts it.
+struct HomeSuggestion: Sendable, Equatable {
+    /// Nil when no home fits.
+    let category: DecimalCategory?
+    let isNew: Bool
+    let rationale: String
+    /// Other existing homes that could hold it too, offered as extra (secondary) homes.
+    var alsoFits: [DecimalCategory] = []
 }

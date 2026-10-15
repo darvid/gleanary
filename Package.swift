@@ -34,7 +34,9 @@ let package = Package(
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
             ],
             path: "Infactory",
-            exclude: ["Infactory.entitlements", "Info.plist"],
+            // The app icon goes in the app bundle itself (scripts/build-app.sh), not the
+            // resource bundle.
+            exclude: ["Infactory.entitlements", "Info.plist", "AppIcon"],
             resources: [.process("Resources")]
         ),
         .testTarget(

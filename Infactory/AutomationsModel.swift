@@ -11,14 +11,24 @@ import Observation
     /// Item titles for showing proposals.
     private(set) var titles: [UUID: String] = [:]
     private(set) var running: AutomationKind?
+    /// What the running automation is doing now, when it says.
+    private(set) var progress: String?
     /// Items due now per automation, beyond what one run takes.
     private(set) var backlog: [AutomationKind: Int] = [:]
+    /// Runs whose changes are still applied, so Undo can put them back.
+    private(set) var undoableRuns: Set<UUID> = []
+    /// Runs whose changes were all undone.
+    private(set) var undoneRuns: Set<UUID> = []
+    /// Items history mentions that are gone, so they show without a link.
+    private(set) var goneItems: Set<UUID> = []
     var error: String?
 
     @ObservationIgnored private let store: DocumentStore
     @ObservationIgnored private let engine: AutomationEngine
     @ObservationIgnored private let schedules: Bool
-    @ObservationIgnored private var runTask: Task<Void, Never>?
+    /// The run in progress, however it started (Run Now, the schedule or new items), so
+    /// Stop can always reach it.
+    @ObservationIgnored private var currentRun: Task<AutomationRun, Never>?
     @ObservationIgnored private var scheduler: NSBackgroundActivityScheduler?
     @ObservationIgnored private var newItemsTask: Task<Void, Never>?
     /// Refreshes the library after a run changed it.
@@ -65,7 +75,14 @@ import Observation
             for id in missing {
                 updatedTitles[id] = found[id] ?? "Deleted item"
             }
+            let undo = try await store.runUndoState(updatedRuns.values.joined().map(\.id))
+            let gone = try await store.missingNotes(Array(Set(
+                updatedRuns.values.joined().flatMap(\.entries).compactMap(\.itemID)
+            )))
             runs = updatedRuns
+            undoableRuns = undo.applied
+            undoneRuns = undo.undone
+            goneItems = gone
             pending = updatedPending
             titles = updatedTitles
         } catch { self.error = error.localizedDescription }
@@ -137,11 +154,16 @@ import Observation
 
     func runNow(_ kind: AutomationKind) {
         guard running == nil else { return }
-        runTask = Task { await perform(config(kind)) }
+        Task { await perform(config(kind)) }
+    }
+
+    private func show(_ step: String) {
+        guard running != nil else { return }
+        progress = step
     }
 
     func stop() {
-        runTask?.cancel()
+        currentRun?.cancel()
     }
 
     func update(_ config: AutomationConfig) {
@@ -193,13 +215,24 @@ import Observation
     }
 
     func canUndo(_ run: AutomationRun) -> Bool {
-        run.kind.undoable && run.changed > 0
+        run.kind.undoable && run.changed > 0 && undoableRuns.contains(run.id)
     }
 
     private func perform(_ config: AutomationConfig) async {
+        // Two quick Run Now clicks, or a click as the schedule fires, start one run.
+        guard running == nil else { return }
         running = config.kind
-        defer { running = nil }
-        let run = await engine.run(config)
+        let engine = engine
+        let task = Task {
+            await engine.run(config) { [weak self] step in await self?.show(step) }
+        }
+        currentRun = task
+        defer {
+            running = nil
+            progress = nil
+            currentRun = nil
+        }
+        let run = await task.value
         await load()
         if run.changed > 0 || run.proposed > 0 {
             await libraryChanged()
@@ -212,6 +245,13 @@ import Observation
     weak var library: LibraryModel?
     var judge: (any LinkJudging)?
     var filer: (any ConversationInferring)?
+    /// Looks up the Writer's model when a digest runs, so it follows the AI provider then
+    /// rather than whatever was set when the window opened.
+    var writer: (@MainActor () async throws -> (any ConversationInferring)?)?
+
+    func currentWriter() async throws -> (any ConversationInferring)? {
+        try await writer?()
+    }
 
     /// Imports, deletions and a summary someone asked for come first.
     var shouldYield: Bool {
