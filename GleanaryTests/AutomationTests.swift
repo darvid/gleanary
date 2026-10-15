@@ -47,6 +47,10 @@ private actor FlakyFetcher: SourceFetching {
 
 /// Files anything about papers in 51, gardens in a new home, mysteries nowhere.
 private actor PaperFiler: ConversationInferring {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities: InferenceCapabilities
     private(set) var calls = 0
 

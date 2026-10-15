@@ -640,6 +640,33 @@ private actor SummaryFetcher: SourceFetching {
             .errorDescription)
     }
 
+    @Test func researchTitlesAreShortSpecificPlainText() throws {
+        let point = SummaryDraft.Point(
+            text: "Agent-focused version control",
+            quotes: ["Source evidence."]
+        )
+        #expect(try ResearchNoteTitle
+            .validate(SummaryDraft(overview: point, takeaways: [])) == point.text)
+        for title in ["", "Research: Version control", "Summary: Agents", "# Agents",
+                      "A title\nwith another line", String(repeating: "word ", count: 13),
+                      String(repeating: "a", count: 81)]
+        {
+            #expect(throws: LinkSummaryError.invalidOutput) {
+                try ResearchNoteTitle.validate(SummaryDraft(
+                    overview: .init(text: title, quotes: point.quotes), takeaways: []
+                ))
+            }
+        }
+        #expect(throws: LinkSummaryError.invalidOutput) {
+            try ResearchNoteTitle.validate(SummaryDraft(overview: point, takeaways: [point]))
+        }
+        #expect(ResearchNoteTitle.evidence(for: String(
+            repeating: "Synthetic evidence. ",
+            count: 1000
+        ))
+        .items.map(\.text).joined(separator: "\n").count <= 4000)
+    }
+
     @Test func adaptiveSummaryLimitsAgreeAndPreserveOptionalGrouping() throws {
         let source = "Synthetic supporting evidence."
         let points = (1 ... 10).map { index in

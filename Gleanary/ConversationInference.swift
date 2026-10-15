@@ -17,6 +17,8 @@ protocol ConversationInferring: Sendable {
     var capabilities: InferenceCapabilities { get }
     func plan(request: String, context: ConversationPlanningContext) async throws
         -> ConversationPlan
+    /// A filing-friendly title grounded in the verified result, not the source headline.
+    func researchTitle(for summary: String) async throws -> String
     func research(question: String, sources: [ResearchSource])
         -> AsyncThrowingStream<ResearchEvent, any Error>
     func reply(question: String, role: AgentRole, history: [ConversationTurn])
@@ -43,6 +45,10 @@ struct AppleConversationInference: ConversationInferring {
         structured: true,
         streaming: true
     )
+
+    func researchTitle(for summary: String) async throws -> String {
+        try await AppleLinkSummarizer().researchTitle(for: summary)
+    }
 
     func plan(
         request: String,

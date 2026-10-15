@@ -45,6 +45,83 @@ private struct DeletionFixtureEmbedder: EmbeddingProviding {
 
 @Suite(.serialized)
 struct DocumentLibraryTests {
+    @Test @MainActor func chatSidebarDimsEmptyHomesOnColdLaunchAndRefreshesAfterFiling(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [])
+        _ = try await fixture.store.addCategories([
+            (code: "11", name: "Empty filing"), (code: "12", name: "Filed evidence"),
+        ])
+        let categories = try await fixture.store.categories()
+        let empty = try #require(categories.first { $0.code == "11" })
+        let filed = try #require(categories.first { $0.code == "12" })
+        let note = try await fixture.store.save(MarkdownDocument(
+            name: "Synthetic evidence",
+            markdown: "Saved evidence."
+        ))
+        try await fixture.store.fileNote(note.id, categoryID: filed.id)
+        let suite = "gleanary-chat-filing-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "atlasHidesEmptyCategories")
+        defaults.set(LibraryPresentation.map.rawValue, forKey: "libraryPresentation")
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        let library = LibraryModel(store: fixture.store)
+        await library.load()
+        let conversation = ConversationModel(
+            store: fixture.store,
+            coordinator: AgentCoordinator(store: fixture.store)
+        )
+        await conversation.load()
+        for dark in [false, true] {
+            let atlas = KnowledgeAtlasModel()
+            #expect(atlas.emptyCategoryIDs.isEmpty)
+            let host = NSHostingView(rootView: ContentView(
+                library: library, conversation: conversation, atlasModel: atlas
+            ).defaultAppStorage(defaults).preferredColorScheme(dark ? .dark : .light))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
+                styleMask: [.borderless], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            host.appearance = window.appearance
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            for _ in 0 ..< 100 {
+                if atlas.emptyCategoryIDs.contains(empty.id) {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(atlas.emptyCategoryIDs.contains(empty.id))
+            #expect(!atlas.emptyCategoryIDs.contains(filed.id))
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            host.needsDisplay = true
+            host.display()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png.write(to: FileManager.default.temporaryDirectory.appending(
+                path: "gleanary-chat-empty-filing-\(dark ? "dark" : "light").png"
+            ))
+            try await fixture.store.fileNote(note.id, categoryID: empty.id)
+            await library.refreshConversationChanges()
+            for _ in 0 ..< 100 {
+                if atlas.emptyCategoryIDs.contains(filed.id) {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(!atlas.emptyCategoryIDs.contains(empty.id))
+            #expect(atlas.emptyCategoryIDs.contains(filed.id))
+            try await fixture.store.fileNote(note.id, categoryID: filed.id)
+            await library.refreshConversationChanges()
+        }
+        await library.indexingTask?.value
+    }
+
     @Test @MainActor func filingChipsAndActionsShareTextBaselinesWhenWrapping() async throws {
         for width in [260.0, 400.0] {
             for dark in [false, true] {

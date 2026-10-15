@@ -18,6 +18,10 @@ private func statedFacts(in text: String) -> [ExtractedFact] {
 /// Stands in for ChatGPT: a gather plan, extraction by pattern, and a Writer that cites every
 /// record it was given and grades bass on a defined scale.
 private actor FakeWriter: ConversationInferring, WriterInferring, AgentResponding {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities = InferenceCapabilities(
         identifier: "fixture.writer", local: false, structured: true, streaming: true
     )
@@ -130,6 +134,10 @@ private actor FakeWriter: ConversationInferring, WriterInferring, AgentRespondin
 
 /// Stands in for Apple Intelligence: no tool loop, one structured draft.
 private actor LocalWriter: ConversationInferring, WriterInferring, DocumentDrafting {
+    func researchTitle(for _: String) throws -> String {
+        throw ConversationError.invalidOutput
+    }
+
     nonisolated let capabilities = InferenceCapabilities(
         identifier: "fixture.local", local: true, structured: true, streaming: true
     )

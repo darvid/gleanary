@@ -766,14 +766,16 @@ actor AgentCoordinator {
             await changed()
         }
         guard let result else { throw ConversationError.invalidOutput }
+        try await store.updateConversationTask(taskID, progress: "Naming the research note")
+        await changed()
+        let title = try await inference.researchTitle(for: result)
+        try Task.checkCancellation()
         let citedResult = result + "\n\n## Saved sources\n\n" + sources.enumerated().map {
             "- [S\($0.offset + 1): \(Self.markdownLabel($0.element.note.name))](gleanary://note/\($0.element.note.id.uuidString))"
         }.joined(separator: "\n")
         let artifact = try await store.saveResearch(
             citedResult,
-            name: sources
-                .count > 1 ? "Comparison: \(sources[0].note.name)" :
-                "Research: \(sources[0].note.name)",
+            name: title,
             sources: sources,
             taskID: taskID,
             provider: inference.capabilities.identifier,

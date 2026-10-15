@@ -566,6 +566,34 @@ extension ChatGPTConversationInference: LinkSummarizing {
         )
     }
 
+    func researchTitle(for summary: String) async throws -> String {
+        do {
+            let fence = try await session.authorizationFence()
+            let evidence = ResearchNoteTitle.evidence(for: summary)
+            guard !evidence.items.isEmpty else { throw LinkSummaryError.noEvidence }
+            let proposal: EvidenceSummaryDraft = try await structured(
+                prompt: ResearchNoteTitle.prompt(evidence),
+                instructions: ResearchNoteTitle.instructions,
+                name: "research_note_title", schema: EvidenceSummaryDraft.jsonSchema(), fence: fence
+            )
+            let draft = try proposal.anchored(in: evidence)
+            _ = try draft.markdown(source: String(summary.prefix(4000)))
+            _ = try ResearchNoteTitle.validate(draft)
+            let review: SummaryVerification = try await structured(
+                prompt: AppleLinkSummarizer.verificationPrompt([draft.overview]),
+                instructions: AppleLinkSummarizer.verificationInstructions,
+                name: "research_title_review", schema: SummaryVerification.jsonSchema(count: 1),
+                fence: fence
+            )
+            let verified = try review.applied(to: draft)
+            try Task.checkCancellation()
+            try await session.validateFence(fence)
+            return try ResearchNoteTitle.validate(verified)
+        } catch LinkSummaryError.invalidOutput {
+            throw ChatGPTError.invalidOutput
+        }
+    }
+
     private func structured<Value: Decodable>(
         prompt: String,
         instructions: String,
