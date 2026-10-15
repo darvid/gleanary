@@ -8,8 +8,9 @@ extension AutomationEngine {
     /// Captures for you.
     static let retryWaits: [TimeInterval] = [60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
     static let retryWaitLabels = ["an hour", "a day", "a week"]
-    /// How long a run waits for one capture before moving on; the capture carries on.
-    static let longestCapture: Duration = .seconds(10 * 60)
+    /// How long a run waits for one capture before moving on; the capture carries on in
+    /// Captures and the run reports it as still fetching.
+    static let longestCapture: Duration = .seconds(2 * 60)
     static let digestSpan: TimeInterval = 7 * 24 * 60 * 60
 
     // MARK: Bookmark fetcher
@@ -24,8 +25,11 @@ extension AutomationEngine {
         let retried = try await store.automationConfigs()
             .first { $0.kind == .captureRetry }?.enabled ?? false
         var sites = Set<String>()
-        for candidate in try await store.bookmarkFetchCandidates(limit: config.batchLimit) {
+        let candidates = try await store.bookmarkFetchCandidates(limit: config.batchLimit)
+        for (index, candidate) in candidates.enumerated() {
             guard try await proceed(&run) else { return }
+            await report("Fetching \(index + 1) of \(candidates.count): "
+                + (candidate.url.host() ?? candidate.title))
             if summarize, budget <= 0 {
                 return outOfBudget(&run)
             }
@@ -128,8 +132,9 @@ extension AutomationEngine {
             limit: config.batchLimit, now: dependencies.now(),
             firstWait: Self.retryWaits[0], maxRetries: Self.retryWaits.count
         )
-        for job in jobs {
+        for (index, job) in jobs.enumerated() {
             guard try await proceed(&run) else { return }
+            await report("Retrying \(index + 1) of \(jobs.count): \(job.request.label)")
             guard try await store.retryCaptureAutomatically(
                 job.id, maxRetries: Self.retryWaits.count
             ) else { continue }
@@ -303,8 +308,11 @@ extension AutomationEngine {
         try Task.checkCancellation()
         let items = try await store.digestItems(from: start, to: now, limit: config.batchLimit)
         run.examined = items.count
+        let written = config.usesWriter
+            ? try await writtenDigest(items, total: total, from: start, to: now, config, &run)
+            : nil
         let note = try await store.writeAutomationNote(
-            DigestNote.document(items, total: total, from: start, to: now),
+            written?.document ?? DigestNote.document(items, total: total, from: start, to: now),
             reason: "Written by the weekly digest.",
             runID: run.id,
             at: now
@@ -314,10 +322,78 @@ extension AutomationEngine {
             .changed,
             note.id,
             note.name,
-            items.count == total
-                ? "Lists \(Self.itemCount(total))."
-                : "Lists the newest \(items.count.formatted()) of \(Self.itemCount(total))."
+            written.map { "Written up by the Writer from \(Self.itemCount($0.covered))." }
+                ?? ((items.count == total
+                        ? "Lists \(Self.itemCount(total))."
+                        :
+                        "Lists the newest \(items.count.formatted()) of \(Self.itemCount(total)).")
+                    + (config.usesWriter ? run.report.last { $0.hasPrefix(Self.writerSkipped) }
+                        .map { " " + $0 } ?? "" : ""))
         )
+    }
+
+    /// Starts the reason a digest set to be written up was listed instead.
+    static let writerSkipped = "The Writer didn't write this one: "
+
+    /// The week written up by the Writer from the newest items it can take, with any others
+    /// listed after. Nil, with the reason in the report, when it can't run; the digest is then
+    /// the usual list, so a week is never skipped for want of a model.
+    func writtenDigest(
+        _ items: [DigestItem],
+        total: Int,
+        from start: Date,
+        to end: Date,
+        _ config: AutomationConfig,
+        _ run: inout AutomationRun
+    ) async throws -> (document: MarkdownDocument, covered: Int)? {
+        func listInstead(_ reason: String) -> (document: MarkdownDocument, covered: Int)? {
+            run.report.append(Self.writerSkipped + reason)
+            return nil
+        }
+        let found: (any ConversationInferring)?
+        do { found = try await dependencies.writer() } catch {
+            return listInstead("ChatGPT isn't available (\(error.localizedDescription))")
+        }
+        guard let inference = found else {
+            return listInstead("the Writer needs Apple Intelligence or ChatGPT.")
+        }
+        if !config.cloudAllowed, !inference.capabilities.local {
+            return listInstead("this automation is on-device only, and ChatGPT is the AI provider.")
+        }
+        let covered = Array(items.prefix(WriterLimits.maximumScope))
+        guard WriterPipeline.canWrite(covered.count, with: inference) else {
+            return listInstead(
+                "writing up more than \(WriterLimits.localScope) items needs ChatGPT."
+            )
+        }
+        // At least a call per item and a few for writing; cached items cost less.
+        guard try await remainingCalls(config) >= covered.count + 4 else {
+            return listInstead("today's model calls would run out first.")
+        }
+        let style = dependencies.writingStyle()
+        let range = DigestNote.range(start, end)
+        let request = WriterRequest(
+            taskID: run.id, noteID: nil, kind: .compose, request: DigestNote.request(range),
+            style: style, brief: DigestNote.brief, generalKnowledge: false,
+            scopeLimit: covered.count, candidates: [], selection: covered.map(\.id),
+            excluded: [], sources: [], status: .writing, personal: true
+        )
+        do {
+            let composition = try await WriterPipeline(store: store, inference: inference)
+                .produce(request) { step, _ in await self.report(step) }
+            run.calls += composition.calls
+            return (
+                DigestNote.written(
+                    composition.rendered, rest: Array(items.dropFirst(covered.count)),
+                    listed: items.count, total: total, range: range
+                ),
+                covered.count
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return listInstead("the Writer couldn't finish (\(error.localizedDescription))")
+        }
     }
 
     /// Where the next digest starts: the last one still standing, or a week back.
@@ -344,7 +420,7 @@ enum DigestNote {
         from start: Date,
         to end: Date
     ) -> MarkdownDocument {
-        let range = (start ..< end).formatted(date: .abbreviated, time: .omitted)
+        let range = Self.range(start, end)
         var groups: [String: [DigestItem]] = [:]
         for item in items {
             groups[item.code.map { "\($0) \(item.category ?? "")" } ?? "", default: []]
@@ -358,14 +434,57 @@ enum DigestNote {
         ]
         for heading in headings {
             lines.append("## \(heading.isEmpty ? "Unfiled" : heading)")
-            lines.append((groups[heading] ?? []).map { item in
-                let link = "[\(AgentCoordinator.markdownLabel(item.title))](infactory://note/\(item.id.uuidString))"
-                return "- \(link)" + (item.host.map { " (\($0))" } ?? "")
-            }.joined(separator: "\n"))
+            lines.append(list(groups[heading] ?? []))
         }
         return MarkdownDocument(
             name: "Weekly digest: \(range)",
             markdown: lines.joined(separator: "\n\n")
         )
+    }
+
+    static func range(_ start: Date, _ end: Date) -> String {
+        (start ..< end).formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private static func list(_ items: [DigestItem]) -> String {
+        items.map { item in
+            let link = "[\(AgentCoordinator.markdownLabel(item.title))](infactory://note/\(item.id.uuidString))"
+            return "- \(link)" + (item.host.map { " (\($0))" } ?? "")
+        }.joined(separator: "\n")
+    }
+
+    // MARK: Written up by the Writer
+
+    /// The same facts from every item, so a week's records are reused by the next digest.
+    static let brief = WriterBrief(
+        query: "", categoryCodes: [], fields: ["what it covers", "key points"],
+        generalKnowledge: false
+    )
+
+    static func request(_ range: String) -> String {
+        "Write my weekly digest of what I saved \(range), as my own notes. Group the items by topic under headings, say what each covers and its key points, and point out threads that connect several. Mention every item."
+    }
+
+    /// The Writer's text under a one-line intro, with items it didn't take listed before the
+    /// sources.
+    static func written(
+        _ rendered: WriterDocument.Rendered,
+        rest: [DigestItem],
+        listed: Int,
+        total: Int,
+        range: String
+    ) -> MarkdownDocument {
+        var body = rendered.markdown
+        if !rest.isEmpty {
+            let also = "## Also saved\n\n" + list(rest)
+            let parts = body.components(separatedBy: "\n\n## Sources\n\n")
+            body = parts.count == 2 ? parts[0] + "\n\n" + also + "\n\n## Sources\n\n" + parts[1]
+                : body + "\n\n" + also
+        }
+        // More saved than listed: say so plainly, as the listed digest does.
+        if listed < total {
+            body += "\n\nThe newest \(listed.formatted()) of \(AutomationEngine.itemCount(total)) are here."
+        }
+        return MarkdownDocument(name: "Weekly digest: \(range)", markdown: body)
     }
 }

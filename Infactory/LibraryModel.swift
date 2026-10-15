@@ -111,7 +111,9 @@ final class LibraryModel {
                 },
                 capturesSummarize: { captureSettings().summarize },
                 startCapture: { id in await hooks.library?.runAutomationCapture(id) },
-                filer: { await hooks.filer }
+                filer: { await hooks.filer },
+                writer: { try await hooks.currentWriter() },
+                writingStyle: { WritingStyleChoice.current().defaultStyle }
             )),
             schedules: schedulesAutomations
         )
@@ -134,6 +136,11 @@ final class LibraryModel {
     /// The model that judges the cross-linker's candidates, following the AI provider.
     func useLinkJudge(_ judge: (any LinkJudging)?) {
         automationHooks.judge = judge
+    }
+
+    /// How the weekly digest finds the Writer's model when it runs.
+    func useWriter(_ writer: @escaping @MainActor () async throws -> (any ConversationInferring)?) {
+        automationHooks.writer = writer
     }
 
     /// The model the unfiled filer asks, the one Categorize Unfiled uses.

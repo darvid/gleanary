@@ -400,7 +400,78 @@ enum DatabaseSchema {
                 sql: "ALTER TABLE automations ADD COLUMN archivesDeadLinks INTEGER NOT NULL DEFAULT 0"
             )
         }
+        migrator.registerMigration("writer-v1", migrate: writer)
+        // The weekly digest can be written up by the Writer. Its model-call budget was never
+        // shown before, so the 0 saved for it becomes the usual 200.
+        migrator.registerMigration("writer-digest-v1") { db in
+            try db.execute(sql: """
+            ALTER TABLE automations ADD COLUMN usesWriter INTEGER NOT NULL DEFAULT 0;
+            UPDATE automations SET dailyCalls = 200 WHERE id = 'weekly-digest' AND dailyCalls = 0;
+            """)
+        }
         try migrator.migrate(database)
+    }
+
+    /// The Writer (SPEC §7.6): each compose or refresh request with its style and source
+    /// selection, extraction records cached by source content, and a revision change kind so a
+    /// refresh is reviewed before it saves. The changes table is rebuilt for its CHECK again.
+    private static func writer(_ db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE writer_requests (
+            taskID TEXT PRIMARY KEY NOT NULL,
+            noteID TEXT,
+            kind TEXT NOT NULL CHECK(kind IN ('compose','refresh')),
+            request TEXT NOT NULL,
+            style TEXT NOT NULL,
+            brief TEXT NOT NULL,
+            generalKnowledge INTEGER NOT NULL,
+            scopeLimit INTEGER NOT NULL,
+            candidates TEXT NOT NULL DEFAULT '[]',
+            selection TEXT NOT NULL DEFAULT '[]',
+            excluded TEXT NOT NULL DEFAULT '[]',
+            sources TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL CHECK(status IN
+                ('awaiting','writing','saved','proposed','unchanged','cancelled')),
+            createdAt REAL NOT NULL,
+            updatedAt REAL NOT NULL
+        );
+        CREATE INDEX writer_requests_note ON writer_requests(noteID, createdAt);
+        CREATE TABLE extraction_records (
+            noteID TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+            contentHash TEXT NOT NULL,
+            fieldsKey TEXT NOT NULL,
+            records TEXT NOT NULL,
+            engine TEXT NOT NULL,
+            createdAt REAL NOT NULL,
+            PRIMARY KEY(noteID, contentHash, fieldsKey)
+        );
+        CREATE TABLE agent_changes_v5 (
+            id TEXT PRIMARY KEY NOT NULL,
+            taskID TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL CHECK(kind IN ('title','summary','filing','category','archive',
+                'link','relink','note','revision')),
+            noteID TEXT,
+            targetID TEXT,
+            code TEXT,
+            before TEXT NOT NULL,
+            after TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            baseRevision TEXT,
+            appliedRevision TEXT,
+            snapshot TEXT,
+            status TEXT NOT NULL
+                CHECK(status IN ('pending','applied','rejected','stale','undone')),
+            createdAt REAL NOT NULL
+        );
+        INSERT INTO agent_changes_v5 SELECT id, taskID, ordinal, kind, noteID, targetID, code,
+            before, after, reason, baseRevision, appliedRevision, snapshot, status, createdAt
+            FROM agent_changes;
+        DROP TABLE agent_changes;
+        ALTER TABLE agent_changes_v5 RENAME TO agent_changes;
+        CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+        CREATE INDEX agent_changes_note ON agent_changes(noteID, kind);
+        """)
     }
 
     /// The bookmark fetcher, failed-capture retry, unfiled filer and weekly digest. Failed

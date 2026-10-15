@@ -16,3 +16,34 @@ extension View {
             .animation(.snappy(duration: 0.25), value: value)
     }
 }
+
+/// A task's progress line. A stage with a count ("Extracting 12 of 37", or "Fetching 2 of 5:
+/// example.com") keeps its wording still and rolls the count; the detail after it, and any other
+/// change of wording, cross-fades.
+struct StageProgressText: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        if let match = text.wholeMatch(of: /(.*?\S)\s+(\d+ of \d+)(.*)/) {
+            let stage = String(match.1)
+            let count = String(match.2)
+            let detail = String(match.3)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(stage).fadesOnChange(stage)
+                HStack(alignment: .firstTextBaseline, spacing: 0) {
+                    Text(count).monospacedDigit().countsOnChange(count)
+                    if !detail.isEmpty {
+                        Text(detail).lineLimit(1).fadesOnChange(detail)
+                    }
+                }
+            }
+            .accessibilityElement(children: .combine)
+        } else {
+            Text(text).fadesOnChange(text)
+        }
+    }
+}

@@ -29,6 +29,9 @@ for resource in "$bin_dir"/*.bundle; do
     [[ -d "$resource" ]] || continue
     ditto "$resource" "$contents/Resources/$(basename "$resource")"
 done
+# Info.plist names it in CFBundleIconFile. AppIcon.iconset beside it is the editable source;
+# rebuild the .icns with `iconutil -c icns Infactory/AppIcon/AppIcon.iconset`.
+cp Infactory/AppIcon/AppIcon.icns "$contents/Resources/AppIcon.icns"
 
 plist="$contents/Info.plist"
 cp Infactory/Info.plist "$plist"

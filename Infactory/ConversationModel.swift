@@ -12,6 +12,8 @@ final class ConversationModel {
     var proposals: [KnowledgeProposal] = []
     /// Changesets from the library agent, grouped by the task that proposed them.
     var agentChanges: [UUID: [AgentChange]] = [:]
+    /// Writer scopes waiting for confirmation, by task.
+    var writerScopes: [UUID: WriterRequest] = [:]
     var categories: [DecimalCategory] = []
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
@@ -38,7 +40,8 @@ final class ConversationModel {
         self.coordinator = coordinator ??
             AgentCoordinator(
                 store: store, screenshotter: WebPageScreenshotter(),
-                captureSettings: CaptureSettings.current
+                captureSettings: CaptureSettings.current,
+                writingStyles: { WritingStyleChoice.current() }
             )
     }
 
@@ -86,6 +89,10 @@ final class ConversationModel {
             let updatedProposals = try await store.proposals()
             let updatedChanges = try await Dictionary(grouping: store.agentChanges(), by: \.taskID)
             let updatedCategories = try await store.categories()
+            let updatedScopes = try await Dictionary(
+                store.awaitingWriterRequests().map { ($0.taskID, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             var updatedTitles = titles
             for id in Set(updatedMessages.flatMap(\.references) + selectedSources + updatedProposals
                 .flatMap { [
@@ -102,6 +109,7 @@ final class ConversationModel {
             proposals = updatedProposals
             agentChanges = updatedChanges
             categories = updatedCategories
+            writerScopes = updatedScopes
             titles = updatedTitles
         } catch { self.error = error.localizedDescription }
     }
@@ -125,7 +133,8 @@ final class ConversationModel {
     func send(
         retry: ConversationTask? = nil,
         captureID: UUID? = nil,
-        submittedRequest: String? = nil
+        submittedRequest: String? = nil,
+        sources: [UUID]? = nil
     ) async {
         guard ready, !submitting else { return }
         guard connectionReady else {
@@ -146,10 +155,11 @@ final class ConversationModel {
                 .author == "researcher" ? Array(last?.references.dropFirst() ?? []) : last?
                 .references ?? []
             let capturing = route.url != nil || captureID != nil || retry?.captureID != nil
-            let context = capturing ? [] : retry?
+            let context = capturing ? [] : sources ?? retry?
                 .sources ??
                 (selectedSources.isEmpty ? Array(lastSources.prefix(4)) : selectedSources)
-            let userSelected = !capturing && retry == nil && !selectedSources.isEmpty
+            let userSelected = !capturing && retry == nil
+                && (sources != nil || !selectedSources.isEmpty)
             let id = try await store.beginConversation(
                 request,
                 owner: route.roles[0],
@@ -162,41 +172,150 @@ final class ConversationModel {
             error = nil
             activeID = id
             await refresh()
-            worker = Task { [weak self] in
-                guard let self else { return }
-                do {
-                    try await coordinator.execute(
-                        taskID: id,
-                        request: request,
-                        selected: context,
-                        userSelected: userSelected,
-                        existingCaptureID: captureID ?? retry?
-                            .captureID
-                    ) { [weak self] in
-                        await self?.refresh()
-                    }
-                } catch is CancellationError {
-                    do { try await store.updateConversationTask(
-                        id,
-                        state: "cancelled",
-                        progress: "Cancelled; saved content is retained",
-                        event: "cancelled"
-                    ) } catch { self.error = error.localizedDescription }
-                } catch {
-                    let message = error.localizedDescription
-                    do { try await store.updateConversationTask(
-                        id,
-                        state: "failed",
-                        progress: message,
-                        event: "failed"
-                    ) } catch { self.error = error.localizedDescription }
-                }
-                await refresh()
-                await didMutate?()
-                worker = nil
-                activeID = nil
+            let coordinator = coordinator
+            let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+            run(id) {
+                try await coordinator.execute(
+                    taskID: id,
+                    request: request,
+                    selected: context,
+                    userSelected: userSelected,
+                    existingCaptureID: captureID ?? retry?.captureID,
+                    changed: changed
+                )
             }
         } catch { self.error = error.localizedDescription }
+    }
+
+    /// Runs a task's work in the background, recording cancellation or failure on the task.
+    private func run(_ id: UUID, operation: @escaping @Sendable () async throws -> Void) {
+        activeID = id
+        worker = Task { [weak self] in
+            do {
+                try await operation()
+            } catch is CancellationError {
+                await self?.finish(id, state: "cancelled", progress: Self.cancelledProgress)
+            } catch {
+                await self?.finish(id, state: "failed", progress: error.localizedDescription)
+            }
+            guard let self else { return }
+            await refresh()
+            await didMutate?()
+            worker = nil
+            activeID = nil
+        }
+    }
+
+    private static let cancelledProgress = "Cancelled; saved content is retained"
+
+    private func finish(_ id: UUID, state: String, progress: String) async {
+        do {
+            try await store.updateConversationTask(
+                id, state: state, progress: progress, event: state
+            )
+        } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: Suggested filing
+
+    /// Asks the Librarian where one item belongs, with the current AI provider.
+    func suggestHome(for id: UUID) async throws -> HomeSuggestion? {
+        if !running {
+            try? await configureInference()
+        }
+        return try await coordinator.suggestHome(for: id)
+    }
+
+    /// Files the item where the Librarian suggested, creating a new category first if that was
+    /// the suggestion. Returns the changes, so Undo can put the old filing back.
+    func fileAsSuggested(_ id: UUID, _ suggestion: HomeSuggestion) async throws -> [UUID] {
+        guard let home = suggestion.category else { return [] }
+        let previous = try await store.categories(for: id).first?.label ?? "Unfiled"
+        var drafts = [AgentChangeDraft(
+            kind: .filing, noteID: id, code: home.code, before: previous, after: home.label,
+            reason: suggestion.rationale
+        )]
+        if suggestion.isNew {
+            drafts.insert(AgentChangeDraft(
+                kind: .category, code: home.code, before: "", after: home.name,
+                reason: suggestion.rationale
+            ), at: 0)
+        }
+        let batch = UUID()
+        try await store.saveAgentChanges(drafts, taskID: batch)
+        let ids = try await store.agentChanges(taskID: batch).map(\.id)
+        let report = try await store.applyAgentChanges(ids)
+        guard report.stale == 0 else {
+            _ = try await store.undoAgentChanges(ids)
+            throw ConversationError.staleProposal
+        }
+        await refresh()
+        return ids
+    }
+
+    /// Adds one of the Librarian's "also fits" homes as a secondary home.
+    func addSuggestedHome(_ id: UUID, _ home: DecimalCategory) async throws -> Bool {
+        let added = try await store.addSecondaryHome(id, categoryID: home.id)
+        await refresh()
+        return added
+    }
+
+    func removeSuggestedHome(_ id: UUID, _ home: DecimalCategory) async throws {
+        try await store.removeSecondaryHome(id, categoryID: home.id)
+        await refresh()
+    }
+
+    func undoSuggestedFiling(_ ids: [UUID]) async throws {
+        _ = try await store.undoAgentChanges(ids)
+        await refresh()
+    }
+
+    // MARK: Writer
+
+    /// Confirms a gathered scope and resumes its task: extract, write and save.
+    func confirmScope(
+        _ taskID: UUID,
+        selection: [UUID],
+        style: WritingStyle,
+        generalKnowledge: Bool
+    ) async {
+        guard ready, !submitting, !running else {
+            error = "Finish or stop the current task before confirming the scope."
+            return
+        }
+        do {
+            try await configureInference()
+            try await store.confirmWriterScope(
+                taskID: taskID, selection: selection, style: style,
+                generalKnowledge: generalKnowledge
+            )
+            error = nil
+            await refresh()
+            let coordinator = coordinator
+            let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+            run(taskID) { try await coordinator.continueCompose(taskID: taskID, changed: changed) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// Dismisses a gathered scope; nothing was read or saved.
+    func cancelScope(_ taskID: UUID) async {
+        do {
+            try await store.setWriterRequestStatus(taskID, .cancelled)
+            try await store.updateConversationTask(
+                taskID, state: "cancelled", progress: "Cancelled before anything was read",
+                event: "cancelled"
+            )
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
+    /// Re-runs a composed document's request in chat; its changes come back for review.
+    func refreshDocument(_ id: UUID) async {
+        var title = titles[id]
+        if title == nil {
+            title = try? await store.document(id: id)?.name
+        }
+        await send(submittedRequest: "@writer refresh “\(title ?? "this document")”", sources: [id])
     }
 
     func importFile(_ url: URL) async {
@@ -211,14 +330,17 @@ final class ConversationModel {
 
     func cancel() async {
         guard let id = activeID, let worker else { return }
-        worker.cancel()
+        // Marked first: a save that lands after this finds the task cancelled and writes nothing.
         do {
             try await store.updateConversationTask(
                 id,
                 state: "cancelled",
-                progress: "Cancelled; saved content is retained",
+                progress: Self.cancelledProgress,
                 event: "cancelled"
             )
+        } catch { self.error = error.localizedDescription }
+        worker.cancel()
+        do {
             if let capture = activeTask?.captureID {
                 try await coordinator.cancelCapture(capture)
             }

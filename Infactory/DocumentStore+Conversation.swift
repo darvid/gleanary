@@ -80,6 +80,8 @@ extension DocumentStore {
             UPDATE agent_changes SET status = 'rejected'
             WHERE status = 'pending' AND taskID IN (SELECT id FROM conversation_tasks)
             """)
+            // Saved documents keep their requests for Refresh; unconfirmed scopes go.
+            try db.execute(sql: "DELETE FROM writer_requests WHERE noteID IS NULL")
             try db.execute(sql: """
             DELETE FROM conversation_tasks
             WHERE id NOT IN (SELECT taskID FROM authored_artifacts)
@@ -430,6 +432,97 @@ extension DocumentStore {
         }
     }
 
+    /// Adds a secondary home, leaving the primary as it is. False when the item was already
+    /// filed there, so Undo never removes a home it didn't add.
+    func addSecondaryHome(_ noteID: UUID, categoryID: UUID) throws -> Bool {
+        try readyDatabase().write { db in
+            _ = try Self.liveNote(noteID, in: db)
+            try db.execute(
+                sql: "INSERT OR IGNORE INTO note_categories VALUES (?, ?, 0)",
+                arguments: [noteID.uuidString, categoryID.uuidString]
+            )
+            return db.changesCount > 0
+        }
+    }
+
+    /// The item's homes as they are now, for Undo.
+    func homes(of noteID: UUID) throws -> [FilingMembership] {
+        try readyDatabase().read { db in
+            try Self.filingMemberships(
+                table: "note_categories", column: "noteID", id: noteID, in: db
+            )
+        }
+    }
+
+    /// Takes the item out of one home. Removing the primary home makes the lowest-coded
+    /// remaining one primary; removing the last leaves it unfiled. Returns the homes before,
+    /// for Undo.
+    func removeHome(_ noteID: UUID, categoryID: UUID) throws -> [FilingMembership] {
+        try readyDatabase().write { db in
+            _ = try Self.liveNote(noteID, in: db)
+            let before = try Self.filingMemberships(
+                table: "note_categories", column: "noteID", id: noteID, in: db
+            )
+            try db.execute(
+                sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ?",
+                arguments: [noteID.uuidString, categoryID.uuidString]
+            )
+            if before.contains(where: { $0.categoryID == categoryID && $0.primary }) {
+                try db.execute(sql: """
+                UPDATE note_categories SET isPrimary = 1 WHERE noteID = ?1 AND categoryID = (
+                    SELECT m.categoryID FROM note_categories m
+                    JOIN decimal_categories c ON c.id = m.categoryID
+                    WHERE m.noteID = ?1 ORDER BY c.code LIMIT 1
+                )
+                """, arguments: [noteID.uuidString])
+            }
+            return before
+        }
+    }
+
+    /// Makes one of the item's homes its primary one. Returns the homes before, for Undo.
+    func makePrimaryHome(_ noteID: UUID, categoryID: UUID) throws -> [FilingMembership] {
+        try readyDatabase().write { db in
+            _ = try Self.liveNote(noteID, in: db)
+            let before = try Self.filingMemberships(
+                table: "note_categories", column: "noteID", id: noteID, in: db
+            )
+            guard before.contains(where: { $0.categoryID == categoryID }) else { return before }
+            try Self.replaceMemberships(
+                before.map {
+                    FilingMembership(
+                        categoryID: $0.categoryID,
+                        primary: $0.categoryID == categoryID
+                    )
+                },
+                table: "note_categories", column: "noteID", id: noteID, in: db
+            )
+            return before
+        }
+    }
+
+    /// Puts the item's homes back as they were; categories deleted since are skipped.
+    func restoreHomes(_ noteID: UUID, _ homes: [FilingMembership]) throws {
+        try readyDatabase().write { db in
+            _ = try Self.liveNote(noteID, in: db)
+            let existing = try Set(String.fetchAll(db, sql: "SELECT id FROM decimal_categories"))
+            try Self.replaceMemberships(
+                homes.filter { existing.contains($0.categoryID.uuidString) },
+                table: "note_categories", column: "noteID", id: noteID, in: db
+            )
+        }
+    }
+
+    /// Removes a secondary home; a home that has since become primary stays.
+    func removeSecondaryHome(_ noteID: UUID, categoryID: UUID) throws {
+        try readyDatabase().write { db in
+            try db.execute(
+                sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ? AND isPrimary = 0",
+                arguments: [noteID.uuidString, categoryID.uuidString]
+            )
+        }
+    }
+
     func fileNote(
         _ noteID: UUID,
         categoryID: UUID,
@@ -447,6 +540,9 @@ extension DocumentStore {
             try db.execute(sql: """
             INSERT INTO note_categories VALUES (?, ?, ?) ON CONFLICT(noteID, categoryID) DO UPDATE SET isPrimary = excluded.isPrimary
             """, arguments: [noteID.uuidString, categoryID.uuidString, primary])
+            if primary {
+                try Self.leaveInbox(noteID, filedIn: categoryID, in: db)
+            }
             if includeSources {
                 for source in try String.fetchAll(
                     db,
@@ -684,16 +780,37 @@ extension DocumentStore {
         }
     }
 
+    /// Filing somewhere else also leaves Inbox, which only means "not sorted yet".
     private static func filedMemberships(
         _ before: [FilingMembership],
-        destination: UUID
+        destination: UUID,
+        inbox: UUID?
     ) -> [FilingMembership] {
-        let result = before.filter { $0.categoryID != destination }.map { FilingMembership(
+        let result = before.filter {
+            $0.categoryID != destination && $0.categoryID != inbox
+        }.map { FilingMembership(
             categoryID: $0.categoryID,
             primary: false
         ) }
             + [FilingMembership(categoryID: destination, primary: true)]
         return result.sorted { $0.categoryID.uuidString < $1.categoryID.uuidString }
+    }
+
+    /// The built-in Inbox, which filing elsewhere leaves.
+    static func inboxID(in db: Database) throws -> UUID? {
+        try String.fetchOne(
+            db, sql: "SELECT id FROM decimal_categories WHERE code = ?",
+            arguments: [DecimalCategory.inboxCode]
+        ).flatMap(UUID.init(uuidString:))
+    }
+
+    /// Leaves Inbox once the item has a real home.
+    static func leaveInbox(_ noteID: UUID, filedIn categoryID: UUID, in db: Database) throws {
+        guard let inbox = try inboxID(in: db), inbox != categoryID else { return }
+        try db.execute(
+            sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ?",
+            arguments: [noteID.uuidString, inbox.uuidString]
+        )
     }
 
     private static func replaceMemberships(
@@ -718,6 +835,7 @@ extension DocumentStore {
         action: String,
         in db: Database
     ) throws -> Bool {
+        let inbox = try inboxID(in: db)
         let proposal: String = row["id"], status: String = row["status"]
         if action == "reject", status == "pending" {
             try db.execute(
@@ -730,7 +848,11 @@ extension DocumentStore {
         guard undo || (action == "apply" && status == "pending") else { return status == "stale" }
         let id = try uuid(row["leftID"])
         let revision: String = row["leftRevision"]
-        let expected = undo ? filedMemberships(change.before, destination: change.destination) :
+        let expected = undo ? filedMemberships(
+            change.before,
+            destination: change.destination,
+            inbox: inbox
+        ) :
             change.before
         var valid = try String.fetchOne(
             db,
@@ -759,7 +881,11 @@ extension DocumentStore {
             valid = valid && destinationExists
         }
         for (source, before) in change.sources {
-            let expected = undo ? filedMemberships(before, destination: change.destination) : before
+            let expected = undo ? filedMemberships(
+                before,
+                destination: change.destination,
+                inbox: inbox
+            ) : before
             valid = try valid && filingMemberships(
                 table: "source_categories",
                 column: "sourceID",
@@ -786,7 +912,11 @@ extension DocumentStore {
             )
         }
         try replaceMemberships(
-            undo ? change.before : filedMemberships(change.before, destination: change.destination),
+            undo ? change.before : filedMemberships(
+                change.before,
+                destination: change.destination,
+                inbox: inbox
+            ),
             table: "note_categories",
             column: "noteID",
             id: id,
@@ -794,7 +924,11 @@ extension DocumentStore {
         )
         for (source, before) in change.sources {
             try replaceMemberships(
-                undo ? before : filedMemberships(before, destination: change.destination),
+                undo ? before : filedMemberships(
+                    before,
+                    destination: change.destination,
+                    inbox: inbox
+                ),
                 table: "source_categories",
                 column: "sourceID",
                 id: source,

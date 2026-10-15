@@ -368,7 +368,8 @@ private struct NoTranscriptProvider: YouTubeProviding {
         try await reopened.reviewProposal(proposal.id, action: "apply")
         try await reopened.reviewProposal(proposal.id, action: "apply")
         #expect(try await reopened.categories(for: note.id).first?.id == home.id)
-        #expect(try await reopened.categories(for: note.id).contains(inbox))
+        // Filed somewhere real, it leaves Inbox; Undo puts it back.
+        #expect(try await !reopened.categories(for: note.id).contains(inbox))
         try await reopened.reviewProposal(proposal.id, action: "undo")
         #expect(try await reopened.categories(for: note.id) == [inbox])
         #expect(try await reopened.document(id: note.id) == note)
@@ -2021,6 +2022,159 @@ private extension [String] {
             )))
         }
         return notes
+    }
+}
+
+extension ConversationTests {
+    @MainActor @Test func librarianSuggestsAHomeThatFilesWithUndo() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Agent planning loops", markdown: "How agents plan and reflect."
+        ))
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        await model.load()
+        let suggestion = try #require(await model.suggestHome(for: note.id))
+        #expect(suggestion.category?.code == "31.04")
+        #expect(!suggestion.isNew)
+        #expect(suggestion.rationale == "Fixture rationale.")
+        // Asking changes nothing.
+        #expect(try await store.categories(for: note.id).isEmpty)
+
+        let changes = try await model.fileAsSuggested(note.id, suggestion)
+        #expect(try await store.categories(for: note.id).first?.code == "31.04")
+        try await model.undoSuggestedFiling(changes)
+        #expect(try await store.categories(for: note.id).isEmpty)
+
+        // A home that doesn't exist is created only on File Here, and removed again by Undo.
+        var inference = ConversationFixtureInference()
+        inference.requestedHome = "Agent memory"
+        inference.newCategoryCode = "31.05"
+        let fresh = ConversationModel(
+            store: store, coordinator: AgentCoordinator(store: store, inference: inference)
+        )
+        await fresh.load()
+        let created = try #require(await fresh.suggestHome(for: note.id))
+        #expect(created.isNew && created.category?.label == "31.05 Agent memory")
+        #expect(try await !store.categories().contains { $0.code == "31.05" })
+        let filed = try await fresh.fileAsSuggested(note.id, created)
+        #expect(try await store.categories(for: note.id).first?.code == "31.05")
+        try await fresh.undoSuggestedFiling(filed)
+        #expect(try await !store.categories().contains { $0.code == "31.05" })
+
+        // Other plausible homes are offered as extra homes, added and undone one at a time.
+        var several = ConversationFixtureInference()
+        several.classificationAlternatives = ["31.01", "31.04"]
+        let multi = ConversationModel(
+            store: store, coordinator: AgentCoordinator(store: store, inference: several)
+        )
+        await multi.load()
+        let spread = try #require(await multi.suggestHome(for: note.id))
+        #expect(spread.category?.code == "31.04")
+        #expect(spread.alsoFits.map(\.code) == ["31.01"])
+        let primary = try await multi.fileAsSuggested(note.id, spread)
+        let extra = try #require(spread.alsoFits.first)
+        #expect(try await multi.addSuggestedHome(note.id, extra))
+        #expect(try await store.categories(for: note.id).map(\.code) == ["31.04", "31.01"])
+        // Already there: not added twice, so Undo can't remove a home it didn't add.
+        #expect(try await !multi.addSuggestedHome(note.id, extra))
+        try await multi.removeSuggestedHome(note.id, extra)
+        #expect(try await store.categories(for: note.id).map(\.code) == ["31.04"])
+        try await multi.undoSuggestedFiling(primary)
+        #expect(try await store.categories(for: note.id).isEmpty)
+
+        // Without a model there's nothing to suggest.
+        var offline = ConversationFixtureInference()
+        offline.planningUnavailable = true
+        #expect(try await AgentCoordinator(store: store, inference: offline)
+            .suggestHome(for: note.id) == nil)
+    }
+}
+
+extension ConversationTests {
+    @Test func homesCanBeRemovedOrMadePrimaryWithUndo() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Item", markdown: "Body"))
+        let byCode = try await Dictionary(uniqueKeysWithValues: store.categories().map { (
+            $0.code,
+            $0.id
+        ) })
+        let codes = { try await store.categories(for: note.id).map(\.code) }
+        try await store.fileNote(note.id, categoryID: #require(byCode["31.04"]))
+        _ = try await store.addSecondaryHome(note.id, categoryID: #require(byCode["31.01"]))
+        _ = try await store.addSecondaryHome(note.id, categoryID: #require(byCode["31"]))
+        #expect(try await codes() == ["31.04", "31", "31.01"])
+
+        // Removing the primary home promotes the lowest-coded one left.
+        let before = try await store.removeHome(note.id, categoryID: #require(byCode["31.04"]))
+        #expect(try await codes() == ["31", "31.01"])
+        try await store.restoreHomes(note.id, before)
+        #expect(try await codes() == ["31.04", "31", "31.01"])
+
+        let promoted = try await store.makePrimaryHome(
+            note.id,
+            categoryID: #require(byCode["31.01"])
+        )
+        #expect(try await codes() == ["31.01", "31", "31.04"])
+        try await store.restoreHomes(note.id, promoted)
+        #expect(try await codes().first == "31.04")
+
+        // Removing every home leaves it unfiled.
+        for code in ["31.04", "31", "31.01"] {
+            _ = try await store.removeHome(note.id, categoryID: #require(byCode[code]))
+        }
+        #expect(try await codes().isEmpty)
+    }
+
+    @Test func filingSomewhereElseLeavesInbox() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let byCode = try await Dictionary(uniqueKeysWithValues: store.categories().map { (
+            $0.code,
+            $0.id
+        ) })
+        let inbox = try #require(byCode["10"])
+        func inInbox() async throws -> MarkdownDocument {
+            let note = try await store.save(MarkdownDocument(
+                name: "Item",
+                markdown: UUID().uuidString
+            ))
+            try await store.fileNote(note.id, categoryID: inbox)
+            return note
+        }
+        // Change… in the filing column.
+        let manual = try await inInbox()
+        try await store.fileNote(manual.id, categoryID: #require(byCode["31.04"]))
+        #expect(try await store.categories(for: manual.id).map(\.code) == ["31.04"])
+
+        // File Here and the library agent's filing changes, with Undo putting Inbox back.
+        let agent = try await inInbox()
+        let batch = UUID()
+        try await store.saveAgentChanges([AgentChangeDraft(
+            kind: .filing, noteID: agent.id, code: "31.01", before: "10 Inbox",
+            after: "31.01 Distributed Systems", reason: ""
+        )], taskID: batch)
+        let ids = try await store.agentChanges(taskID: batch).map(\.id)
+        _ = try await store.applyAgentChanges(ids)
+        #expect(try await store.categories(for: agent.id).map(\.code) == ["31.01"])
+        _ = try await store.undoAgentChanges(ids)
+        #expect(try await store.categories(for: agent.id).map(\.code) == ["10"])
+
+        // A filing proposal applied from chat.
+        let chat = try await inInbox()
+        let task = try await store.beginConversation("file it", owner: .librarian)
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        let proposal = try await store.proposeFiling(
+            noteID: chat.id, category: home, rationale: "", taskID: task
+        )
+        try await store.reviewProposal(proposal, action: "apply")
+        #expect(try await store.categories(for: chat.id).map(\.code) == ["31.04"])
+        try await store.reviewProposal(proposal, action: "undo")
+        #expect(try await store.categories(for: chat.id).map(\.code) == ["10"])
     }
 }
 

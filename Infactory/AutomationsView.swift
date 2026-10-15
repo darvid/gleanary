@@ -124,7 +124,7 @@ private struct AutomationListRow: View {
 
     private var status: String {
         if model.running == kind {
-            return "Running…"
+            return model.progress ?? "Running…"
         }
         var parts = [config.enabled ? AutomationKind.intervalLabel(config.interval) : "Off"]
         if let run = model.runs[kind]?.first {
@@ -276,7 +276,8 @@ private struct AutomationDetail: View {
         HStack(spacing: 10) {
             if running {
                 Label {
-                    Text("Running…").fadesOnChange(running)
+                    StageProgressText(model.progress ?? "Running…").lineLimit(1)
+                        .truncationMode(.middle)
                 } icon: {
                     Image(systemName: "progress.indicator")
                         .symbolEffect(.variableColor.iterative, options: .repeating)
@@ -335,7 +336,20 @@ private struct AutomationDetail: View {
                 "Archived items keep their saved copy and show under Archive; Undo or Unarchive puts them back."
             )
         }
-        if kind.usesModel {
+        if kind == .weeklyDigest {
+            Divider()
+            AutomationRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Write it up with the Writer")
+                    Text(writerNote).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } content: {
+                Toggle("Write it up with the Writer", isOn: binding(\.usesWriter))
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+        }
+        if kind.usesModel || config.usesWriter {
             Divider()
             AutomationRow("Allow ChatGPT when it's the AI provider") {
                 Toggle("Allow ChatGPT", isOn: binding(\.cloudAllowed))
@@ -348,6 +362,10 @@ private struct AutomationDetail: View {
                 }
             }
         }
+    }
+
+    private var writerNote: String {
+        "Groups the week by topic in your default writing style, citing each item. More than \(WriterLimits.localScope) items need ChatGPT, and the newest \(WriterLimits.maximumScope) are written up; when it can't run, the digest lists the items as usual."
     }
 
     private var policy: String {
@@ -512,6 +530,7 @@ private struct RunRow: View {
                         outcome: outcome,
                         entries: entries,
                         trailing: trailing(for: outcome),
+                        gone: model.goneItems,
                         open: open
                     )
                 }
@@ -533,6 +552,8 @@ private struct RunRow: View {
             Button("Undo") { Task { await model.undo(run) } }
                 .controlSize(.small)
                 .help(run.kind.undoHelp)
+        } else if outcome == .changed, model.undoneRuns.contains(run.id) {
+            Text("Undone").font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -542,6 +563,8 @@ private struct OutcomeGroup<Trailing: View>: View {
     let outcome: AutomationEntry.Outcome
     let entries: [AutomationEntry]
     let trailing: Trailing
+    /// Items no longer in the library: struck through, with nothing to open.
+    let gone: Set<UUID>
     let open: (UUID) -> Void
     @State private var showsAll = false
 
@@ -567,7 +590,12 @@ private struct OutcomeGroup<Trailing: View>: View {
             }
             ForEach(Array(visible.enumerated()), id: \.offset) { _, entry in
                 VStack(alignment: .leading, spacing: 1) {
-                    if let id = entry.itemID {
+                    if let id = entry.itemID, gone.contains(id) {
+                        Text(entry.title).strikethrough().foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .help("No longer in your library")
+                            .accessibilityLabel("\(entry.title), no longer in your library")
+                    } else if let id = entry.itemID {
                         Button(entry.title) { open(id) }
                             .buttonStyle(.link).lineLimit(1)
                             .help("Show this item")

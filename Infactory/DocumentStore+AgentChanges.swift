@@ -15,6 +15,9 @@ struct AgentChange: Identifiable, Sendable, Equatable {
         /// A new note an automation wrote, titled `after`; Undo removes it. Only ever applied
         /// by the automation itself, never proposed.
         case note
+        /// A refreshed Writer document's new text (`after`) replacing `before`, saved as a new
+        /// revision of the note once applied.
+        case revision
     }
 
     let id: UUID
@@ -59,19 +62,26 @@ private struct FilingSnapshot: Codable {
 extension DocumentStore {
     func saveAgentChanges(_ drafts: [AgentChangeDraft], taskID: UUID) throws {
         guard !drafts.isEmpty else { return }
-        try readyDatabase().write { db in
-            let now = Date().timeIntervalSince1970
-            for (ordinal, draft) in drafts.enumerated() {
-                try db.execute(sql: """
-                INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
-                    after, reason, baseRevision, status, createdAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-                """, arguments: [
-                    UUID().uuidString, taskID.uuidString, ordinal, draft.kind.rawValue,
-                    draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code,
-                    draft.before, draft.after, draft.reason, draft.baseRevision?.uuidString, now,
-                ])
-            }
+        try readyDatabase()
+            .write { db in try Self.insertAgentChanges(drafts, taskID: taskID, in: db) }
+    }
+
+    static func insertAgentChanges(
+        _ drafts: [AgentChangeDraft],
+        taskID: UUID,
+        in db: Database
+    ) throws {
+        let now = Date().timeIntervalSince1970
+        for (ordinal, draft) in drafts.enumerated() {
+            try db.execute(sql: """
+            INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
+                after, reason, baseRevision, status, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, arguments: [
+                UUID().uuidString, taskID.uuidString, ordinal, draft.kind.rawValue,
+                draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code,
+                draft.before, draft.after, draft.reason, draft.baseRevision?.uuidString, now,
+            ])
         }
     }
 
@@ -202,7 +212,7 @@ extension DocumentStore {
 
     /// Title and body changes grouped by note, so each note changes in one revision.
     private static func textBatches(_ rows: [Row]) -> [[Row]] {
-        let text = rows.filter { ["title", "summary"].contains($0["kind"] as String) }
+        let text = rows.filter { ["title", "summary", "revision"].contains($0["kind"] as String) }
         var order: [String] = []
         var groups: [String: [Row]] = [:]
         for row in text {
@@ -284,6 +294,9 @@ extension DocumentStore {
         INSERT INTO note_categories VALUES (?, ?, 1)
         ON CONFLICT(noteID, categoryID) DO UPDATE SET isPrimary = 1
         """, arguments: [noteID, categoryID])
+        if let destination = UUID(uuidString: categoryID) {
+            try leaveInbox(note.id, filedIn: destination, in: db)
+        }
         try db.execute(
             sql: "UPDATE agent_changes SET status = 'applied', snapshot = ? WHERE id = ?",
             arguments: [

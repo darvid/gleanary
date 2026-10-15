@@ -78,31 +78,16 @@ struct LibraryAgent {
             "role": "user",
             "content": prompt,
         ]))
-        let tools = try AgentToolbox.definitions()
-        var calls = 0
-        for _ in 0 ..< Self.maximumTurns {
-            try Task.checkCancellation()
-            let turn = try await model.agentTurn(
-                instructions: Self.instructions, input: input, tools: tools
-            )
-            input += turn.output
-            guard !turn.calls.isEmpty else {
-                return await outcome(turn.text)
-            }
-            for call in turn.calls {
-                try Task.checkCancellation()
-                calls += 1
-                let output = calls > Self.maximumCalls
-                    ? #"{"error":"Tool budget used up. Stop and summarize what you proposed."}"#
-                    : await toolbox.run(call)
-                await progress(toolbox.progress)
-                try input.append(JSONSerialization.data(withJSONObject: [
-                    "type": "function_call_output", "call_id": call.id, "output": output,
-                ]))
-            }
+        let loop = try ToolLoop(
+            model: model, instructions: Self.instructions, tools: AgentToolbox.definitions()
+        )
+        let text = try await loop.run(input: input) { call in
+            await toolbox.run(call)
+        } progress: {
+            await progress(toolbox.progress)
         }
         return await outcome(
-            "I stopped after \(Self.maximumTurns) steps. Review what I proposed so far."
+            text ?? "I stopped after \(Self.maximumTurns) steps. Review what I proposed so far."
         )
     }
 
@@ -114,6 +99,49 @@ struct LibraryAgent {
             changes: toolbox.changes,
             touched: toolbox.touched
         )
+    }
+}
+
+/// The bounded ChatGPT tool loop the library agent and the Writer share: turns until the model
+/// stops calling tools, within `LibraryAgent.maximumTurns` turns and `maximumCalls` calls.
+struct ToolLoop {
+    let model: any AgentResponding
+    let instructions: String
+    let tools: Data
+
+    /// The model's closing text, or nil when it ran out of turns. `finished` ends the loop
+    /// early, after the call that satisfied it, with that turn's text.
+    func run(
+        input initial: [Data],
+        dispatch: (AgentCall) async -> String,
+        progress: () async -> Void,
+        finished: () async -> Bool = { false }
+    ) async throws -> String? {
+        var input = initial
+        var calls = 0
+        for _ in 0 ..< LibraryAgent.maximumTurns {
+            try Task.checkCancellation()
+            let turn = try await model.agentTurn(
+                instructions: instructions, input: input, tools: tools
+            )
+            input += turn.output
+            guard !turn.calls.isEmpty else { return turn.text }
+            for call in turn.calls {
+                try Task.checkCancellation()
+                calls += 1
+                let output = calls > LibraryAgent.maximumCalls
+                    ? #"{"error":"Tool budget used up. Stop and summarize what you did."}"#
+                    : await dispatch(call)
+                await progress()
+                try input.append(JSONSerialization.data(withJSONObject: [
+                    "type": "function_call_output", "call_id": call.id, "output": output,
+                ]))
+            }
+            if await finished() {
+                return turn.text
+            }
+        }
+        return nil
     }
 }
 

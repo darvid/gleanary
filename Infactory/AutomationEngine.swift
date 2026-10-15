@@ -34,6 +34,11 @@ actor AutomationEngine {
         var capturePoll: Duration = .seconds(1)
         /// The model that suggests homes for unfiled items, when one is available.
         var filer: @Sendable () async -> (any ConversationInferring)? = { nil }
+        /// The model the Writer uses for a written-up digest, when one is available.
+        /// Throws when the AI provider is ChatGPT but it can't be used right now.
+        var writer: @Sendable () async throws -> (any ConversationInferring)? = { nil }
+        /// The default writing style, read when a digest is written up.
+        var writingStyle: @Sendable () -> WritingStyle = { .plain }
     }
 
     static let accessCheck = "access"
@@ -48,13 +53,20 @@ actor AutomationEngine {
 
     let store: DocumentStore
     let dependencies: Dependencies
+    /// Where the current run says what it's doing, such as "Fetching 2 of 5: example.com".
+    private var progress: @Sendable (String) async -> Void = { _ in }
 
     init(store: DocumentStore, dependencies: Dependencies) {
         self.store = store
         self.dependencies = dependencies
     }
 
-    func run(_ config: AutomationConfig) async -> AutomationRun {
+    func run(
+        _ config: AutomationConfig,
+        progress: @escaping @Sendable (String) async -> Void = { _ in }
+    ) async -> AutomationRun {
+        self.progress = progress
+        defer { self.progress = { _ in } }
         let started = dependencies.now()
         let runID = await (try? store.beginAutomationRun(config.kind, at: started)) ?? UUID()
         var run = AutomationRun(id: runID, kind: config.kind, startedAt: started)
@@ -504,6 +516,10 @@ actor AutomationEngine {
     }
 
     // MARK: Shared
+
+    func report(_ step: String) async {
+        await progress(step)
+    }
 
     func remainingCalls(_ config: AutomationConfig) async throws -> Int {
         let start = Calendar.current.startOfDay(for: dependencies.now())
