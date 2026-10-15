@@ -1,4 +1,4 @@
-# Infactory
+# Gleanary
 
 <!-- impeccable:product-schema 1 -->
 

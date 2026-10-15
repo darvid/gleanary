@@ -17,27 +17,27 @@ if [[ "$configuration" != debug && "$configuration" != release ]]; then
     exit 1
 fi
 build_args=(--configuration "$configuration" --sdk "$sdk")
-swift build "${build_args[@]}" --product Infactory
+swift build "${build_args[@]}" --product Gleanary
 bin_dir="$(swift build "${build_args[@]}" --show-bin-path)"
 
-stage="$(mktemp -d "$project_dir/.build/infactory-app.XXXXXX")"
+stage="$(mktemp -d "$project_dir/.build/gleanary-app.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
-contents="$stage/Infactory.app/Contents"
+contents="$stage/Gleanary.app/Contents"
 mkdir -p "$contents/MacOS" "$contents/Resources"
-cp "$bin_dir/Infactory" "$contents/MacOS/Infactory"
+cp "$bin_dir/Gleanary" "$contents/MacOS/Gleanary"
 for resource in "$bin_dir"/*.bundle; do
     [[ -d "$resource" ]] || continue
     ditto "$resource" "$contents/Resources/$(basename "$resource")"
 done
 # Info.plist names it in CFBundleIconFile. AppIcon.iconset beside it is the editable source;
-# rebuild the .icns with `iconutil -c icns Infactory/AppIcon/AppIcon.iconset`.
-cp Infactory/AppIcon/AppIcon.icns "$contents/Resources/AppIcon.icns"
+# rebuild the .icns with `iconutil -c icns Gleanary/AppIcon/AppIcon.iconset`.
+cp Gleanary/AppIcon/AppIcon.icns "$contents/Resources/AppIcon.icns"
 
 plist="$contents/Info.plist"
-cp Infactory/Info.plist "$plist"
-plutil -replace CFBundleIdentifier -string app.getinfactory "$plist"
-plutil -replace CFBundleExecutable -string Infactory "$plist"
-plutil -replace CFBundleName -string Infactory "$plist"
+cp Gleanary/Info.plist "$plist"
+plutil -replace CFBundleIdentifier -string app.gleanary "$plist"
+plutil -replace CFBundleExecutable -string Gleanary "$plist"
+plutil -replace CFBundleName -string Gleanary "$plist"
 plutil -replace CFBundlePackageType -string APPL "$plist"
 plutil -replace CFBundleVersion -string 1 "$plist"
 plutil -replace CFBundleShortVersionString -string 0.1 "$plist"
@@ -48,10 +48,10 @@ plutil -replace NSHighResolutionCapable -bool YES "$plist"
 # app and asks for Keychain access again. Set CODESIGN_IDENTITY (e.g. in .env) to a
 # local signing certificate to keep a stable identity across rebuilds.
 codesign --force --sign "${CODESIGN_IDENTITY:--}" \
-    --entitlements Infactory/Infactory.entitlements "$stage/Infactory.app"
-codesign --verify --strict "$stage/Infactory.app"
+    --entitlements Gleanary/Gleanary.entitlements "$stage/Gleanary.app"
+codesign --verify --strict "$stage/Gleanary.app"
 
 # Replace only the generated bundle; the sandboxed library is untouched.
-rm -rf "$project_dir/.build/Infactory.app"
-mv "$stage/Infactory.app" "$project_dir/.build/Infactory.app"
-printf 'Built %s\n' "$project_dir/.build/Infactory.app"
+rm -rf "$project_dir/.build/Gleanary.app"
+mv "$stage/Gleanary.app" "$project_dir/.build/Gleanary.app"
+printf 'Built %s\n' "$project_dir/.build/Gleanary.app"

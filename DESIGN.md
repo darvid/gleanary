@@ -1,62 +1,71 @@
 ---
-name: Infactory Native Library
-description: Saved evidence, ready for conversation; a quiet native macOS Library.
+name: Gleanary Native Library
+description: Saved evidence, ready for conversation; a native macOS Library.
 colors:
   ink: "#000000"
   inverse-ink: "#ffffff"
-  action-light: "rgb(94% 94% 94%)"
-  action-light-pressed: "rgb(85% 85% 85%)"
-  action-dark: "rgb(13% 13% 13%)"
-  action-dark-pressed: "rgb(22% 22% 22%)"
-  action-border-light: "rgb(56% 56% 56%)"
-  action-border-dark: "rgb(42% 42% 42%)"
 typography:
   title:
     fontFamily: "-apple-system"
-    fontWeight: 600
+    fontWeight: 700
   row-title:
     fontFamily: "-apple-system"
     fontWeight: 500
   body:
     fontFamily: "-apple-system"
+    fontSize: "14pt"
   metadata:
     fontFamily: "-apple-system"
 rounded:
-  preview-action: "6pt"
   search: "7pt"
+  source-row: "8pt"
+  preview-card: "12pt"
+  composer: "24pt"
 spacing:
-  tight: "2pt"
   row-stack: "5pt"
-  action-y: "6pt"
   row-y: "7pt"
   compact: "8pt"
   row-gap: "10pt"
-  metadata-actions: "12pt"
   standard: "14pt"
   handoff-bottom: "16pt"
   list-inset: "18pt"
   reading-stack: "20pt"
   sheet-inset: "24pt"
-  reading-inset: "28pt"
+  reading-y: "28pt"
+  reading-x: "32pt"
 components:
   search:
     rounded: "{rounded.search}"
     padding: "{spacing.compact}"
-  preview-action:
-    rounded: "{rounded.preview-action}"
-    padding: "6pt 10pt"
-  preview-action-light:
-    backgroundColor: "{colors.action-light}"
-    textColor: "{colors.ink}"
-  preview-action-dark:
-    backgroundColor: "{colors.action-dark}"
-    textColor: "{colors.inverse-ink}"
   document-row:
     typography: "{typography.row-title}"
     padding: "7pt 0"
+  preview-info:
+    rounded: "{rounded.preview-card}"
+    padding: "{spacing.standard}"
+  preview-hero:
+    rounded: "{rounded.preview-card}"
+    height: "170pt"
+  composer:
+    rounded: "{rounded.composer}"
+    padding: "9pt 12pt"
 ---
 
-# Design System: Infactory Native Library
+# Design System: Gleanary Native Library
+
+Implementation reference for agents changing native Library and compatible
+app controls. Refreshed 2026-10-15; use SwiftUI source for implementation
+facts and this document for the design direction. The sidecar at
+`.impeccable/design.json` records native bindings and illustrative samples.
+
+- [Overview](#overview)
+- [Colors](#colors)
+- [Typography](#typography)
+- [Layout](#layout)
+- [Elevation & Depth](#elevation--depth)
+- [Shapes](#shapes)
+- [Components](#components)
+- [Do's and Don'ts](#dos-and-donts)
 
 ## Overview
 
@@ -74,53 +83,146 @@ The product's platform posture is adaptive; the shipping surface is SwiftUI on m
 ## Colors
 
 ### Primary
-System `Color.accentColor` remains available to compatible prominent preview actions; Library disables summary-generation actions. This is not a branded accent palette or a reason to recolor every action.
+
+Use the system accent where no category tint applies. DocumentPreview
+tints its actions and links with the primary category's AtlasPalette
+ink. Native button styles determine their appearance. Library keeps
+summary generation disabled in its reading pane; this is not a fixed
+grayscale button system.
 
 ### Neutral
-`Color(nsColor: .windowBackgroundColor)` owns the Library background. `controlBackgroundColor` owns search, error notices, and Markdown code blocks. Primary/secondary foreground styles and native `Divider` retain macOS appearance behavior; they are not frozen screenshot hex values. The sidecar records these native bindings because CSS color strings cannot faithfully encode NSColor semantics.
 
-Sidebar labels use ink in light appearance, inverse ink when selected or in dark appearance; icons and filing codes use 0.72 opacity. Selection is neutral and native, with appearance and focus-dependent rendering. The explicit grayscale frontmatter colors belong to `PreviewActionStyle`, not the entire app's surfaces. Disabled action text uses 0.55 opacity; its border is one point.
+`Color(nsColor: .windowBackgroundColor)` owns the Library background.
+`controlBackgroundColor` owns search, error notices, the composer, and
+Markdown code blocks. Primary/secondary foreground styles and native
+Divider retain macOS appearance behavior. Do not freeze these semantic
+colors as screenshot hex values.
+
+Sidebar labels use ink in light appearance and inverse ink when selected
+or in dark appearance. LibrarySidebarLabelStyle dims icons to 0.72
+opacity; filing codes use 0.5 opacity. Category rows use AtlasPalette
+colors for their dots or folder icons. Selection remains native and
+focus-dependent. Preview buttons use native disabled and pressed states,
+not custom grayscale fills or borders.
 
 **The Semantic Surface Rule.** Use native semantic surfaces for Library backgrounds; do not replace them with sampled screenshot colors.
 
 ## Typography
 
-Use SwiftUI system text styles, not a fixed web type scale. Document titles and Markdown level-one headings use `.title2.weight(.semibold)`; list scope headings use `.title3.weight(.semibold)`; toolbar titles and lower Markdown headings use `.headline`. Row titles use `.body.weight(.medium)`. Reading uses `.body`; coverage and preview actions use `.callout`; filing, provenance, counts, and hints use `.caption`. Counts use monospaced digits and fenced code uses `.body.monospaced()`.
+Use SwiftUI system text styles except where the reading view explicitly
+sets prose size. The frontmatter's title and body roles describe
+DocumentPreview, not every title and body in the app.
 
-Paragraphs add four points of line spacing. No custom font, display face, uppercase eyebrow, or tracking scale is installed.
+- Document names use `.title.weight(.bold)`.
+- Markdown level-one headings use `.title2.weight(.semibold)`; lower
+  headings use `.headline`.
+- List scope headings and preview content headings use
+  `.title3.weight(.semibold)`.
+- Row titles use `.body.weight(.medium)` and allow two lines.
+- DocumentPreview prose uses `.system(size: 14)`. MarkdownPreview defaults
+  to `.body` in callers that do not override it.
+- The source/coverage line uses `.subheadline`; metadata cards and category
+  chips use `.callout`. Row metadata and quiet hints use `.caption`.
+- Counts use monospaced digits; fenced code uses `.body.monospaced()`.
+
+Paragraphs and quotes add four points of line spacing; bullet text adds
+three. No custom font, display face, uppercase eyebrow, or tracking
+scale is installed.
 
 ## Layout
 
-The hidden-title-bar window defaults to 1180 × 780pt with a 900 × 600pt minimum. A compact toolbar sits above a balanced, resizable `NavigationSplitView`; native behavior governs resizing, not invented mobile breakpoints.
+The hidden-title-bar window defaults to 1180 × 780pt with a 900 × 600pt
+minimum. ContentView places a manually resizable sidebar beside the main
+content. Library list/detail columns and the chat feed/saved-document
+preview use HSplitView, not NavigationSplitView. Native split behavior
+and explicit viewport constraints govern resizing.
 
 | Region | Minimum | Ideal | Maximum |
 | --- | ---: | ---: | ---: |
 | Filing sidebar | 180pt | 220pt | 340pt (drag its edge; double-click resets) |
 | Document list | 260pt | 330pt | 440pt |
-| Capture list | 260pt | 360pt | 480pt |
+| Capture list | 260pt | 330pt | 440pt |
 | Reading detail | 320pt | Flexible | Flexible |
+| Chat document preview | 320pt | 400pt | 520pt |
+| Filing inspector | 300pt | 300pt | 300pt |
 
-Reading content is leading-aligned, capped at 640pt before its reading inset. Document/action stacks use the frontmatter rhythm; toolbar horizontal inset is the reading-stack token and vertical inset is standard. List header and footer share list-inset. Rows reserve 18pt for SF Symbols; nested filing rows indent 10pt. Tables scroll horizontally, with 150pt cells and 16pt column gaps.
+Reading content is leading-aligned and capped at 680pt, with 32pt
+horizontal and 28pt vertical padding. Its width is
+`min(680, max(0, viewportWidth - 64))`, so metadata and images cannot
+enlarge a narrow scroll view. The chat split reserves room for its
+preview: the feed minimum is `min(460, max(240, viewportWidth - 321))`
+when the preview is open, otherwise 240pt.
 
-Preview actions use `ViewThatFits` to replace text labels with SF Symbols when needed, retaining accessibility labels and help. Search reload is debounced by 250ms; results paginate in groups of 80. These are behavior values, not animation tokens. Text that changes on screen moves one way everywhere (`StatusText.swift`): status wording cross-fades over 0.2s, counts roll with `numericText`. In-progress status uses the animated `progress.indicator` symbol on the text baseline, not a spinner.
+Document/action stacks use 20pt spacing. List headers and handoff
+controls use the list-inset token. Rows reserve 18pt for SF Symbols;
+nested filing rows indent 10pt. Markdown tables scroll horizontally,
+with 150pt cells and 16pt column gaps. Filing chips and their actions
+wrap together rather than imposing a single-line minimum width.
+
+Preview actions use ViewThatFits to replace text labels with SF Symbols
+when needed, retaining accessibility labels and help. Search reload is
+debounced by 250ms; results paginate in groups of 80. StatusText.swift
+cross-fades status wording over 0.2s and animates numericText counts
+with a 0.25s snappy transition. Document revision changes use a 0.25s
+opacity transition. In-progress status uses the repeating variable-color
+progress.indicator symbol on the text baseline.
 
 ## Elevation & Depth
 
-Library adds no custom shadows, gradients, or raised card system. Native split separators, list selection, control surfaces, and small action borders supply hierarchy. Native sheets and controls retain platform-provided depth; this is not a ban on system materials.
+Library uses semantic control surfaces, native selection, split
+separators, and metadata cards rather than custom shadows. The info card
+uses a quaternary background at 0.5 opacity. Native sheets and controls
+retain system-provided depth; this is not a ban on system materials.
 
 ## Shapes
 
-Search and preview-action radii are the frontmatter's small, observed curves. Lists, selection, sheets, and other standard controls keep native geometry rather than adopting these radii globally. Code blocks use a rectangular semantic control surface.
+Search uses the frontmatter's 7pt curve. Row source images use 8pt
+corners; detail source images and metadata cards use 12pt corners. The
+composer uses a 24pt rounded rectangle and a one-point primary border at
+0.1 opacity. Filing chips use Capsule. Native buttons, lists, sheets,
+and selection retain system geometry; do not apply an invented shared
+button radius. Code blocks use a rectangular control surface.
 
 ## Components
 
 - **Navigation:** `.sidebar` list with Library/Filing sections, SF Symbols, and category codes. Filing rows carry their Atlas colour: a 7pt dot before the name, or the area row's folder icon tinted with it. Graph and Mind Map are not Library navigation destinations. Go › Back/Forward (⌘[ / ⌘]) and the mouse's back and forward buttons step through visited places: Chat or a scope, the Atlas region, and an opened item. Free zooming updates the current place rather than adding one.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
-- **Preview actions:** compact grayscale bordered buttons for captured source and original link; borderless small Edit/File actions. Press changes the grayscale fill. Enabled prominent actions elsewhere retain the system accent with brightness offsets of −0.12 at rest and −0.18 pressed. No custom hover or motion contract is implemented.
+- **Preview actions:** Open Original uses `.borderedProminent`;
+  Captured Source and Summarize use `.bordered`. The action group uses
+  `.controlSize(.large)` and 8pt spacing, with category tint inherited
+  from the preview. More actions live in a borderless menu. Native styles
+  own hover, press, focus, and disabled appearance; no custom button fill,
+  radius, or brightness offset is specified.
 - **Reading:** selectable native Markdown text with headings, lists, quotes, fenced code, and simple tables. No scripts or remote images load. Coverage, provider, filing, expandable capture limitations, and related source/artifact links accompany the text. Legacy summaries are classified by persisted Summary.md/Markdown/hash evidence, not filename alone; originals remain accessible through source relationships.
-- **Source previews:** link captures show a 2:1 still above the row title as a 96pt-tall crop, like a link preview's image. The still is the page's own wide share card (`og:image`/`twitter:image`, at least 600px wide and 1.3–2.6:1), else the hero cut from the screenshot (fixed and sticky overlays hidden, framed from the first heading and any lead image just above it, or by Vision attention saliency), else the top of the page. Corners are 8pt continuous with a 0.5pt quaternary hairline so white pages hold an edge on light surfaces; dark appearance dims it by 14%. The image is local capture evidence, not a remote load, and is hidden from assistive technologies because the title repeats it. Rows without a screenshot keep the text-only layout; no placeholder art.
-- **Toolbar and settings:** chat and library share one toolbar shape: view-specific controls (the library's Map/List switcher) sit left of a trailing system-glass More menu (plain `ellipsis`) in both. Destructive or occasional actions such as Clear Conversation live in that menu. Settings is the standard Settings window (Infactory › Settings…, ⌘,) with toolbar tabs (AI & accounts, Capture, Filing, Writing), also linked from each More menu; no gear button in the window toolbar. Capture is a grouped form with two toggles, both on by default: summarize saved links, and save page previews (off fetches no screenshots, share images or video stills). Writing is a grouped form: Default style, a Details for picker, the preset's fields read-only with Copy to Custom, or the custom style's fields to edit.
+- **Source previews:** link captures show a top-aligned, fill-cropped
+  still above the row title at 96pt tall, like a link preview's image. The
+  still is the page's own wide share card (`og:image`/`twitter:image`, at
+  least 600px wide and 1.3–2.6:1), else the hero cut from the screenshot
+  (fixed and sticky overlays hidden, framed from the first heading and any
+  lead image just above it, or by Vision attention saliency), else the top
+  of the page. Corners are 8pt continuous with a 0.5pt quaternary hairline
+  so white pages hold an edge on light surfaces; dark appearance dims it
+  by 14%. The image is local capture evidence, not a remote load, and is
+  hidden from assistive technologies because the title repeats it. Rows
+  without a screenshot keep the text-only layout; no placeholder art.
+  Detail previews use a viewport-constrained 170pt hero with 12pt corners,
+  a 0.5pt separator border, and 0.9 image opacity in dark appearance.
+- **Toolbar and settings:** chat and library share one toolbar shape:
+  view-specific controls (the library's Map/List switcher) sit left of a
+  trailing system-glass More menu (plain `ellipsis`) in both. Destructive
+  or occasional actions such as Clear Conversation live in that menu.
+  Settings is the standard Settings window (Gleanary › Settings…, ⌘,) with
+  toolbar tabs (AI & accounts, Capture, Filing, Writing), also linked from
+  each More menu; no gear button in the window toolbar. Capture is a
+  grouped form with two toggles, both on by default: summarize saved
+  links, and save page previews (off fetches no screenshots, share images
+  or video stills). Writing is a grouped form: Default style, a Details
+  for picker, the preset's fields read-only with Copy to Custom, or the
+  custom style's fields to edit. The settings window is 680 × 560pt with
+  24pt content padding. AI controls are disabled during chat work; Stop
+  Task remains available above them. The observable running state unlocks
+  controls when the worker finishes.
 - **Bookmark import:** File › Import Bookmarks… opens a native sheet: choose a browser/Raindrop HTML or Raindrop CSV export, review each folder's destination (existing category, a proposed new Johnny Decimal category, or unfiled) in an inset list with subfolders indented 16pt, then import with determinate progress. Imports read only export metadata; a page is fetched after its note stays open for one second.
 - **Categorize Unfiled:** a sheet that runs suggestions in the background and groups them by category in collapsed disclosure rows with Accept All/Reject All, per-item accept/reject icons, an "Accept N Likely" bulk action with undo, and model-proposed new categories that must be created explicitly. The engine line states whether data leaves the Mac.
 - **Library agent changes:** with ChatGPT connected, multi-item requests such as retitling an inbox run a bounded tool loop that only proposes. Its reply carries one card (checklist symbol, a count per kind, "Proposed. Nothing changes until you apply.", and Review Changes…). The review sheet lists every change with a checkbox, grouped Titles, Summaries, New categories, Filing, Links, Moved links, Archive and New notes; old titles are struck through, new categories use the green New badge, and a filing into a proposed category selects with it. Applying rejects the unselected rest; the card then shows counts and Undo. The card sits under the task's last agent reply, whichever agent wrote it. A Writer refresh adds a Document revisions group first: the document's title and a line count ("12 lines added, 4 removed") over a line diff that is open by default, removed lines struck through on a red tint with a minus, added lines on a green tint with a plus, link targets hidden so citations read "(2)", and unchanged runs folded to a count.
@@ -132,7 +234,10 @@ Search and preview-action radii are the frontmatter's small, observed curves. Li
 - **Handoff:** pinned below list pagination; selected count, Clear, and Use in Chat. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
 - **Recovery and mutation:** Captures lists what you saved yourself plus anything that failed; successful background bookmark fetches aren't listed, and the toolbar is its only heading. When summaries fail because of the AI provider itself (a model or plan no longer available, sign-in, usage limit), one window notice says so with Open Settings…, rather than the same error on every item; it clears when the provider or model changes. A failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Captures, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Each home chip in the info card shows a small remove button (xmark.circle.fill) at its corner on hover and has a right-click menu (Make Primary Home, Remove from …); removing the primary home promotes the lowest-coded one left, and the change is confirmed inline with Undo. Filing an item anywhere but Inbox takes it out of Inbox, whether from Change…, File Here, the library agent or a chat proposal; Undo puts it back. Beside Change… in the info card, a Suggest link (sparkles) asks the Librarian: "Asking the Librarian…" while it works, then an inline card with the suggested home as a chip (green New badge for a category it would create), its one-line reason, an "Also fits" list of other homes as outlined chips (each with Also File Here, which adds a secondary home and turns into Added with Undo, or "Already here"), File Here (or Create and File Here) and Dismiss; filing shows "Filed in …" with Undo. Nothing changes until File Here. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, Markdown styled as it's typed by MarkdownEngine but saved character for character, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
 
-The sidecar's HTML/CSS samples are portable illustrations, not shipping components or a substitute for native focus, selection, typography, and accessibility behavior.
+The sidecar's HTML/CSS samples are portable illustrations, not shipping
+components or a substitute for native focus, selection, typography, and
+accessibility behavior. Semantic native bindings are authoritative over
+browser approximations.
 
 ## Do's and Don'ts
 
@@ -150,4 +255,15 @@ The user supplied ChatGPT's compact input as inspiration. The native composer no
 - **Don't** add a second composer or send a request automatically on handoff.
 - **Don't** extend these Library decisions into unseen Graph, Mind Map, or settings redesigns.
 
-Evidence: `Infactory/ContentView.swift`, `Infactory/DocumentPreview.swift`, `Infactory/InfactoryApp.swift`, and read-only supporting model/store code. Synthetic offscreen captures: `.build/library-redesign/infactory-library-{wide,narrow,light,source,summary}.png`. Independent fix review reports cache observation and legacy-summary classification resolved, with ship disposition at fix-review scope only; this is not external GUI or VoiceOver certification. No user database was accessed for this documentation.
+Implementation evidence: Gleanary/ContentView.swift,
+Gleanary/DocumentPreview.swift, Gleanary/ConversationView.swift,
+Gleanary/GleanaryApp.swift, Gleanary/StatusText.swift, and
+Gleanary/KnowledgeAtlasRenderer.swift.
+
+The savedDocumentPreviewFitsNarrowPanes regression in
+GleanaryTests/DocumentLibraryTests.swift checks preview widths of
+320/400/520pt and chat splits of 560/680/960pt. ConversationTests checks
+observation changes on task completion and cancellation. Synthetic
+offscreen captures verify narrow layout, not interactive GUI or
+VoiceOver certification. No user database was accessed for this
+documentation.

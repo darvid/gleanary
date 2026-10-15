@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "Infactory",
+    name: "Gleanary",
     platforms: [.macOS(.v26)],
-    products: [.executable(name: "Infactory", targets: ["Infactory"])],
+    products: [.executable(name: "Gleanary", targets: ["Gleanary"])],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
         .package(
@@ -24,7 +24,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "Infactory",
+            name: "Gleanary",
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "ForceSimulation", package: "Grape"),
@@ -33,16 +33,16 @@ let package = Package(
                 .product(name: "YouTubeKit", package: "YouTubeKit"),
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
             ],
-            path: "Infactory",
+            path: "Gleanary",
             // The app icon goes in the app bundle itself (scripts/build-app.sh), not the
             // resource bundle.
-            exclude: ["Infactory.entitlements", "Info.plist", "AppIcon"],
+            exclude: ["Gleanary.entitlements", "Info.plist", "AppIcon"],
             resources: [.process("Resources")]
         ),
         .testTarget(
-            name: "InfactoryTests",
-            dependencies: ["Infactory", .product(name: "GRDB", package: "GRDB.swift")],
-            path: "InfactoryTests"
+            name: "GleanaryTests",
+            dependencies: ["Gleanary", .product(name: "GRDB", package: "GRDB.swift")],
+            path: "GleanaryTests"
         ),
     ]
 )
