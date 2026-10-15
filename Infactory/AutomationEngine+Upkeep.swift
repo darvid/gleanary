@@ -1,0 +1,371 @@
+import Foundation
+
+/// The bookmark fetcher, failed-capture retry, unfiled filer and weekly digest. Fetches and
+/// retries go through the capture queue like anything you save; the filer only proposes; the
+/// digest writes one new note and never edits another.
+extension AutomationEngine {
+    /// Waits before each automatic retry of a failed capture; after the last, it stays in
+    /// Captures for you.
+    static let retryWaits: [TimeInterval] = [60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
+    static let retryWaitLabels = ["an hour", "a day", "a week"]
+    /// How long a run waits for one capture before moving on; the capture carries on.
+    static let longestCapture: Duration = .seconds(10 * 60)
+    static let digestSpan: TimeInterval = 7 * 24 * 60 * 60
+
+    // MARK: Bookmark fetcher
+
+    func fetchBookmarks(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        // On-device only keeps ChatGPT from summarizing these pages; they're still fetched.
+        var summarize = dependencies.capturesSummarize()
+        if summarize, !config.cloudAllowed {
+            summarize = await dependencies.summarizerIsLocal()
+        }
+        var budget = try await remainingCalls(config)
+        let retried = try await store.automationConfigs()
+            .first { $0.kind == .captureRetry }?.enabled ?? false
+        var sites = Set<String>()
+        for candidate in try await store.bookmarkFetchCandidates(limit: config.batchLimit) {
+            guard try await proceed(&run) else { return }
+            if summarize, budget <= 0 {
+                return outOfBudget(&run)
+            }
+            // Pages come one at a time; a site already fetched this run waits a moment first.
+            if !sites.insert(candidate.url.host()?.lowercased() ?? "").inserted {
+                try await Task.sleep(for: dependencies.politeness)
+            }
+            guard let before = try await store.document(id: candidate.id),
+                  let jobID = try await dependencies.fetchBookmark(candidate.id, summarize)
+            else { continue }
+            run.examined += 1
+            let job = try await finishCapture(jobID)
+            if summarize, job?.state == .ready {
+                budget -= 1
+                run.calls += 1
+            }
+            try await recordFetch(candidate, before: before, job: job, retried: retried, &run)
+        }
+    }
+
+    private func recordFetch(
+        _ candidate: (id: UUID, url: URL, title: String),
+        before: MarkdownDocument,
+        job: CaptureJob?,
+        retried: Bool,
+        _ run: inout AutomationRun
+    ) async throws {
+        let (id, title, now) = (candidate.id, candidate.title, dependencies.now())
+        switch job?.state {
+        case .ready:
+            try await store.recordCheck(id, kind: Self.fetchCheck, at: now, state: "done")
+            run.changed += 1
+            guard job?.noteID == id, let after = try await store.document(id: id),
+                  after.revision != before.revision
+            else {
+                return run.note(.changed, job?.noteID, title, "The page is saved as another item.")
+            }
+            try await store.recordAppliedChange(
+                AgentChangeDraft(
+                    kind: .summary, noteID: id, before: before.markdown, after: after.markdown,
+                    reason: "Fetched by the bookmark fetcher.", baseRevision: before.revision
+                ),
+                appliedRevision: after.revision,
+                runID: run.id
+            )
+            let unsummarized = job?.progress.hasPrefix("Saved full text without a summary")
+            run.note(
+                .changed,
+                id,
+                after.name,
+                unsummarized == true
+                    ? "Fetched the page. \(job?.progress ?? "")" : "Fetched the page."
+            )
+        case .failed:
+            try await store.recordCheck(
+                id, kind: Self.fetchCheck, at: now, state: "failed", failed: true,
+                detail: job?.error
+            )
+            run.skipped += 1
+            let reason = job?.error ?? "The page couldn't be fetched."
+            if job?.retryable == true, retried {
+                run.note(.retry, id, title, "\(reason) The failed-capture retry tries again.")
+            } else {
+                run.note(.skipped, id, title, "\(reason) Try Again is on the item.")
+            }
+        case .cancelled:
+            // Stopped by hand, so not fetched again unasked.
+            try await store.recordCheck(id, kind: Self.fetchCheck, at: now, state: "cancelled")
+            run.skipped += 1
+            run.note(.skipped, id, title, "Stopped in Captures.")
+        case nil:
+            run.skipped += 1
+            run.note(.skipped, id, title, "The fetch was removed from Captures.")
+        default:
+            run.skipped += 1
+            run.note(.skipped, id, title, "Still fetching; it carries on in Captures.")
+        }
+    }
+
+    /// Starts a capture this automation queued and waits for it, checking for Stop as it
+    /// goes. Gives up waiting after a while, returning the capture still running.
+    private func finishCapture(_ id: UUID) async throws -> CaptureJob? {
+        await dependencies.startCapture(id)
+        let deadline = ContinuousClock.now + Self.longestCapture
+        while true {
+            guard let job = try await store.captureJob(id: id) else { return nil }
+            if job.state.terminal || ContinuousClock.now >= deadline {
+                return job
+            }
+            try await Task.sleep(for: dependencies.capturePoll)
+        }
+    }
+
+    // MARK: Failed-capture retry
+
+    /// Tries failed captures again when the failure may pass, waiting longer after each, and
+    /// never ones that need you: a login, a browser, or a choice of audio.
+    func retryCaptures(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        let jobs = try await store.captureRetryCandidates(
+            limit: config.batchLimit, now: dependencies.now(),
+            firstWait: Self.retryWaits[0], maxRetries: Self.retryWaits.count
+        )
+        for job in jobs {
+            guard try await proceed(&run) else { return }
+            guard try await store.retryCaptureAutomatically(
+                job.id, maxRetries: Self.retryWaits.count
+            ) else { continue }
+            run.examined += 1
+            try await recordRetry(
+                job, attempt: job.autoRetries + 1, result: finishCapture(job.id), &run
+            )
+        }
+    }
+
+    private func recordRetry(
+        _ job: CaptureJob,
+        attempt: Int,
+        result: CaptureJob?,
+        _ run: inout AutomationRun
+    ) async throws {
+        let title = job.request.label
+        let item = job.request.replacingNoteID
+        let tries = "try \(attempt) of \(Self.retryWaits.count)"
+        switch result?.state {
+        case .ready:
+            run.changed += 1
+            run.note(.changed, result?.noteID ?? item, title, "Saved on automatic \(tries).")
+        case .failed:
+            run.skipped += 1
+            let reason = result?.error ?? "It failed again."
+            guard result?.retryable == true else {
+                return run.note(.skipped, item, title, "\(reason) Left in Captures for you.")
+            }
+            guard attempt < Self.retryWaits.count else {
+                return run.note(
+                    .skipped, item, title, "\(reason) Failed every try; left in Captures for you."
+                )
+            }
+            try await store.scheduleCaptureRetry(
+                job.id, at: dependencies.now().addingTimeInterval(Self.retryWaits[attempt])
+            )
+            run.note(
+                .retry, item, title,
+                "\(reason) Failed \(tries); trying again in \(Self.retryWaitLabels[attempt])."
+            )
+        case .cancelled:
+            run.skipped += 1
+            run.note(.skipped, item, title, "Stopped in Captures.")
+        case nil:
+            run.skipped += 1
+            run.note(.skipped, item, title, "Removed from Captures.")
+        default:
+            run.skipped += 1
+            run.note(.skipped, item, title, "Still running; it carries on in Captures.")
+        }
+    }
+
+    // MARK: Unfiled filer
+
+    /// Asks the filing model for a home per unfiled item, in the batches Categorize Unfiled
+    /// uses and with its saved answers, and proposes the existing category it chose.
+    func fileUnfiled(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        guard let inference = await dependencies.filer() else {
+            return run.report
+                .append("Skipped: needs Apple Intelligence or ChatGPT to suggest homes.")
+        }
+        if !config.cloudAllowed, !inference.capabilities.local {
+            return run.report
+                .append(
+                    "Skipped: this automation is on-device only and ChatGPT would suggest homes."
+                )
+        }
+        let categorizer = BookmarkCategorizer(store: store, inference: inference)
+        let taxonomy: BookmarkCategorizer.Taxonomy
+        do { taxonomy = try await categorizer.taxonomy() } catch CategorizationError.noCategories {
+            return run.report.append("Skipped: there are no categories to file into yet.")
+        }
+        var budget = try await remainingCalls(config)
+        let now = dependencies.now()
+        let candidates = try await store.unfiledCandidates(
+            limit: Self.plannedBatch(config, backlog: backlog(config)),
+            checkedBefore: now.addingTimeInterval(-config.recheck),
+            retryBefore: now.addingTimeInterval(-Self.retryAfter)
+        )
+        let engine = inference.capabilities.local ? "Apple Intelligence" : "ChatGPT"
+        var proposals: [AgentChangeDraft] = []
+        let size = inference.classificationBatchSize
+        for start in stride(from: 0, to: candidates.count, by: size) {
+            guard try await proceed(&run) else { break }
+            guard budget > 0 else { outOfBudget(&run); break }
+            let batch = Array(candidates[start ..< min(start + size, candidates.count)])
+            let found = try await categorizer.answers(batch, taxonomy: taxonomy)
+            if found.called {
+                budget -= 1
+                run.calls += 1
+            }
+            run.examined += batch.count
+            for (index, candidate) in batch.enumerated() {
+                if let proposal = try await recordFiling(
+                    candidate, found.answers[index], taxonomy: taxonomy, engine: engine, &run
+                ) {
+                    proposals.append(proposal)
+                }
+            }
+        }
+        // The only change this automation makes is a proposal; nothing is filed here.
+        try await store.saveAgentChanges(proposals, taskID: run.id)
+        run.proposed = proposals.count
+    }
+
+    private func recordFiling(
+        _ candidate: FilingCandidate,
+        _ answer: CachedClassification?,
+        taxonomy: BookmarkCategorizer.Taxonomy,
+        engine: String,
+        _ run: inout AutomationRun
+    ) async throws -> AgentChangeDraft? {
+        let (id, title, now) = (candidate.id, candidate.title, dependencies.now())
+        guard let answer else {
+            try await store.recordCheck(
+                id, kind: Self.filingCheck, at: now, state: "failed", failed: true
+            )
+            run.skipped += 1
+            run.note(
+                .skipped,
+                id,
+                title,
+                "The model's answer couldn't be used. Tried again tomorrow."
+            )
+            return nil
+        }
+        try await store.recordCheck(id, kind: Self.filingCheck, at: now, state: "done")
+        guard let category = BookmarkClassification.choices(taxonomy.categories)
+            .first(where: { $0.code == answer.code })
+        else {
+            if let name = answer.newCategory {
+                run.skipped += 1
+                run.note(
+                    .skipped, id, title,
+                    "No category fits; a new one, “\(name)”, might. Categorize Unfiled can create it."
+                )
+            } else {
+                run.fine += 1
+            }
+            return nil
+        }
+        // Proposed, applied or turned down before: not asked again.
+        guard try await !store.filingConsidered(id, code: category.code) else {
+            run.fine += 1
+            return nil
+        }
+        let unsure = answer.confident ? "" : " It wasn't sure between homes."
+        run.note(.proposed, id, title, "File in \(category.label)?\(unsure)")
+        return AgentChangeDraft(
+            kind: .filing, noteID: id, code: category.code, before: "Unfiled",
+            after: category.label,
+            reason: "Suggested by \(engine) from the item's title and opening.\(unsure)",
+            baseRevision: candidate.revision
+        )
+    }
+
+    // MARK: Weekly digest
+
+    /// One new note listing what was saved since the last digest, at most a week back. An
+    /// empty week writes nothing.
+    func writeDigest(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        let now = dependencies.now()
+        let start = try await digestStart(now)
+        let total = try await store.digestBacklog(from: start, to: now)
+        guard total > 0 else {
+            return run.report.append(start > now.addingTimeInterval(-Self.digestSpan)
+                ? "Nothing saved since the last digest, so no new one."
+                : "Nothing saved in the last 7 days, so no digest.")
+        }
+        try Task.checkCancellation()
+        let items = try await store.digestItems(from: start, to: now, limit: config.batchLimit)
+        run.examined = items.count
+        let note = try await store.writeAutomationNote(
+            DigestNote.document(items, total: total, from: start, to: now),
+            reason: "Written by the weekly digest.",
+            runID: run.id,
+            at: now
+        )
+        run.changed = 1
+        run.note(
+            .changed,
+            note.id,
+            note.name,
+            items.count == total
+                ? "Lists \(Self.itemCount(total))."
+                : "Lists the newest \(items.count.formatted()) of \(Self.itemCount(total))."
+        )
+    }
+
+    /// Where the next digest starts: the last one still standing, or a week back.
+    func digestStart(_ now: Date) async throws -> Date {
+        let weekAgo = now.addingTimeInterval(-Self.digestSpan)
+        // A second of slack: a stored time can read back a hair later than it was written.
+        guard let last = try await store.lastDigestAt(), last > weekAgo,
+              last <= now.addingTimeInterval(1)
+        else { return weekAgo }
+        return min(last, now)
+    }
+
+    static func itemCount(_ count: Int) -> String {
+        count == 1 ? "1 item" : "\(count.formatted()) items"
+    }
+}
+
+/// The digest's text: items grouped under their primary home in code order, unfiled ones
+/// last, each linking back to the item.
+enum DigestNote {
+    static func document(
+        _ items: [DigestItem],
+        total: Int,
+        from start: Date,
+        to end: Date
+    ) -> MarkdownDocument {
+        let range = (start ..< end).formatted(date: .abbreviated, time: .omitted)
+        var groups: [String: [DigestItem]] = [:]
+        for item in items {
+            groups[item.code.map { "\($0) \(item.category ?? "")" } ?? "", default: []]
+                .append(item)
+        }
+        // Unfiled sorts last.
+        let headings = groups.keys.sorted { ($0.isEmpty ? 1 : 0, $0) < ($1.isEmpty ? 1 : 0, $1) }
+        var lines = [
+            "Saved \(range): \(AutomationEngine.itemCount(total)), grouped by category."
+                + (items.count < total ? " The newest \(items.count.formatted()) are listed." : ""),
+        ]
+        for heading in headings {
+            lines.append("## \(heading.isEmpty ? "Unfiled" : heading)")
+            lines.append((groups[heading] ?? []).map { item in
+                let link = "[\(AgentCoordinator.markdownLabel(item.title))](infactory://note/\(item.id.uuidString))"
+                return "- \(link)" + (item.host.map { " (\($0))" } ?? "")
+            }.joined(separator: "\n"))
+        }
+        return MarkdownDocument(
+            name: "Weekly digest: \(range)",
+            markdown: lines.joined(separator: "\n\n")
+        )
+    }
+}

@@ -94,10 +94,11 @@ actor IngestionEngine {
         ), deduplicate: deduplicate)
     }
 
-    /// Fetches the page behind an imported bookmark and upgrades its note in place.
-    func enqueueBookmarkFetch(noteID: UUID) async throws -> UUID? {
+    /// Fetches the page behind an imported bookmark and upgrades its note in place. `summarize`
+    /// false skips the summary even when Capture settings write one.
+    func enqueueBookmarkFetch(noteID: UUID, summarize: Bool = true) async throws -> UUID? {
         guard let url = try await store.unfetchedBookmarkURL(noteID: noteID) else { return nil }
-        return try await enqueue(url.absoluteString, replacing: noteID)
+        return try await enqueue(url.absoluteString, summarizeLink: summarize, replacing: noteID)
     }
 
     func enqueueFile(_ url: URL) async throws -> UUID {
@@ -127,7 +128,8 @@ actor IngestionEngine {
                 try await store.failCapture(
                     job,
                     error: error.localizedDescription,
-                    recovery: error.recovery
+                    recovery: error.recovery,
+                    retryable: CaptureFailure.retryable(error)
                 )
             } catch let error as LinkSummaryError {
                 try await store.failCapture(job, error: error.localizedDescription)
@@ -136,11 +138,14 @@ actor IngestionEngine {
             } catch let error as ChatGPTError {
                 try await store.failCapture(job, error: error.localizedDescription)
             } catch let error as CaptureError {
-                try await store.failCapture(job, error: error.localizedDescription)
+                try await store.failCapture(
+                    job, error: error.localizedDescription, retryable: error.retryable
+                )
             } catch {
                 try await store.failCapture(
                     job,
-                    error: CaptureError.extractionFailed.localizedDescription
+                    error: CaptureError.extractionFailed.localizedDescription,
+                    retryable: true
                 )
             }
             active = nil

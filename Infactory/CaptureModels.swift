@@ -118,6 +118,37 @@ struct CaptureJob: Identifiable, Sendable {
     let error: String?
     let noteID: UUID?
     var recovery: CaptureRecovery?
+    /// Failed for a reason that may pass on its own, so the failed-capture retry may try again.
+    var retryable = false
+    /// How many times the failed-capture retry has tried it.
+    var autoRetries = 0
+}
+
+/// Whether a capture that failed may succeed later with nobody doing anything: the network, a
+/// busy server or a slow extraction, rather than a login, a locked file or a page with no text.
+enum CaptureFailure {
+    static func retryable(_ error: any Error) -> Bool {
+        switch error {
+        case let error as CaptureError: error.retryable
+        case let error as MediaError: error == .blocked
+        case is LinkSummaryError, is SummaryFailure, is ChatGPTError: false
+        // Anything else is recorded as an extraction failure, which says to retry.
+        default: true
+        }
+    }
+
+    /// The same judgement from a recorded message, for failures saved before it was kept.
+    static func retryable(message: String) -> Bool {
+        let passing: [any LocalizedError] = [
+            CaptureError.downloadFailed, CaptureError.extractionFailed, MediaError.blocked,
+        ]
+        if passing.contains(where: { $0.errorDescription == message }) {
+            return true
+        }
+        guard let match = message.firstMatch(of: /^The source returned HTTP (\d{3})\./),
+              let status = Int(match.1) else { return false }
+        return CaptureError.http(status).retryable
+    }
 }
 
 enum Coverage: String, Codable, Sendable {
@@ -233,6 +264,15 @@ enum CaptureError: LocalizedError {
     case emptyInput, unsafeURL, unsupported, tooLarge, tooManyPages, lockedPDF, invalidPDF
     case noContent, needsBrowser, extractionFailed, resourceMissing, staleJob
     case http(Int), downloadFailed, missingArtifact, deletedCapture
+
+    /// A dropped connection, a timeout or a server having a bad day; never a refusal.
+    var retryable: Bool {
+        switch self {
+        case .downloadFailed, .extractionFailed: true
+        case let .http(status): status == 408 || status == 429 || status >= 500
+        default: false
+        }
+    }
 
     var errorDescription: String? {
         switch self {

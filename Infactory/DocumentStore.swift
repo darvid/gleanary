@@ -166,25 +166,30 @@ actor DocumentStore {
             }
             let current = try Self.document(row)
             guard current.revision == document.revision else { throw InfactoryError.editConflict }
-            let revision = UUID()
-            let now = Date().timeIntervalSince1970
-            try Self.recordRevision(current, revision: revision, kind: "delete", in: db)
-            try db.execute(
-                sql: "UPDATE notes SET revision = ?, updatedAt = ?, deletedAt = ? WHERE id = ?",
-                arguments: [revision.uuidString, now, now, document.id.uuidString]
-            )
-            try db.execute(
-                sql: "DELETE FROM passages WHERE noteID = ?",
-                arguments: [document.id.uuidString]
-            )
-            try db.execute(
-                sql: "DELETE FROM index_jobs WHERE noteID = ?",
-                arguments: [document.id.uuidString]
-            )
-            try Self.removeGraph(document.id, in: db)
-            try Self.activateIfReady(in: db)
-            try Self.pruneUnusedVectors(in: db)
+            try Self.markDeleted(current, in: db)
         }
+    }
+
+    /// Deletes a live note at its current revision, keeping its history.
+    static func markDeleted(_ current: MarkdownDocument, in db: Database) throws {
+        let revision = UUID()
+        let now = Date().timeIntervalSince1970
+        try recordRevision(current, revision: revision, kind: "delete", in: db)
+        try db.execute(
+            sql: "UPDATE notes SET revision = ?, updatedAt = ?, deletedAt = ? WHERE id = ?",
+            arguments: [revision.uuidString, now, now, current.id.uuidString]
+        )
+        try db.execute(
+            sql: "DELETE FROM passages WHERE noteID = ?",
+            arguments: [current.id.uuidString]
+        )
+        try db.execute(
+            sql: "DELETE FROM index_jobs WHERE noteID = ?",
+            arguments: [current.id.uuidString]
+        )
+        try removeGraph(current.id, in: db)
+        try activateIfReady(in: db)
+        try pruneUnusedVectors(in: db)
     }
 
     func history(for id: UUID) throws -> [NoteRevision] {

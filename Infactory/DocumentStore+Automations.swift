@@ -1,6 +1,16 @@
 import Foundation
 import GRDB
 
+/// One item listed in a digest.
+struct DigestItem: Sendable, Equatable {
+    let id: UUID
+    let title: String
+    let host: String?
+    /// The item's primary home, if it has one.
+    let code: String?
+    let category: String?
+}
+
 /// When an item was last looked at by one kind of automation check, so walks through the
 /// library ("oldest first") move on instead of revisiting the same items.
 struct ItemCheck: Sendable, Equatable {
@@ -141,21 +151,33 @@ extension DocumentStore {
         runID: UUID
     ) throws {
         try readyDatabase().write { db in
-            let ordinal = try Int.fetchOne(
-                db, sql: "SELECT count(*) FROM agent_changes WHERE taskID = ?",
-                arguments: [runID.uuidString]
-            ) ?? 0
-            try db.execute(sql: """
-            INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
-                after, reason, baseRevision, appliedRevision, status, createdAt)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)
-            """, arguments: [
-                UUID().uuidString, runID.uuidString, ordinal, draft.kind.rawValue,
-                draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code, draft.before,
-                draft.after, draft.reason, draft.baseRevision?.uuidString,
-                appliedRevision?.uuidString, Date().timeIntervalSince1970,
-            ])
+            try Self.insertAppliedChange(
+                draft, appliedRevision: appliedRevision, runID: runID, at: Date(), in: db
+            )
         }
+    }
+
+    private static func insertAppliedChange(
+        _ draft: AgentChangeDraft,
+        appliedRevision: UUID?,
+        runID: UUID,
+        at date: Date,
+        in db: Database
+    ) throws {
+        let ordinal = try Int.fetchOne(
+            db, sql: "SELECT count(*) FROM agent_changes WHERE taskID = ?",
+            arguments: [runID.uuidString]
+        ) ?? 0
+        try db.execute(sql: """
+        INSERT INTO agent_changes(id, taskID, ordinal, kind, noteID, targetID, code, before,
+            after, reason, baseRevision, appliedRevision, status, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'applied', ?)
+        """, arguments: [
+            UUID().uuidString, runID.uuidString, ordinal, draft.kind.rawValue,
+            draft.noteID?.uuidString, draft.targetID?.uuidString, draft.code, draft.before,
+            draft.after, draft.reason, draft.baseRevision?.uuidString,
+            appliedRevision?.uuidString, date.timeIntervalSince1970,
+        ])
     }
 
     /// Changes from one run that can still be undone.
@@ -357,13 +379,278 @@ extension DocumentStore {
         ("""
         FROM notes n
         LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = 'links'
-        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND NOT \(writtenByAutomation)
             AND NOT EXISTS (SELECT 1 FROM note_links WHERE leftID = n.id)
             AND NOT EXISTS (SELECT 1 FROM note_links WHERE rightID = n.id)
             AND NOT EXISTS (SELECT 1 FROM knowledge_links WHERE leftID = n.id)
             AND NOT EXISTS (SELECT 1 FROM knowledge_links WHERE rightID = n.id)
             AND (ic.checkedAt IS NULL OR ic.checkedAt < ?)
         """, [checkedBefore.timeIntervalSince1970])
+    }
+
+    /// A note an automation wrote, such as a digest: never something to file, link or list.
+    private static let writtenByAutomation = """
+    EXISTS (SELECT 1 FROM agent_changes WHERE noteID = n.id AND kind = 'note')
+    """
+
+    // MARK: Bookmark fetcher
+
+    /// Imported bookmarks whose page was never fetched, newest first: still unedited, with no
+    /// fetch queued, running or failed, and not tried by the fetcher before.
+    func bookmarkFetchCandidates(limit: Int) throws -> [(id: UUID, url: URL, title: String)] {
+        let (sql, arguments) = Self.bookmarkFetchQuery
+        return try readyDatabase().read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT n.id, n.sourceURL, n.name \(sql) ORDER BY n.createdAt DESC, n.id LIMIT ?",
+                arguments: arguments + [limit]
+            ).compactMap { row in
+                guard let id = (row["id"] as String?).flatMap(UUID.init(uuidString:)),
+                      let url = (row["sourceURL"] as String?).flatMap(URL.init(string:))
+                else { return nil }
+                return (id, url, row["name"])
+            }
+        }
+    }
+
+    func bookmarkFetchBacklog() throws -> Int {
+        try count(Self.bookmarkFetchQuery)
+    }
+
+    private static var bookmarkFetchQuery: (sql: String, arguments: StatementArguments) {
+        ("""
+        FROM notes n
+        JOIN captures c ON c.noteID = n.id AND c.markdownHash = n.contentHash
+            AND c.createdAt = (SELECT max(createdAt) FROM captures WHERE noteID = n.id)
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
+            AND (n.sourceURL LIKE 'https://%' OR n.sourceURL LIKE 'http://%')
+            AND json_extract(CAST(c.document AS TEXT), '$.coverage') = 'bookmark'
+            AND NOT EXISTS (SELECT 1 FROM item_checks WHERE noteID = n.id AND kind = ?)
+            -- Looked up by note, not by state, since failed jobs can number thousands; the
+            -- unary + drops n.id's text affinity so the expression index can seek.
+            AND NOT EXISTS (SELECT 1 FROM ingestion_jobs INDEXED BY ingestion_jobs_replacing
+                WHERE json_extract(CAST(request AS TEXT), '$.replacingNoteID') = +n.id
+                AND state IN ('queued', 'fetching', 'extracting', 'failed'))
+        """, [AutomationEngine.fetchCheck])
+    }
+
+    // MARK: Failed-capture retry
+
+    /// Failed captures whose next automatic try is due, the longest waiting first. Only ones
+    /// that failed for a reason that may pass and need nothing from you; never more than
+    /// `maxRetries` tries, and never for an item since deleted or archived.
+    func captureRetryCandidates(
+        limit: Int,
+        now: Date,
+        firstWait: TimeInterval,
+        maxRetries: Int
+    ) throws -> [CaptureJob] {
+        let (sql, arguments) = Self.captureRetryQuery(
+            now: now, firstWait: firstWait, maxRetries: maxRetries
+        )
+        return try readyDatabase().read { db in
+            try Row.fetchAll(
+                db,
+                sql: "SELECT j.* \(sql) ORDER BY coalesce(j.retryAt, j.updatedAt + ?), j.id LIMIT ?",
+                arguments: arguments + [firstWait, limit]
+            ).map(Self.captureJob)
+        }
+    }
+
+    func captureRetryBacklog(now: Date, firstWait: TimeInterval, maxRetries: Int) throws -> Int {
+        try count(Self.captureRetryQuery(now: now, firstWait: firstWait, maxRetries: maxRetries))
+    }
+
+    private static func captureRetryQuery(now: Date, firstWait: TimeInterval, maxRetries: Int)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM ingestion_jobs j
+        WHERE j.state = 'failed' AND j.retryable = 1 AND j.recovery IS NULL
+            AND j.autoRetries < ? AND coalesce(j.retryAt, j.updatedAt + ?) <= ?
+            AND NOT EXISTS (SELECT 1 FROM notes n
+                WHERE n.id = json_extract(CAST(j.request AS TEXT), '$.replacingNoteID')
+                AND (n.deletedAt IS NOT NULL OR n.archivedAt IS NOT NULL))
+        """, [maxRetries, firstWait, now.timeIntervalSince1970])
+    }
+
+    /// Queues a failed capture again and counts the try, only while the policy allows it: a
+    /// failure that may pass, needing nothing from you, under `maxRetries` tries.
+    func retryCaptureAutomatically(_ id: UUID, maxRetries: Int) throws -> Bool {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE ingestion_jobs SET state = 'queued', token = ?, progress = 'Retry queued',
+                error = NULL, retryAt = NULL, autoRetries = autoRetries + 1
+            WHERE id = ? AND state = 'failed' AND retryable = 1 AND recovery IS NULL
+                AND autoRetries < ?
+            """, arguments: [UUID().uuidString, id.uuidString, maxRetries])
+            return db.changesCount > 0
+        }
+    }
+
+    /// When a capture that failed again may next be tried.
+    func scheduleCaptureRetry(_ id: UUID, at date: Date) throws {
+        try readyDatabase().write { db in
+            try db.execute(
+                sql: "UPDATE ingestion_jobs SET retryAt = ? WHERE id = ? AND state = 'failed'",
+                arguments: [date.timeIntervalSince1970, id.uuidString]
+            )
+        }
+    }
+
+    // MARK: Unfiled filer
+
+    /// Items filed nowhere and not waiting on a filing already proposed: never looked at
+    /// (newest first), then those looked at before `checkedBefore`, or whose look failed
+    /// before `retryBefore`.
+    func unfiledCandidates(
+        limit: Int,
+        checkedBefore: Date,
+        retryBefore: Date
+    ) throws -> [FilingCandidate] {
+        let (sql, arguments) = Self.unfiledQuery(
+            checkedBefore: checkedBefore, retryBefore: retryBefore
+        )
+        return try readyDatabase().read { db in
+            // IDs first, so the sort doesn't carry every unfiled item's text.
+            let ids = try String.fetchAll(
+                db, sql: "SELECT n.id \(sql) \(Self.newThenOldest) LIMIT ?",
+                arguments: arguments + [limit]
+            )
+            return try ids.compactMap { id in
+                try Row.fetchOne(
+                    db,
+                    sql: "SELECT id, revision, name, sourceURL, markdown FROM notes WHERE id = ?",
+                    arguments: [id]
+                ).map { row in
+                    let source = (row["sourceURL"] as String?).flatMap(URL.init(string:))
+                    let name: String = row["name"]
+                    return try FilingCandidate(
+                        id: Self.uuid(row["id"]),
+                        revision: Self.uuid(row["revision"]),
+                        title: name,
+                        host: source?.host(),
+                        text: FilingText.classification(
+                            name: name, sourceURL: source, markdown: row["markdown"]
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    func unfiledBacklog(checkedBefore: Date, retryBefore: Date) throws -> Int {
+        try count(Self.unfiledQuery(checkedBefore: checkedBefore, retryBefore: retryBefore))
+    }
+
+    private static func unfiledQuery(checkedBefore: Date, retryBefore: Date)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM notes n
+        LEFT JOIN item_checks ic ON ic.noteID = n.id AND ic.kind = ?
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND NOT \(writtenByAutomation)
+            AND NOT EXISTS (SELECT 1 FROM note_categories WHERE noteID = n.id)
+            AND NOT EXISTS (SELECT 1 FROM filing_suggestions
+                WHERE noteID = n.id AND status = 'pending')
+            AND NOT EXISTS (SELECT 1 FROM agent_changes
+                WHERE noteID = n.id AND kind = 'filing' AND status = 'pending')
+            AND (ic.checkedAt IS NULL OR ic.checkedAt < ?
+                OR (ic.state = 'failed' AND ic.checkedAt < ?))
+        """, [
+            AutomationEngine.filingCheck, checkedBefore.timeIntervalSince1970,
+            retryBefore.timeIntervalSince1970,
+        ])
+    }
+
+    /// Whether filing this item under `code` was proposed, applied, undone or turned down
+    /// before, here or in Categorize Unfiled, so it isn't proposed again.
+    func filingConsidered(_ noteID: UUID, code: String) throws -> Bool {
+        try readyDatabase().read { db in
+            try Bool.fetchOne(db, sql: """
+            SELECT EXISTS(SELECT 1 FROM agent_changes WHERE noteID = ?1 AND kind = 'filing'
+                    AND code = ?2 AND status IN ('pending', 'applied', 'rejected', 'undone'))
+                OR EXISTS(SELECT 1 FROM filing_suggestions s
+                    JOIN decimal_categories c ON c.id = s.categoryID
+                    WHERE s.noteID = ?1 AND c.code = ?2 AND s.status = 'rejected')
+            """, arguments: [noteID.uuidString, code]) ?? false
+        }
+    }
+
+    // MARK: Weekly digest
+
+    /// Items saved from `start` until `end`, newest first, with their primary home. Digests
+    /// themselves are left out.
+    func digestItems(from start: Date, to end: Date, limit: Int) throws -> [DigestItem] {
+        let (sql, arguments) = Self.digestQuery(from: start, to: end)
+        return try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT n.id, n.name, n.sourceURL, dc.code, dc.name AS category \(sql)
+            ORDER BY n.createdAt DESC, n.id LIMIT ?
+            """, arguments: arguments + [limit]).map { row in
+                try DigestItem(
+                    id: Self.uuid(row["id"]),
+                    title: row["name"],
+                    host: (row["sourceURL"] as String?).flatMap(URL.init(string:))?.host(),
+                    code: row["code"],
+                    category: row["category"]
+                )
+            }
+        }
+    }
+
+    func digestBacklog(from start: Date, to end: Date) throws -> Int {
+        try count(Self.digestQuery(from: start, to: end))
+    }
+
+    private static func digestQuery(from start: Date, to end: Date)
+        -> (sql: String, arguments: StatementArguments)
+    {
+        ("""
+        FROM notes n
+        LEFT JOIN note_categories nc ON nc.noteID = n.id AND nc.isPrimary = 1
+        LEFT JOIN decimal_categories dc ON dc.id = nc.categoryID
+        WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND NOT \(writtenByAutomation)
+            AND n.createdAt >= ? AND n.createdAt < ?
+        """, [start.timeIntervalSince1970, end.timeIntervalSince1970])
+    }
+
+    /// When the latest digest still standing was written; one that was undone doesn't count,
+    /// so the next covers its week again.
+    func lastDigestAt() throws -> Date? {
+        try readyDatabase().read { db in
+            try Double.fetchOne(db, sql: """
+            SELECT max(createdAt) FROM agent_changes WHERE kind = 'note' AND status = 'applied'
+                AND taskID IN (SELECT id FROM automation_runs WHERE automationID = ?)
+            """, arguments: [AutomationKind.weeklyDigest.rawValue])
+                .map(Date.init(timeIntervalSince1970:))
+        }
+    }
+
+    /// Writes an automation's new note in the Inbox, recording it as the run's change so Undo
+    /// removes it. One transaction, so a note never exists without its Undo.
+    func writeAutomationNote(
+        _ document: MarkdownDocument,
+        reason: String,
+        runID: UUID,
+        at date: Date
+    ) throws -> MarkdownDocument {
+        try readyDatabase().write { db in
+            let note = try Self.writeNote(document, graph: false, in: db)
+            if let inbox = try String.fetchOne(
+                db, sql: "SELECT id FROM decimal_categories WHERE code = ?",
+                arguments: [DecimalCategory.inboxCode]
+            ) {
+                try Self.fileImported(note.id, categoryID: Self.uuid(inbox), in: db)
+            }
+            try Self.insertAppliedChange(
+                AgentChangeDraft(
+                    kind: .note, noteID: note.id, before: "", after: note.name, reason: reason
+                ),
+                appliedRevision: note.revision, runID: runID, at: date, in: db
+            )
+            return note
+        }
     }
 
     /// Whether these two items are linked, or a link between them was already proposed,

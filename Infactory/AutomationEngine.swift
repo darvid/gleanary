@@ -1,8 +1,9 @@
 import Foundation
 
 /// Runs built-in automations. Items come from fixed store selectors, never from a model, and
-/// what a run may change is decided here: only the inbox summarizer applies anything; the
-/// link checker and cross-linker can only propose changes for review.
+/// what a run may change is decided here: the inbox summarizer, bookmark fetcher, failed-capture
+/// retry and weekly digest apply their work; the link checker, cross-linker and unfiled filer
+/// can only propose changes for review.
 actor AutomationEngine {
     struct Dependencies: Sendable {
         /// Writes the summary for an item, returning the summarized note.
@@ -18,13 +19,28 @@ actor AutomationEngine {
         var now: @Sendable () -> Date = { Date() }
         /// True when people are using the library, so the run should stop between items.
         var shouldYield: @Sendable () async -> Bool = { false }
-        /// A pause between link checks, so no site sees a burst of requests.
+        /// A pause between link checks or page fetches, so no site sees a burst of requests.
         var politeness: Duration = .milliseconds(500)
+        /// Queues the page fetch for an imported bookmark through the capture path, returning
+        /// its capture job, or nil when it's no longer an unfetched bookmark. False skips the
+        /// summary Capture settings would write.
+        var fetchBookmark: @Sendable (UUID, Bool) async throws -> UUID? = { _, _ in nil }
+        /// Whether Capture settings write a summary for each fetched page.
+        var capturesSummarize: @Sendable () -> Bool = { false }
+        /// Starts the capture queue for a job this automation queued; the run reports how it
+        /// went, so the window doesn't announce it.
+        var startCapture: @Sendable (UUID) async -> Void = { _ in }
+        /// How often to look whether a queued capture has finished.
+        var capturePoll: Duration = .seconds(1)
+        /// The model that suggests homes for unfiled items, when one is available.
+        var filer: @Sendable () async -> (any ConversationInferring)? = { nil }
     }
 
     static let accessCheck = "access"
     static let linksCheck = "links"
     static let summaryCheck = "summary"
+    static let fetchCheck = "fetch"
+    static let filingCheck = "filing"
     /// Failed link checks needed, at least `archiveSpan` apart, before archiving is proposed.
     static let archiveFailures = 3
     static let archiveSpan: TimeInterval = 7 * 24 * 60 * 60
@@ -47,6 +63,10 @@ actor AutomationEngine {
             case .inboxSummarizer: try await summarizeInbox(config, &run)
             case .linkChecker: try await checkLinks(config, &run)
             case .crossLinker: try await crossLink(config, &run)
+            case .bookmarkFetcher: try await fetchBookmarks(config, &run)
+            case .unfiledFiler: try await fileUnfiled(config, &run)
+            case .captureRetry: try await retryCaptures(config, &run)
+            case .weeklyDigest: try await writeDigest(config, &run)
             }
             if run.status == .running {
                 run.status = .succeeded
@@ -81,6 +101,19 @@ actor AutomationEngine {
             try await store.crossLinkBacklog(
                 checkedBefore: now.addingTimeInterval(-config.recheck)
             )
+        case .bookmarkFetcher:
+            try await store.bookmarkFetchBacklog()
+        case .unfiledFiler:
+            try await store.unfiledBacklog(
+                checkedBefore: now.addingTimeInterval(-config.recheck),
+                retryBefore: now.addingTimeInterval(-Self.retryAfter)
+            )
+        case .captureRetry:
+            try await store.captureRetryBacklog(
+                now: now, firstWait: Self.retryWaits[0], maxRetries: Self.retryWaits.count
+            )
+        case .weeklyDigest:
+            try await store.digestBacklog(from: digestStart(now), to: now)
         }
     }
 
@@ -89,9 +122,10 @@ actor AutomationEngine {
 
     /// How many items a run takes. Checks repeat every `config.recheck`, so a run takes at
     /// least enough to get through what's due within that at this schedule, and never fewer
-    /// than the batch you set. Summaries keep to your batch; the daily model budget limits them.
+    /// than the batch you set. Work that doesn't repeat keeps to your batch; the daily model
+    /// budget limits summaries.
     static func plannedBatch(_ config: AutomationConfig, backlog: Int) -> Int {
-        guard config.kind != .inboxSummarizer else { return config.batchLimit }
+        guard config.kind.rechecks else { return config.batchLimit }
         let runsPerCycle = max(1, Int(config.recheck / max(config.interval, 60)))
         let needed = (backlog + runsPerCycle - 1) / runsPerCycle
         return min(largestBatch, max(config.batchLimit, needed))
@@ -423,7 +457,7 @@ actor AutomationEngine {
 
     // MARK: Shared
 
-    private func remainingCalls(_ config: AutomationConfig) async throws -> Int {
+    func remainingCalls(_ config: AutomationConfig) async throws -> Int {
         let start = Calendar.current.startOfDay(for: dependencies.now())
         return try await max(
             0,
@@ -431,13 +465,13 @@ actor AutomationEngine {
         )
     }
 
-    private func outOfBudget(_ run: inout AutomationRun) {
+    func outOfBudget(_ run: inout AutomationRun) {
         run.status = .partial
         run.report.append("Stopped at today's limit of model calls; the rest wait for tomorrow.")
     }
 
     /// Stops between items for cancellation, and yields to the person's own work.
-    private func proceed(_ run: inout AutomationRun) async throws -> Bool {
+    func proceed(_ run: inout AutomationRun) async throws -> Bool {
         try Task.checkCancellation()
         guard await !dependencies.shouldYield() else {
             run.status = .partial

@@ -816,7 +816,7 @@ actor AgentCoordinator {
         return false
     }
 
-    private static func markdownLabel(_ title: String) -> String {
+    static func markdownLabel(_ title: String) -> String {
         title.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "[", with: "\\[")
             .replacingOccurrences(of: "]", with: "\\]")

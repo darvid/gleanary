@@ -12,6 +12,9 @@ struct AgentChange: Identifiable, Sendable, Equatable {
         case link
         /// Point the item's original link (`before`) at where it moved (`after`).
         case relink
+        /// A new note an automation wrote, titled `after`; Undo removes it. Only ever applied
+        /// by the automation itself, never proposed.
+        case note
     }
 
     let id: UUID
@@ -146,30 +149,13 @@ extension DocumentStore {
     func undoAgentChanges(_ ids: [UUID]) throws -> Int {
         try readyDatabase().write { db in
             let rows = try Self.agentRows(ids, status: "applied", in: db)
-            var undone: [Row] = []
-            for row in rows where ["link", "archive"].contains(row["kind"] as String) {
-                if try Self.undoArchiveOrLink(row, in: db) {
-                    undone.append(row)
-                }
-            }
-            for row in rows where row["kind"] as String == "relink" {
-                if try Self.swapLink(row, from: row["after"], to: row["before"], in: db) {
-                    undone.append(row)
-                }
-            }
-            for row in rows where row["kind"] as String == "filing" {
-                if try Self.undoFiling(row, in: db) {
-                    undone.append(row)
-                }
-            }
+            var undone = try Self.undoEach(
+                rows, kinds: ["link", "archive", "relink", "filing"], in: db
+            )
             for batch in Self.textBatches(rows) where try Self.undoText(batch, in: db) {
                 undone += batch
             }
-            for row in rows where row["kind"] as String == "category" {
-                if try Self.undoCategory(row, in: db) {
-                    undone.append(row)
-                }
-            }
+            undone += try Self.undoEach(rows, kinds: ["category", "note"], in: db)
             for row in undone {
                 try db.execute(
                     sql: "UPDATE agent_changes SET status = 'undone' WHERE id = ?",
@@ -177,6 +163,30 @@ extension DocumentStore {
                 )
             }
             return undone.count
+        }
+    }
+
+    /// Undoes single changes of these kinds, kind by kind in this order; returns those undone.
+    private static func undoEach(_ rows: [Row], kinds: [String], in db: Database) throws -> [Row] {
+        var undone: [Row] = []
+        for kind in kinds {
+            for row in rows where row["kind"] as String == kind {
+                if try undoOne(row, in: db) {
+                    undone.append(row)
+                }
+            }
+        }
+        return undone
+    }
+
+    private static func undoOne(_ row: Row, in db: Database) throws -> Bool {
+        switch row["kind"] as String {
+        case "link", "archive": try undoArchiveOrLink(row, in: db)
+        case "relink": try swapLink(row, from: row["after"], to: row["before"], in: db)
+        case "filing": try undoFiling(row, in: db)
+        case "category": try undoCategory(row, in: db)
+        case "note": try undoNewNote(row, in: db)
+        default: false
         }
     }
 
@@ -296,6 +306,15 @@ extension DocumentStore {
                   arguments: [categoryID]
               ) == 0 else { return false }
         try db.execute(sql: "DELETE FROM decimal_categories WHERE id = ?", arguments: [categoryID])
+        return true
+    }
+
+    /// Deletes a note an automation wrote, unless someone has edited it since.
+    private static func undoNewNote(_ row: Row, in db: Database) throws -> Bool {
+        guard let note = note(for: row, in: db),
+              note.revision?.uuidString == row["appliedRevision"] as String?
+        else { return false }
+        try markDeleted(note, in: db)
         return true
     }
 

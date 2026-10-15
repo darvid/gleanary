@@ -207,6 +207,7 @@ struct ContentView: View {
             guard summarizerKey != "pending" else { return }
             await library.useLinkSummarizer(linkSummarizer())
             library.useLinkJudge(linkJudge())
+            library.useFiler(currentInference())
         }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0

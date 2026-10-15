@@ -476,6 +476,44 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 | Failed-capture retry | Librarian | Failed captures with a retryable error → retry with backoff (1 hour, 1 day, 1 week), then leave in Needs Attention | Apply |
 | Weekly digest | Assistant | Items saved in the last 7 days → a digest note grouped by category | Apply (new note) |
 
+Default settings, chosen so the two automations that only finish work you started are on, and anything that proposes or writes something new waits until you turn it on:
+
+| Automation | On by default | Schedule | Items per run | Model calls per day |
+|---|---|---|---|---|
+| Inbox summarizer | No | Every 10 minutes | 10 | 200 |
+| Bookmark fetcher | Yes | Every 30 minutes | 5 | 200 (summaries of fetched pages) |
+| Link checker | No | Daily | 50, more to keep within Recheck items | None |
+| Cross-linker | No | Daily | 20, more to keep within Recheck items | 200 |
+| Unfiled filer | No | Daily | 40, more to keep within Recheck items | 200 |
+| Failed-capture retry | Yes | Every hour | 10 | None |
+| Weekly digest | No | Weekly | Lists up to 200 | None |
+
+**Bookmark fetcher rules.**
+
+- Selects imported bookmarks still unedited, with no page fetch queued, running or failed, that the fetcher hasn't tried; newest first.
+- Fetches through the same capture path as opening a bookmark, so it upgrades the note in place and follows the Capture settings for summaries and page previews. If the automation is on-device only and ChatGPT writes summaries, pages are fetched without one. Each summary counts toward its model calls per day.
+- One page at a time; a site already fetched in the run waits a moment first. The capture path applies the URL policy (no cookies or credentials, private and local addresses blocked).
+- A fetch that fails is reported once and never fetched again unasked: the item keeps Try Again, and if the failure may pass, the failed-capture retry takes it from there. A fetch stopped in Captures isn't restarted. Undo puts the bookmark text back where the item hasn't changed since.
+- Runs it starts don't raise the window's capture notice; the run's history reports them.
+
+**Failed-capture retry rules.**
+
+- A capture failure records whether it may pass on its own: a download that failed, an extraction that timed out, HTTP 408, 429 or 5xx, or YouTube refusing for now. Failures that need you (the capture browser, audio options) or never pass (HTTP 404, a locked or oversized file, a page with no text) are never retried.
+- Tries come an hour, a day and a week after each failure, three in all; then the capture stays in Captures for you. Try Again by hand restarts the wait but not the count.
+- A capture for an item since deleted or archived isn't retried. Retries apply directly; there's nothing to undo.
+
+**Unfiled filer rules.**
+
+- Selects live items filed nowhere, with no filing waiting in its own review or in Categorize Unfiled; never-checked items first, newest first, then those looked at longest ago, per Recheck items.
+- Asks the same model, in the same batches and with the same saved answers as Categorize Unfiled, and proposes only existing categories. When nothing fits but a new category might, the run says so and leaves creating it to Categorize Unfiled.
+- A filing under the same category that was proposed, applied, undone or turned down before is never proposed again. Nothing is filed until the proposal is applied in review.
+
+**Weekly digest rules.**
+
+- Lists items saved since the last digest still standing, at most 7 days back, grouped under their primary category in code order with unfiled items last, each linking back to the item. When more were saved than the digest lists, it lists the newest and says how many there were.
+- Writes one new note, filed in the Inbox, and never edits another. Undo deletes it unless it was edited since; an undone digest's week is covered again by the next.
+- A week with nothing saved writes nothing. No model is used. Digests are left out of later digests, the cross-linker and the unfiled filer.
+
 **Link checker rules.** Most checks need no model; classify the response:
 
 | Result | Handling |
