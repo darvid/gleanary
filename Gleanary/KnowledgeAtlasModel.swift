@@ -164,7 +164,7 @@ final class KnowledgeAtlasModel {
         case .sources: source.items = source.items.filter { $0.kind == "source" }
         case .notes: source.items = source.items.filter { $0.kind != "source" }
         }
-        let projected = AtlasHierarchy.project(source)
+        let projected = AtlasHierarchy.project(source, groupingSummaries: kindFilter != .notes)
         emptyCategoryCount = AtlasHierarchy.emptyCategoryCount(projected)
         emptyCategoryIDs = AtlasHierarchy.emptyCategoryIDs(projected)
         root = hidesEmptyCategories ? AtlasHierarchy.withoutEmptyCategories(projected) : projected
@@ -175,11 +175,11 @@ final class KnowledgeAtlasModel {
             focusID = .library
             fit(focusID, animated: false)
         }
-        if let selectedID, layout.index[selectedID] == nil {
-            self.selectedID = nil
+        if let selectedID {
+            self.selectedID = layout.tile(selectedID)?.id
         }
-        if let hoveredID, layout.index[hoveredID] == nil {
-            self.hoveredID = nil
+        if let hoveredID {
+            self.hoveredID = layout.tile(hoveredID)?.id
         }
         camera = clamp(camera)
         recountMatches()
@@ -189,10 +189,12 @@ final class KnowledgeAtlasModel {
         guard let matches else { matchCounts = []; return }
         var counts = Array(repeating: 0, count: layout.tiles.count)
         for (position, tile) in layout.tiles.enumerated() {
-            guard let item = tile.node.item, matches.contains(item.id) else { continue }
+            guard let item = tile.node.item else { continue }
+            let matching = item.documentIDs.intersection(matches).count
+            guard matching > 0 else { continue }
             var current: Int? = position
             while let index = current {
-                counts[index] += 1
+                counts[index] += matching
                 current = layout.tiles[index].parent
             }
         }
@@ -354,7 +356,10 @@ final class KnowledgeAtlasModel {
     func activate(_ id: AtlasNodeID) -> Activation? {
         guard let tile = layout.tile(id) else { return nil }
         if let item = tile.node.item {
-            selectedID = id
+            selectedID = tile.id
+            if case let .item(documentID) = id, item.documentIDs.contains(documentID) {
+                return .open(documentID)
+            }
             return .open(item.id)
         }
         // A region with no children has nothing more to reveal; select it instead.

@@ -6,6 +6,73 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct NoteEditorTests {
+    @Test func readingFontsHaveIndependentPersistentDefaults() throws {
+        let suite = "gleanary-appearance-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appearance = ReadingAppearance(defaults: defaults)
+        #expect(appearance[.notes] == ReadingKind.notes.defaultFont)
+        #expect(appearance[.sources] == ReadingKind.sources.defaultFont)
+        let serif = NSFont(name: "Athelas", size: 14) != nil ? "Athelas" : "Georgia"
+        #expect(appearance[.notes].family == serif)
+        #expect(appearance[.notes].nativeFont.familyName == serif)
+        #expect(appearance[.sources].family.isEmpty)
+        #expect(appearance[.notes].nativeFont.familyName != appearance[.sources].nativeFont
+            .familyName)
+        appearance[.notes] = ReadingFont(family: "Georgia", size: 19)
+        let reopened = ReadingAppearance(defaults: defaults)
+        #expect(reopened[.notes] == ReadingFont(family: "Georgia", size: 19))
+        #expect(reopened[.sources] == ReadingKind.sources.defaultFont)
+        reopened[.sources] = ReadingFont(family: "Helvetica", size: 17)
+        #expect(appearance[.notes].size == 19)
+        #expect(appearance[.sources] == ReadingFont(family: "Helvetica", size: 17))
+        reopened[.notes] = ReadingKind.notes.defaultFont
+        #expect(ReadingAppearance(defaults: defaults)[.notes] == ReadingKind.notes.defaultFont)
+        #expect(ReadingAppearance(defaults: defaults)[.sources].size == 17)
+        for kind in ["note", "summary", "comparison", "document"] {
+            #expect(ReadingKind(libraryKind: kind) == .notes)
+        }
+        #expect(ReadingKind(libraryKind: "source") == .sources)
+    }
+
+    @Test func invalidReadingFontsFallBackSafely() {
+        let missing = ReadingFont(family: "Synthetic Missing Font", size: 18)
+        #expect(!missing.available)
+        #expect(missing.nativeFont == NSFont.systemFont(ofSize: 18))
+        #expect(ReadingFont(family: "", size: .nan).size == 14)
+        #expect(ReadingFont(family: "", size: .infinity).size == 14)
+        #expect(ReadingFont(family: "", size: -100).size == 10)
+        #expect(ReadingFont(family: "", size: 1000).size == 32)
+    }
+
+    @Test(arguments: [ReadingKind.notes, .sources])
+    func editorFontUpdatesWithoutChangingText(kind: ReadingKind) async throws {
+        let suite = "gleanary-editor-appearance-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appearance = ReadingAppearance(defaults: defaults)
+        let box = TextBox(text: "Synthetic saved text.")
+        let host = NSHostingView(rootView: MarkdownSourceEditor(
+            text: Binding(get: { box.text }, set: { box.text = $0 }),
+            documentID: UUID(), readingKind: kind
+        ).defaultAppStorage(defaults))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await settle { Self.textView(in: host)?.font == appearance[kind].nativeFont }
+        let editor = try #require(Self.textView(in: host))
+        #expect(editor.font == appearance[kind].nativeFont)
+        appearance[kind] = ReadingFont(family: kind == .notes ? "Helvetica" : "Georgia", size: 19)
+        try await settle { editor.font == appearance[kind].nativeFont }
+        #expect(editor.font == appearance[kind].nativeFont)
+        #expect(box.text == "Synthetic saved text.")
+        #expect(editor.string == box.text)
+    }
+
     /// Notes are stored as Markdown text, so editing one must hand back exactly what was there
     /// apart from the edit itself, whatever the editor shows while styling it.
     @Test(arguments: [

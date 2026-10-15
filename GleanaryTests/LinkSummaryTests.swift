@@ -419,6 +419,137 @@ private actor SummaryFetcher: SourceFetching {
             .hasPrefix("A brief synthetic summary.") == true)
     }
 
+    @Test @MainActor func summaryReadingSurfaceFitsLightDarkAndNarrowPanes() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "gleanary-reading-surface-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let original = try await Self.legacyCapture(in: store)
+        let engine = IngestionEngine(store: store, summarizer: FixtureLinkSummarizer())
+        let saved = try await engine.summarizeExisting(original)
+        let preview = DocumentPreviewModel()
+        preview.selectedID = saved.id
+        await preview.load(from: store)
+        #expect(preview.generatedSummary)
+        for width in [320.0, 760.0] {
+            for dark in [false, true] {
+                let host = NSHostingView(rootView: DocumentPreview(
+                    model: preview,
+                    showsLibraryDetails: true
+                )
+                .defaultAppStorage(defaults)
+                .preferredColorScheme(dark ? .dark : .light)
+                .background(Color(nsColor: .windowBackgroundColor)))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: width, height: 760),
+                    styleMask: [.borderless],
+                    backing: .buffered,
+                    defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.appearance = window.appearance
+                window.contentView = host
+                defer { window.contentView = nil; window.close() }
+                try await Task.sleep(for: .milliseconds(100))
+                host.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                host.needsDisplay = true
+                host.display()
+                try await Task.sleep(for: .milliseconds(50))
+                let scroll = try #require(Self.readingScroll(in: host))
+                let content = try #require(scroll.documentView)
+                #expect(abs(host.bounds.width - width) < 1)
+                #expect(content.frame.width <= scroll.contentView.bounds.width + 1)
+                #expect(scroll.contentView.bounds.minX == 0)
+                try Self.screenshot(
+                    host,
+                    name: "gleanary-reading-surface-\(Int(width))-\(dark ? "dark" : "light")"
+                )
+            }
+        }
+    }
+
+    @MainActor private static func readingScroll(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView {
+            return scroll
+        }
+        return view.subviews.lazy.compactMap { readingScroll(in: $0) }.first
+    }
+
+    @Test @MainActor func chatPreviewCanGenerateCancelAndRefreshSummary() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "gleanary-chat-summary-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let original = try await Self.legacyCapture(in: store)
+        let preview = DocumentPreviewModel()
+        preview.selectedID = original.id
+        await preview.load(from: store)
+        let waiting = WaitingSummary()
+        let library = LibraryModel(
+            store: store, provider: SummaryEmbeddingFixture(),
+            graphProvider: SummaryGraphFixture(), summarizer: waiting
+        )
+        await library.load()
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(store: store))
+        await model.load()
+        _ = NSApplication.shared
+        let view = ConversationView(model: model, library: library, previewModel: preview)
+        let host = NSHostingView(rootView: view.defaultAppStorage(defaults))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 600),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(200))
+        host.layoutSubtreeIfNeeded()
+        #expect(view.savedDocumentPreview(for: preview).summaryEnabled)
+        library.busy = true
+        #expect(!view.savedDocumentPreview(for: preview).summaryEnabled)
+        library.busy = false
+        view.savedDocumentPreview(for: preview).generateSummary(original)
+        for _ in 0 ..< 100 {
+            if await waiting.started {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await waiting.started)
+        #expect(library.generatingSummaryID == original.id)
+        #expect(view.savedDocumentPreview(for: preview).generatingSummary)
+        let cancel = try #require(view.savedDocumentPreview(for: preview).cancelSummary)
+        cancel()
+        await library.summaryTask?.value
+        #expect(library.generatingSummaryID == nil)
+        #expect(try await store.document(id: original.id) == original)
+        // A provider switch applies to this same action, without reopening the pane.
+        await library.useLinkSummarizer(FixtureLinkSummarizer())
+        #expect(view.savedDocumentPreview(for: preview).summaryEnabled)
+        view.savedDocumentPreview(for: preview).generateSummary(original)
+        await library.summaryTask?.value
+        for _ in 0 ..< 100 {
+            if preview.generatedSummary {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(preview.generatedSummary)
+        #expect(!preview.canGenerateSummary)
+        #expect(preview.document?.markdown.hasPrefix("A brief synthetic summary.") == true)
+        #expect(!view.savedDocumentPreview(for: preview).generatingSummary)
+        await library.indexingTask?.value
+    }
+
     @Test func pastedTextDoesNotNeedAppleIntelligence() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -509,6 +640,82 @@ private actor SummaryFetcher: SourceFetching {
             .errorDescription)
     }
 
+    @Test func adaptiveSummaryLimitsAgreeAndPreserveOptionalGrouping() throws {
+        let source = "Synthetic supporting evidence."
+        let points = (1 ... 10).map { index in
+            SummaryDraft.Point(
+                text: String(repeating: "supported ", count: 24) + "finding \(index).",
+                quotes: [source],
+                section: index <= 5 ? "Findings" : "Limits"
+            )
+        }
+        let draft = SummaryDraft(
+            overview: .init(text: "An overview.", quotes: [source]),
+            takeaways: points
+        )
+        let markdown = try draft.markdown(source: source)
+        #expect(markdown.contains("finding 10."))
+        #expect(markdown.components(separatedBy: "## Findings").count == 2)
+        #expect(markdown.contains("## Limits"))
+        #expect(markdown.split(whereSeparator: \.isWhitespace).count > 180)
+        #expect(throws: LinkSummaryError.invalidOutput) {
+            try SummaryDraft(overview: draft.overview, takeaways: points + [points[0]])
+                .markdown(source: source)
+        }
+        let schema = EvidenceSummaryDraft.jsonSchema()
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let takeaways = try #require(properties["takeaways"] as? [String: Any])
+        #expect(takeaways["maxItems"] as? Int == SummaryPolicy.maximumTakeaways)
+        _ = try EvidenceSummaryDraft.schema(evidence: SummaryEvidence(source))
+        _ = try SummaryExcerpts.schema(evidence: SummaryEvidence(source))
+        let prompt = AppleLinkSummarizer.summaryPrompt(
+            context: "",
+            evidence: SummaryEvidence(source)
+        )
+        .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(prompt.contains("guidelines, never minimums"))
+        #expect(!prompt.contains("80 to 150"))
+    }
+
+    @Test func summaryReviewBatchesBoundPointsAndQuoteVolume() throws {
+        let quote = String(repeating: "e", count: 1400)
+        let point = SummaryDraft.Point(text: "A synthetic finding.", quotes: [quote, quote, quote])
+        let draft = SummaryDraft(overview: point, takeaways: Array(repeating: point, count: 10))
+        let batches = SummaryVerification.batches(for: draft)
+        #expect(batches.flatMap(\.self).count == 11)
+        #expect(batches.allSatisfy { $0.count <= SummaryPolicy.reviewPoints })
+        #expect(batches
+            .allSatisfy {
+                AppleLinkSummarizer.verificationPrompt($0).count <= SummaryPolicy.reviewCharacters
+            })
+        #expect(batches.count == 11)
+        #expect(throws: LinkSummaryError.invalidOutput) {
+            try SummaryVerification(supported: [true]).validate(count: 3)
+        }
+        #expect(throws: LinkSummaryError.unsupportedSummary) {
+            try SummaryVerification(supported: Array(repeating: false, count: 11))
+                .applied(to: draft)
+        }
+    }
+
+    @Test func excerptSelectionExpandsWithoutLosingValidationOrReductionBounds() throws {
+        let text = (1 ... 15).map { "Synthetic evidence sentence \($0) remains supported." }
+            .joined(separator: " ")
+        let evidence = SummaryEvidence(text)
+        let ids = Array(evidence.items.prefix(12).map(\.id))
+        #expect(try evidence.select(ids).count == 12)
+        let bounded = try evidence.select(ids, characterLimit: 150)
+        #expect(bounded.count < 12)
+        #expect(bounded.joined(separator: "\n\n").count <= 150)
+        #expect(bounded.allSatisfy(text.contains))
+        #expect(throws: LinkSummaryError.invalidOutput) {
+            try evidence.select(evidence.items.map(\.id))
+        }
+        #expect(throws: LinkSummaryError.evidenceMismatch) {
+            try evidence.select(Array(ids.dropLast()) + ["missing"], characterLimit: 1)
+        }
+    }
+
     @Test func summaryDraftRequiresSourceQuotesAndBuildsConsistentMarkdown() throws {
         let source = "Local copies work offline. Device failure can lose changes."
         let draft = SummaryDraft(
@@ -546,7 +753,8 @@ private actor SummaryFetcher: SourceFetching {
         )
         let summary = try await AppleLinkSummarizer().summarize(document)
         #expect(!summary.isEmpty)
-        #expect(summary.split(whereSeparator: \.isWhitespace).count <= 250)
+        #expect(summary.split(whereSeparator: \.isWhitespace).count <= SummaryPolicy
+            .maximumWords + 40)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo
@@ -590,7 +798,8 @@ private actor SummaryFetcher: SourceFetching {
         #expect(summary.lowercased().contains("device"))
         #expect(!summary.lowercased().contains("did not test"))
         #expect(summary.contains("## Capture limits"))
-        #expect(summary.split(whereSeparator: \.isWhitespace).count <= 250)
+        #expect(summary.split(whereSeparator: \.isWhitespace).count <= SummaryPolicy
+            .maximumWords + 40)
         print("Synthetic native summary:\n" + summary)
     }
 

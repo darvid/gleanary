@@ -12,6 +12,37 @@ struct AtlasItem: Identifiable, Sendable, Equatable {
     var categoryIDs: [UUID] = []
     /// A page screenshot or video thumbnail exists, loaded only once its tile is large enough.
     var hasPreview = false
+    /// Persisted provenance, not inferred from titles or URLs.
+    var sourceIDs: Set<UUID> = []
+    /// The retained original still exists when this note's primary text is a generated summary.
+    var captureID: UUID?
+    /// Single-source summaries filed alongside this source, presented in the same map card.
+    var summaries: [AtlasItem] = []
+
+    var documentIDs: Set<UUID> {
+        Set([id] + summaries.map(\.id))
+    }
+
+    var lastActivity: Date {
+        summaries.reduce(updatedAt) { max($0, $1.updatedAt) }
+    }
+
+    var isSourceCard: Bool {
+        kind == "source" || (captureID != nil && !summaries.isEmpty)
+    }
+
+    var cardKindLabel: String {
+        isSourceCard ? "Source" : kindLabel
+    }
+
+    var summaryDocuments: [AtlasItem] {
+        (isSourceCard && kind == "summary" ? [self] : []) + summaries
+    }
+
+    var summaryLabel: String? {
+        let count = summaryDocuments.count
+        return count == 0 ? nil : count == 1 ? "1 summary" : "\(count) summaries"
+    }
 
     var kindLabel: String {
         DocumentSummary.kindLabel(for: kind)
@@ -70,7 +101,7 @@ struct AtlasNode: Sendable, Equatable {
 enum AtlasHierarchy {
     static let paletteSize = 9
 
-    static func project(_ snapshot: AtlasSnapshot) -> AtlasNode {
+    static func project(_ snapshot: AtlasSnapshot, groupingSummaries: Bool = true) -> AtlasNode {
         let categories = Dictionary(
             snapshot.categories.map { ($0.id, $0) },
             uniquingKeysWith: { first, _ in first }
@@ -79,16 +110,22 @@ enum AtlasHierarchy {
             snapshot.categories.map { ($0.code, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let ranks = recencyRanks(snapshot.items)
+        let items = groupingSummaries
+            ? groupSummaries(snapshot.items, categories: Set(categories.keys)) : snapshot.items
+        let ranks = recencyRanks(items)
         var placed: [UUID: [AtlasItem]] = [:]
         var alsoFiled: [UUID: Int] = [:]
         var uncategorized: [AtlasItem] = []
-        for item in snapshot.items {
+        for item in items {
             let homes = item.categoryIDs.filter { categories[$0] != nil }
             guard let home = homes.first else { uncategorized.append(item); continue }
             placed[home, default: []].append(item)
-            for secondary in Set(homes.dropFirst()) {
-                alsoFiled[secondary, default: 0] += 1
+            for member in [item] + item.summaries {
+                for secondary in Set(member.categoryIDs.filter { categories[$0] != nil }
+                    .dropFirst())
+                {
+                    alsoFiled[secondary, default: 0] += 1
+                }
             }
         }
 
@@ -108,7 +145,8 @@ enum AtlasHierarchy {
             AtlasNode(
                 id: .item(item.id), kind: .item, code: nil,
                 title: item.title.isEmpty ? "Untitled" : item.title,
-                itemCount: 1, lastActivity: item.updatedAt, hue: hue, item: item,
+                itemCount: item.documentIDs.count, lastActivity: item.lastActivity, hue: hue,
+                item: item,
                 recency: ranks[item.id] ?? 0
             )
         }
@@ -158,6 +196,37 @@ enum AtlasHierarchy {
         return aggregate(AtlasNode(
             id: .library, kind: .library, code: nil, title: "Library", children: regions
         ))
+    }
+
+    /// Only unambiguous, single-source summaries in the same primary home join a source card.
+    /// Comparisons, multi-source research, and independently filed notes keep their own tiles.
+    private static func groupSummaries(_ items: [AtlasItem], categories: Set<UUID>) -> [AtlasItem] {
+        var sources: [UUID: [AtlasItem]] = [:]
+        for item in items
+            where item.kind == "source" || (item.kind == "summary" && item.captureID != nil)
+        {
+            for source in item.sourceIDs {
+                sources[source, default: []].append(item)
+            }
+        }
+        var grouped: [UUID: [AtlasItem]] = [:]
+        var hidden: Set<UUID> = []
+        for item in items
+            where item.kind == "summary" && item.captureID == nil && item.sourceIDs.count == 1
+        {
+            guard let sourceID = item.sourceIDs.first,
+                  let candidates = sources[sourceID], candidates.count == 1,
+                  let source = candidates.first,
+                  item.categoryIDs.first(where: categories.contains)
+                  == source.categoryIDs.first(where: categories.contains) else { continue }
+            grouped[source.id, default: []].append(item)
+            hidden.insert(item.id)
+        }
+        return items.filter { !hidden.contains($0.id) }.map { item in
+            var card = item
+            card.summaries = (grouped[item.id] ?? []).sorted(by: newestFirst)
+            return card
+        }
     }
 
     /// The tree without categories that hold no items in their subtree. Hues and counts are
@@ -213,9 +282,9 @@ enum AtlasHierarchy {
     }
 
     private static func newestFirst(_ lhs: AtlasItem, _ rhs: AtlasItem) -> Bool {
-        lhs.updatedAt == rhs.updatedAt
+        lhs.lastActivity == rhs.lastActivity
             ? lhs.id.uuidString < rhs.id.uuidString
-            : lhs.updatedAt > rhs.updatedAt
+            : lhs.lastActivity > rhs.lastActivity
     }
 
     private static func recencyRanks(_ items: [AtlasItem]) -> [UUID: Double] {

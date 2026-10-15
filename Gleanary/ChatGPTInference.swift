@@ -513,8 +513,8 @@ extension ChatGPTConversationInference: LinkSummarizing {
         let fence = try await session.authorizationFence()
         let context = "Title: \(document.title)\nCaptured coverage: \(document.coverage.label)"
         var text = document.blocks.map(\.text).joined(separator: "\n\n")
-        let sections = AppleLinkSummarizer.chunks(text, limit: Self.summarySection)
-        if sections.count > 1 {
+        while text.count > Self.summarySection {
+            let sections = AppleLinkSummarizer.chunks(text, limit: Self.summarySection)
             var selected: [String] = []
             for (index, section) in sections.enumerated() {
                 let evidence = SummaryEvidence(section)
@@ -529,9 +529,11 @@ extension ChatGPTConversationInference: LinkSummarizing {
                     schema: SummaryExcerpts.jsonSchema(),
                     fence: fence
                 )
-                selected += try evidence.select(Array(picked.excerpts.prefix(4)))
+                selected += try evidence.select(picked.excerpts)
             }
-            text = selected.joined(separator: "\n\n")
+            let reduced = selected.joined(separator: "\n\n")
+            guard reduced.count < text.count else { throw LinkSummaryError.contextLimit }
+            text = reduced
         }
         let evidence = SummaryEvidence(text)
         guard !evidence.items.isEmpty else { throw LinkSummaryError.noEvidence }
@@ -542,20 +544,21 @@ extension ChatGPTConversationInference: LinkSummarizing {
             schema: EvidenceSummaryDraft.jsonSchema(),
             fence: fence
         )
-        let anchored = try proposal.anchored(in: evidence)
-        let draft = SummaryDraft(
-            overview: anchored.overview,
-            takeaways: Array(anchored.takeaways.prefix(3))
-        )
+        let draft = try proposal.anchored(in: evidence)
         _ = try draft.markdown(source: text)
-        let review: SummaryVerification = try await structured(
-            prompt: AppleLinkSummarizer.verificationPrompt(draft),
-            instructions: AppleLinkSummarizer.verificationInstructions,
-            name: "summary_review",
-            schema: SummaryVerification.jsonSchema(),
-            fence: fence
-        )
-        let verified = try review.applied(to: draft)
+        var supported: [Bool] = []
+        for points in SummaryVerification.batches(for: draft) {
+            let review: SummaryVerification = try await structured(
+                prompt: AppleLinkSummarizer.verificationPrompt(points),
+                instructions: AppleLinkSummarizer.verificationInstructions,
+                name: "summary_review",
+                schema: SummaryVerification.jsonSchema(count: points.count),
+                fence: fence
+            )
+            try review.validate(count: points.count)
+            supported += review.supported
+        }
+        let verified = try SummaryVerification(supported: supported).applied(to: draft)
         try await session.validateFence(fence)
         return try AppleLinkSummarizer.withCaptureLimits(
             verified.markdown(source: text),

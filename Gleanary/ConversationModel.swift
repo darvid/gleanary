@@ -17,6 +17,7 @@ final class ConversationModel {
     var categories: [DecimalCategory] = []
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
+    var referenceDetails: [UUID: ConversationReference] = [:]
     var composer = ""
     var error: String?
     var ready = false
@@ -91,14 +92,16 @@ final class ConversationModel {
                 uniquingKeysWith: { first, _ in first }
             )
             var updatedTitles = titles
-            for id in Set(updatedMessages.flatMap(\.references) + selectedSources + updatedProposals
+            let referenceIDs = Set(updatedMessages
+                .flatMap(\.references) + selectedSources + updatedProposals
                 .flatMap { [
                     $0.left,
                     $0.right,
                 ] } + updatedChanges.values.joined().flatMap { [$0.noteID, $0.targetID] }
                 .compactMap(\.self))
-            {
-                updatedTitles[id] = try await store.document(id: id)?.name ?? "Deleted document"
+            let updatedReferences = try await store.conversationReferences(referenceIDs)
+            for id in referenceIDs {
+                updatedTitles[id] = updatedReferences[id]?.title ?? "Deleted document"
             }
             guard conversationEpoch == epoch, !clearingConversation else { return }
             messages = updatedMessages
@@ -108,6 +111,7 @@ final class ConversationModel {
             categories = updatedCategories
             writerScopes = updatedScopes
             titles = updatedTitles
+            referenceDetails = updatedReferences
         } catch { self.error = error.localizedDescription }
     }
 
@@ -362,6 +366,7 @@ final class ConversationModel {
             tasks = []
             selectedSources = []
             titles = [:]
+            referenceDetails = [:]
             hasOlderMessages = true
             error = nil
             clearingConversation = false

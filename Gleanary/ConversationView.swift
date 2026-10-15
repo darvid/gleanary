@@ -13,6 +13,8 @@ struct ConversationView: View {
     @State private var starterCategories = false
     @AppStorage("starterCategoriesOffered") private var starterCategoriesOffered = false
     @State private var followLatest = true
+    @State private var userScrolling = false
+    @State private var feedPosition = ScrollPosition(edge: .bottom)
     @FocusState private var composing: Bool
     @Environment(\.scenePhase) private var scenePhase
 
@@ -47,63 +49,7 @@ struct ConversationView: View {
                                 }
                                 .labelStyle(.iconOnly).buttonStyle(.borderless)
                             }.padding()
-                            DocumentPreview(
-                                model: preview,
-                                openSource: { source = $0 },
-                                summaryEnabled: false,
-                                generatingSummary: false,
-                                generateSummary: { _ in },
-                                cancelSummary: {},
-                                suggestHome: HomeSuggester(
-                                    suggest: { try await model.suggestHome(for: $0) },
-                                    file: { id, suggestion in
-                                        let ids = try await model.fileAsSuggested(id, suggestion)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                        return ids
-                                    },
-                                    undo: { ids in
-                                        try await model.undoSuggestedFiling(ids)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                    },
-                                    addHome: { id, home in
-                                        let added = try await model.addSuggestedHome(id, home)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                        return added
-                                    },
-                                    removeHome: { id, home in
-                                        try await model.removeSuggestedHome(id, home)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                    }
-                                ),
-                                editHomes: FilingEditor(
-                                    remove: { id, home in
-                                        let before = try await model.store
-                                            .removeHome(id, categoryID: home.id)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                        return before
-                                    },
-                                    makePrimary: { id, home in
-                                        let before = try await model.store
-                                            .makePrimaryHome(id, categoryID: home.id)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                        return before
-                                    },
-                                    restore: { id, homes in
-                                        try await model.store.restoreHomes(id, homes)
-                                        await preview.load(from: model.store)
-                                        await model.didMutate?()
-                                    }
-                                ),
-                                refreshDocument: { document in
-                                    Task { await model.refreshDocument(document.id) }
-                                }
-                            )
+                            savedDocumentPreview(for: preview)
                             if let id = preview.selectedID {
                                 CategoryMembershipView(
                                     store: model.store,
@@ -139,7 +85,9 @@ struct ConversationView: View {
             }
             composing = true
         }
-        .task(id: preview.selectedID) { await preview.load(from: model.store) }
+        .task(id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)") {
+            await preview.load(from: model.store)
+        }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
         .sheet(item: $reviewingChanges) { target in
             let changes = model.agentChanges[target.id] ?? []
@@ -198,6 +146,74 @@ struct ConversationView: View {
         ))
     }
 
+    func savedDocumentPreview(for preview: DocumentPreviewModel) -> DocumentPreview {
+        DocumentPreview(
+            model: preview,
+            openSource: { source = $0 },
+            summaryEnabled: library.canGenerateSummary(for: preview.selectedID),
+            generatingSummary: preview.selectedID
+                .map(library.summarizing) ?? false,
+            generateSummary: { library.generateSummary(for: $0) },
+            cancelSummary: summaryCancel(for: preview),
+            bookmarkFetch: preview.selectedID
+                .flatMap { library.bookmarkFetch(for: $0)?.progress },
+            suggestHome: HomeSuggester(
+                suggest: { try await model.suggestHome(for: $0) },
+                file: { id, suggestion in
+                    let ids = try await model.fileAsSuggested(id, suggestion)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                    return ids
+                },
+                undo: { ids in
+                    try await model.undoSuggestedFiling(ids)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                },
+                addHome: { id, home in
+                    let added = try await model.addSuggestedHome(id, home)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                    return added
+                },
+                removeHome: { id, home in
+                    try await model.removeSuggestedHome(id, home)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                }
+            ),
+            editHomes: FilingEditor(
+                remove: { id, home in
+                    let before = try await model.store
+                        .removeHome(id, categoryID: home.id)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                    return before
+                },
+                makePrimary: { id, home in
+                    let before = try await model.store
+                        .makePrimaryHome(id, categoryID: home.id)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                    return before
+                },
+                restore: { id, homes in
+                    try await model.store.restoreHomes(id, homes)
+                    await preview.load(from: model.store)
+                    await model.didMutate?()
+                }
+            ),
+            refreshDocument: { document in
+                Task { await model.refreshDocument(document.id) }
+            }
+        )
+    }
+
+    private func summaryCancel(for preview: DocumentPreviewModel) -> (() -> Void)? {
+        guard let id = library.generatingSummaryID, id == preview.selectedID else { return nil }
+        return library.cancelSummary
+    }
+
     /// The same trailing More menu as the library, so the toolbar keeps its shape when
     /// switching; settings live in the app menu's Settings window (⌘,).
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
@@ -217,59 +233,96 @@ struct ConversationView: View {
     }
 
     private var feed: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 24) {
-                    if model.hasOlderMessages, model.messages.count >= 200 {
-                        Button("Load earlier messages") {
-                            followLatest = false; Task { await model.loadOlder() }
-                        }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                if model.hasOlderMessages, model.messages.count >= 200 {
+                    Button("Load earlier messages") {
+                        followLatest = false; Task { await model.loadOlder() }
                     }
-                    ForEach(model.messages) { message in
-                        messageRow(message)
-                            .id(message.id)
-                    }
-                    Color.clear.frame(height: 1).id("latest")
-                }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
-            }
-            .defaultScrollAnchor(.bottom)
-            .overlay {
-                if model.messages.isEmpty {
-                    ContentUnavailableView(
-                        "No messages yet",
-                        systemImage: "bubble.left.and.text.bubble.right",
-                        description: Text("Paste a URL, attach a document, or write a message.")
-                    )
                 }
+                ForEach(model.messages) { message in
+                    messageRow(message)
+                        .id(message.id)
+                }
+            }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
+        }
+        .scrollPosition($feedPosition)
+        .defaultScrollAnchor(.bottom, for: .initialOffset)
+        .defaultScrollAnchor(.bottom, for: .alignment)
+        .overlay {
+            if model.messages.isEmpty {
+                ContentUnavailableView(
+                    "No messages yet",
+                    systemImage: "bubble.left.and.text.bubble.right",
+                    description: Text("Paste a URL, attach a document, or write a message.")
+                )
             }
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                Self.isAtLatest(
+        }
+        .onScrollPhaseChange { _, phase in
+            userScrolling = phase == .interacting || phase == .decelerating
+        }
+        .onScrollGeometryChange(for: FeedGeometry.self) { geometry in
+            FeedGeometry(
+                contentHeight: geometry.contentSize.height,
+                viewportHeight: geometry.containerSize.height,
+                visibleBottom: geometry.visibleRect.maxY,
+                atLatest: Self.isAtLatest(
                     contentHeight: geometry.contentSize.height,
                     visibleBottom: geometry.visibleRect.maxY,
                     bottomInset: geometry.contentInsets.bottom
                 )
-            } action: { _, atLatest in
-                followLatest = atLatest
+            )
+        } action: { old, new in
+            followLatest = Self.shouldFollowLatest(
+                following: followLatest, old: old, new: new, userScrolling: userScrolling
+            )
+            if followLatest, old.contentHeight != new.contentHeight ||
+                old.viewportHeight != new.viewportHeight
+            {
+                feedPosition.scrollTo(edge: .bottom)
             }
-            .onChange(of: model.messages.last?.id) {
-                if followLatest {
-                    proxy.scrollTo("latest", anchor: .bottom)
-                }
-            }
-            .overlay(alignment: .bottom) {
-                if !followLatest {
-                    Button("Latest messages", systemImage: "arrow.down") {
-                        followLatest = true; proxy.scrollTo("latest", anchor: .bottom)
-                    }
-                    .labelStyle(.iconOnly).font(.body.weight(.semibold))
-                    .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
-                    .help("Jump to the latest message")
-                    .padding(.bottom, 16)
-                    .transition(.opacity)
-                }
-            }
-            .animation(.easeOut(duration: 0.15), value: followLatest)
         }
+        .onChange(of: model.messages.isEmpty) {
+            if model.messages.isEmpty {
+                followLatest = true
+            }
+        }
+        .onChange(of: model.messages.last?.id) {
+            if followLatest {
+                feedPosition.scrollTo(edge: .bottom)
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if !followLatest {
+                Button("Latest messages", systemImage: "arrow.down") {
+                    followLatest = true; feedPosition.scrollTo(edge: .bottom)
+                }
+                .labelStyle(.iconOnly).font(.body.weight(.semibold))
+                .buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                .help("Jump to the latest message")
+                .padding(.bottom, 16)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: followLatest)
+    }
+
+    struct FeedGeometry: Equatable {
+        let contentHeight: CGFloat
+        let viewportHeight: CGFloat
+        let visibleBottom: CGFloat
+        let atLatest: Bool
+    }
+
+    static func shouldFollowLatest(
+        following: Bool, old: FeedGeometry, new: FeedGeometry, userScrolling: Bool
+    ) -> Bool {
+        // Layout growth must not look like the person scrolling away. The offset check also
+        // recognizes keyboard and scrollbar movement that can arrive without a scroll phase.
+        let movedUp = new.visibleBottom < old.visibleBottom - 0.5 &&
+            new.contentHeight == old.contentHeight && new.viewportHeight == old.viewportHeight
+        let userMoved = userScrolling && new.visibleBottom != old.visibleBottom
+        return new.atLatest || (following && !userMoved && !movedUp)
     }
 
     static func isAtLatest(
@@ -293,17 +346,11 @@ struct ConversationView: View {
                     }
                 }
                 .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
-                MarkdownPreview(markdown: message.text).textSelection(.enabled)
+                MarkdownPreview(markdown: researchResult(in: message) == nil
+                    ? message.text : message.textWithoutResearchBibliography)
+                    .textSelection(.enabled)
             }
-            ForEach(message.references, id: \.self) { id in
-                ReferenceChip(
-                    title: model.titles[id] ?? "Saved document",
-                    selected: model.selectedSources.contains(id),
-                    available: model.titles[id] != "Deleted document",
-                    open: { open(id) },
-                    toggleSource: { model.select(id) }
-                )
-            }
+            references(for: message)
             if let taskID = message.taskID, message.author == "user",
                let task = model.tasks.first(where: { $0.id == taskID }),
                ["failed", "cancelled"].contains(task.state)
@@ -358,6 +405,67 @@ struct ConversationView: View {
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    func researchResult(in message: ConversationMessage) -> ConversationReference? {
+        guard let id = message.references.first,
+              let reference = model.referenceDetails[id], reference.isResearchResult(in: message)
+        else { return nil }
+        return reference
+    }
+
+    @ViewBuilder func references(for message: ConversationMessage) -> some View {
+        if let result = researchResult(in: message) {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    let role = result.artifactKind == "comparison" ? "Comparison" : "Summary"
+                    Text(role).font(.caption.weight(.semibold))
+                    reference(
+                        result.id,
+                        title: result.researchTitle,
+                        symbol: "text.alignleft",
+                        role: role
+                    )
+                    Text("Generated by Researcher").font(.caption).foregroundStyle(.secondary)
+                }
+                if message.references.count > 1 {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(message.references.count == 2 ? "Source" : "Sources")
+                            .font(.caption.weight(.semibold))
+                        ForEach(
+                            Array(message.references.dropFirst().enumerated()),
+                            id: \.element
+                        ) { index, id in
+                            VStack(alignment: .leading, spacing: 4) {
+                                reference(id, role: "Source S\(index + 1)")
+                                HStack(spacing: 8) {
+                                    Text("S\(index + 1) · Saved document")
+                                        .foregroundStyle(.secondary)
+                                    if let url = model.referenceDetails[id]?.websiteURL {
+                                        Link(destination: url) {
+                                            Label("Open website", systemImage: "arrow.up.right")
+                                        }.help(url.absoluteString)
+                                    }
+                                }.font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            ForEach(message.references, id: \.self) { id in reference(id) }
+        }
+    }
+
+    private func reference(
+        _ id: UUID, title: String? = nil, symbol: String = "doc.text", role: String? = nil
+    ) -> some View {
+        ReferenceChip(
+            title: title ?? model.titles[id] ?? "Saved document",
+            selected: model.selectedSources.contains(id),
+            available: model.titles[id] != "Deleted document",
+            open: { open(id) }, toggleSource: { model.select(id) }, symbol: symbol, role: role
+        )
     }
 
     /// The person's own messages sit right-aligned in a bubble, as in ChatGPT, so the agents'
@@ -693,7 +801,7 @@ private struct CategoryMembershipView: View {
 }
 
 enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
-    case inference, capture, filing, writing
+    case inference, appearance, capture, filing, writing
     var id: String {
         rawValue
     }
@@ -701,6 +809,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .inference: "AI & accounts"
+        case .appearance: "Appearance"
         case .capture: "Capture"
         case .filing: "Filing"
         case .writing: "Writing"
@@ -710,6 +819,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .inference: "sparkles"
+        case .appearance: "textformat"
         case .capture: "tray.and.arrow.down"
         case .filing: "folder"
         case .writing: "doc.richtext"
@@ -761,6 +871,13 @@ struct ConversationSettings: View {
                 }
             }
             Tab(
+                KnowledgeSettingsPage.appearance.title,
+                systemImage: KnowledgeSettingsPage.appearance.symbol,
+                value: KnowledgeSettingsPage.appearance
+            ) {
+                AppearanceSettingsView()
+            }
+            Tab(
                 KnowledgeSettingsPage.capture.title,
                 systemImage: KnowledgeSettingsPage.capture.symbol,
                 value: KnowledgeSettingsPage.capture
@@ -796,14 +913,17 @@ private struct ReferenceChip: View {
     let available: Bool
     let open: () -> Void
     let toggleSource: () -> Void
+    var symbol = "doc.text"
+    var role: String?
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 6) {
             Button(action: open) {
-                Label(title, systemImage: "doc.text").lineLimit(1)
+                Label(title, systemImage: symbol).lineLimit(1)
             }
             .buttonStyle(.plain).help("Open \(title)")
+            .accessibilityLabel(role.map { "\($0): \(title)" } ?? title)
             Button(
                 selected ? "Remove from sources" : "Use as source",
                 systemImage: selected ? "checkmark.circle.fill" : "plus.circle",

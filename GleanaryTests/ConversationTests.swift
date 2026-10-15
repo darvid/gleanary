@@ -786,6 +786,244 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await store.categories(for: note.id).first?.id == other.id)
     }
 
+    @Test @MainActor func researcherReferencesSeparateGeneratedResultFromItsSavedOriginal(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try #require(URL(string: "https://source.example/article"))
+        _ = try await store.enqueueCapture(CaptureRequest(
+            url: url, identity: "fixture:chat-reference", label: "Original article"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(
+            job, document: CapturedDocument(
+                title: "Redesigning version control at Example",
+                sourceURL: url, coverage: .article,
+                blocks: [ContentBlock(
+                    kind: .paragraph,
+                    markdown: "Original evidence.",
+                    text: "Original evidence."
+                )]
+            ), artifacts: []
+        )
+        let original = try await store.researchSource(noteID: sourceID)
+        let task = try await store.beginConversation("Summarize the article", owner: .researcher)
+        let body = "A grounded summary with an inline [S1](gleanary://note/\(sourceID.uuidString))."
+        let markdown = body + "\n\n## Saved sources\n\n- [S1: Original article](gleanary://note/\(sourceID.uuidString))"
+        let artifact = try await store.saveResearch(
+            markdown, name: "Research: \(original.note.name)", sources: [original],
+            taskID: task, provider: "synthetic-fixture"
+        )
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Saved")
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(store: store))
+        await model.load()
+        let message = try #require(model.messages.last { $0.author == "researcher" })
+        let generated = try #require(model.referenceDetails[artifact.id])
+        #expect(generated.isResearchResult(in: message))
+        #expect(generated.researchTitle == original.note.name)
+        #expect(model.titles[artifact.id] == "Research: \(original.note.name)")
+        #expect(model.referenceDetails[sourceID]?.websiteURL == url)
+        #expect(model.referenceDetails[sourceID]?.isResearchResult(in: message) == false)
+        #expect(message.textWithoutResearchBibliography == body)
+        #expect(try await store.document(id: artifact.id)?.markdown == markdown)
+        let view = ConversationView(model: model, library: LibraryModel(store: store))
+        #expect(view.researchResult(in: message)?.id == artifact.id)
+        let unrelated = ConversationMessage(
+            sequence: 100, id: UUID(), author: "researcher", text: "Reading a saved note.",
+            references: [artifact.id], taskID: UUID(), createdAt: message.createdAt
+        )
+        #expect(view.researchResult(in: unrelated) == nil)
+        for width in [320.0, 640.0] {
+            for dark in [false, true] {
+                let host = NSHostingView(rootView: view.references(for: message)
+                    .padding(20).frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
+                    .preferredColorScheme(dark ? .dark : .light)
+                    .background(Color(nsColor: .windowBackgroundColor)))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: width, height: 260),
+                    styleMask: [.borderless], backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.appearance = window.appearance
+                window.contentView = host
+                defer { window.contentView = nil; window.close() }
+                try await Task.sleep(for: .milliseconds(100))
+                host.layoutSubtreeIfNeeded()
+                host.needsDisplay = true
+                host.display()
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: FileManager.default.temporaryDirectory.appending(
+                    path: "gleanary-chat-references-\(Int(width))-\(dark ? "dark" : "light").png"
+                ))
+            }
+        }
+        let second = try await store.save(MarkdownDocument(
+            name: "Other source",
+            markdown: "Other evidence."
+        ))
+        let comparisonTask = try await store.beginConversation(
+            "Compare sources",
+            owner: .researcher
+        )
+        let comparison = try await store.saveResearch(
+            "A grounded comparison.", name: "Comparison: Original article",
+            sources: [original, store.researchSource(noteID: second.id)], taskID: comparisonTask,
+            provider: "synthetic-fixture", kind: "comparison"
+        )
+        await model.refresh()
+        let comparisonMessage = try #require(model.messages.last { $0.author == "researcher" })
+        #expect(model.referenceDetails[comparison.id]?.artifactKind == "comparison")
+        #expect(view.researchResult(in: comparisonMessage)?.id == comparison.id)
+        #expect(comparisonMessage.references.dropFirst() == [sourceID, second.id])
+        let unsafe = ConversationReference(
+            id: UUID(), title: "Synthetic note", sourceURL: URL(string: "javascript:alert(1)"),
+            artifactKind: nil, taskID: nil
+        )
+        #expect(unsafe.websiteURL == nil)
+    }
+
+    @Test func researchBibliographyOnlyRemovesTheAppsExactSourceTrailer() {
+        let output = UUID(), source = UUID()
+        let text = "Findings.\n\n## Saved sources\n\n- [S1: A title](gleanary://note/\(source.uuidString))"
+        let message = ConversationMessage(
+            sequence: 0, id: UUID(), author: "researcher", text: text,
+            references: [output, source], taskID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1000)
+        )
+        #expect(message.textWithoutResearchBibliography == "Findings.")
+        let mismatched = ConversationMessage(
+            sequence: 1, id: UUID(), author: "researcher", text: text,
+            references: [output, UUID()], taskID: message.taskID, createdAt: message.createdAt
+        )
+        #expect(mismatched.textWithoutResearchBibliography == text)
+    }
+
+    @Test @MainActor func chatFollowingDistinguishesGrowthFromUserScrolling() {
+        let bottom = ConversationView.FeedGeometry(
+            contentHeight: 1800, viewportHeight: 600, visibleBottom: 1800, atLatest: true
+        )
+        let grown = ConversationView.FeedGeometry(
+            contentHeight: 2400, viewportHeight: 600, visibleBottom: 1800, atLatest: false
+        )
+        let up = ConversationView.FeedGeometry(
+            contentHeight: 1800, viewportHeight: 600, visibleBottom: 1500, atLatest: false
+        )
+        #expect(ConversationView.shouldFollowLatest(
+            following: true, old: bottom, new: grown, userScrolling: false
+        ))
+        #expect(!ConversationView.shouldFollowLatest(
+            following: true, old: bottom, new: up, userScrolling: true
+        ))
+        // Keyboard and scrollbar changes do not always report a gesture phase.
+        #expect(!ConversationView.shouldFollowLatest(
+            following: true, old: bottom, new: up, userScrolling: false
+        ))
+        #expect(!ConversationView.shouldFollowLatest(
+            following: false, old: up, new: grown, userScrolling: false
+        ))
+        #expect(ConversationView.shouldFollowLatest(
+            following: false, old: up, new: bottom, userScrolling: true
+        ))
+        let resized = ConversationView.FeedGeometry(
+            contentHeight: 1800, viewportHeight: 400, visibleBottom: 1600, atLatest: false
+        )
+        #expect(ConversationView.shouldFollowLatest(
+            following: true, old: bottom, new: resized, userScrolling: false
+        ))
+    }
+
+    @Test @MainActor func chatFollowsRenderedGrowthButPreservesScrolledUpPosition() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "gleanary-chat-scroll-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(store: store))
+        await model.load()
+        model.messages = (0 ..< 35).map { index in
+            ConversationMessage(
+                sequence: Int64(index), id: UUID(), author: "assistant",
+                text: "Synthetic message \(index).\n\nA second paragraph for the scroll fixture.",
+                references: [], taskID: nil, createdAt: Date(timeIntervalSince1970: 1000)
+            )
+        }
+        let host = NSHostingView(rootView: ConversationView(
+            model: model, library: LibraryModel(store: store)
+        ).defaultAppStorage(defaults))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(300))
+        host.layoutSubtreeIfNeeded()
+        let scroll = try #require(Self.chatScroll(in: host))
+        let document = try #require(scroll.documentView)
+        #expect(document.frame.height - scroll.contentView.bounds.maxY <= 41)
+        let last = try #require(model.messages.last)
+        model.messages[model.messages.count - 1] = ConversationMessage(
+            sequence: last.sequence, id: last.id, author: last.author,
+            text: String(repeating: "More streamed text.\n\n", count: 12),
+            references: [], taskID: nil, createdAt: last.createdAt
+        )
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(document.frame.height - scroll.contentView.bounds.maxY <= 41)
+        scroll.contentView.scroll(to: NSPoint(
+            x: 0, y: max(0, scroll.contentView.bounds.minY - 260)
+        ))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(200))
+        let readingOffset = scroll.contentView.bounds.minY
+        #expect(document.frame.height - scroll.contentView.bounds.maxY > 100)
+        model.messages.append(ConversationMessage(
+            sequence: 36, id: UUID(), author: "assistant",
+            text: String(repeating: "New content while reading earlier messages.\n\n", count: 8),
+            references: [], taskID: nil, createdAt: last.createdAt
+        ))
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(abs(scroll.contentView.bounds.minY - readingOffset) < 2)
+        let streaming = try #require(model.messages.last)
+        model.messages[model.messages.count - 1] = ConversationMessage(
+            sequence: streaming.sequence, id: streaming.id, author: streaming.author,
+            text: streaming.text + String(repeating: "\n\nMore late-rendered content.", count: 8),
+            references: [], taskID: nil, createdAt: streaming.createdAt
+        )
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(abs(scroll.contentView.bounds.minY - readingOffset) < 2)
+        scroll.contentView.scroll(to: NSPoint(
+            x: 0, y: document.frame.height - scroll.contentView.bounds.height
+        ))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await Task.sleep(for: .milliseconds(200))
+        model.messages.append(ConversationMessage(
+            sequence: 37, id: UUID(), author: "assistant",
+            text: "Following resumes at the bottom.\n\nThe newest message stays visible.",
+            references: [], taskID: nil, createdAt: last.createdAt
+        ))
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(document.frame.height - scroll.contentView.bounds.maxY <= 41)
+    }
+
+    @MainActor private static func chatScroll(in view: NSView) -> NSScrollView? {
+        if let scroll = view as? NSScrollView,
+           let document = scroll.documentView,
+           document.frame.height > scroll.contentView.bounds.height + 100
+        {
+            return scroll
+        }
+        return view.subviews.lazy.compactMap { chatScroll(in: $0) }.first
+    }
+
     @Test @MainActor func latestMessagesUsesDistanceFromBottomIncludingShortFeeds() {
         #expect(ConversationView.isAtLatest(contentHeight: 1800, visibleBottom: 1800))
         #expect(ConversationView.isAtLatest(contentHeight: 1800, visibleBottom: 1780))

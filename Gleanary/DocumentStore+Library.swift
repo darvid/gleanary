@@ -98,9 +98,14 @@ extension DocumentStore {
             """) {
                 try memberships[row["noteID"], default: []].append(Self.uuid(row["categoryID"]))
             }
+            var provenance: [String: Set<UUID>] = [:]
+            for row in try Row.fetchAll(db, sql: "SELECT noteID, sourceID FROM note_sources") {
+                try provenance[row["noteID"], default: []].insert(Self.uuid(row["sourceID"]))
+            }
             let items = try Row.fetchAll(db, sql: """
             SELECT n.id, n.name, n.sourceURL, n.updatedAt, \(Self.libraryKindSQL) AS kind,
-                n.previewImage IS NOT NULL AS hasPreview
+                n.previewImage IS NOT NULL AS hasPreview,
+                (SELECT id FROM captures WHERE noteID = n.id ORDER BY createdAt DESC, id LIMIT 1) AS captureID
             FROM notes n WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
             """).map { row in
                 let id: String = row["id"]
@@ -110,7 +115,8 @@ extension DocumentStore {
                     host: source.flatMap(URL.init(string:))?.host(),
                     updatedAt: Date(timeIntervalSince1970: row["updatedAt"]),
                     categoryIDs: memberships[id] ?? [],
-                    hasPreview: row["hasPreview"]
+                    hasPreview: row["hasPreview"], sourceIDs: provenance[id] ?? [],
+                    captureID: (row["captureID"] as String?).map(Self.uuid)
                 )
             }
             let categories = try Row.fetchAll(
@@ -257,12 +263,14 @@ extension DocumentStore {
             let row = try Row.fetchOne(
                 db,
                 sql: """
-                SELECT sourceURL, faviconData, previewImage, createdAt, archivedAt, archiveReason
-                FROM notes WHERE id = ?
+                SELECT sourceURL, faviconData, previewImage, createdAt, archivedAt, archiveReason,
+                    \(Self.libraryKindSQL) AS kind
+                FROM notes n WHERE n.id = ?
                 """,
                 arguments: [id.uuidString]
             )
             return LibraryItemDetails(
+                kind: row?["kind"] ?? "note",
                 sourceURL: (row?["sourceURL"] as String?).flatMap(URL.init(string:)),
                 favicon: row?["faviconData"],
                 previewImage: row?["previewImage"],
@@ -289,6 +297,7 @@ extension DocumentStore {
 }
 
 struct LibraryItemDetails: Sendable, Equatable {
+    var kind = "note"
     var sourceURL: URL?
     var favicon: Data?
     var previewImage: Data?

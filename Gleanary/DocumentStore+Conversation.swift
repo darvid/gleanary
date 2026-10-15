@@ -23,6 +23,27 @@ extension DocumentStore {
         }
     }
 
+    func conversationReferences(_ ids: Set<UUID>) throws -> [UUID: ConversationReference] {
+        guard !ids.isEmpty else { return [:] }
+        return try readyDatabase().read { db in
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT n.id, n.name, n.sourceURL, a.kind, a.taskID
+            FROM notes n LEFT JOIN authored_artifacts a ON a.noteID = n.id
+            WHERE n.deletedAt IS NULL AND n.id IN (\(placeholders))
+            """, arguments: StatementArguments(ids.map(\.uuidString)))
+            return try Dictionary(uniqueKeysWithValues: rows.map { row in
+                let id = try Self.uuid(row["id"])
+                let task: String? = row["taskID"]
+                return try (id, ConversationReference(
+                    id: id, title: row["name"],
+                    sourceURL: (row["sourceURL"] as String?).flatMap(URL.init(string:)),
+                    artifactKind: row["kind"], taskID: task.map(Self.uuid)
+                ))
+            })
+        }
+    }
+
     func conversationTasks() throws -> [ConversationTask] {
         try readyDatabase().read { db in
             try Row.fetchAll(

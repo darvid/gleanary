@@ -331,7 +331,7 @@ struct AtlasRenderer {
         let fill = AtlasPalette.fill(node.hue, dark: dark)
         let ink = AtlasPalette.ink(node.hue, dark: dark)
         let opacity = itemOpacity(node, at: position)
-        let source = node.item?.kind == "source"
+        let source = node.item?.isSourceCard == true
         var tileLayer = context
         tileLayer.opacity = Self.itemReveal(screen)
         // Sources are solid; notes and generated artifacts are lighter with an outline, so type
@@ -413,7 +413,9 @@ struct AtlasRenderer {
         // Symbols are drawn as text so they keep their own proportions and baseline.
         let glyphShown = Self.ramp(screen.width, 96, 108) * Self.ramp(screen.height, 34, 40)
         let glyph = glyphShown > 0
-            ? context.resolve(Text(Image(systemName: Self.symbol(for: item.kind)))
+            ? context
+            .resolve(Text(Image(systemName: Self
+                    .symbol(for: item.isSourceCard ? "source" : item.kind)))
                 .font(large ? .callout : .caption).foregroundStyle(ink.opacity(0.8)))
             : nil
         let glyphWidth = glyph.map {
@@ -432,7 +434,8 @@ struct AtlasRenderer {
         if detailShown > 0 {
             var layer = context
             layer.opacity *= detailShown
-            let detail = [item.kindLabel, item.host].compactMap(\.self).joined(separator: " · ")
+            let detail = [item.cardKindLabel, item.summaryLabel, item.host]
+                .compactMap(\.self).joined(separator: " · ")
             y += line(
                 detail, style: { $0.font(.caption2).foregroundStyle(.secondary) },
                 x: screen.minX + inset, y: y + 1, width: width, in: &layer
@@ -477,7 +480,7 @@ struct AtlasRenderer {
             let screen = camera.screen(tile.rect)
             guard screen.intersects(viewport) else { continue }
             let opacity = itemOpacity(tile.node, at: position)
-            let source = tile.node.item?.kind == "source"
+            let source = tile.node.item?.isSourceCard == true
             let effective = source ? opacity : opacity * 0.5
             buckets[min(4, Int(effective * 5))].addRect(screen)
             if !source {
