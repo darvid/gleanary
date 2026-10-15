@@ -10,19 +10,19 @@ swiftlint = "0.65.1"
 _.file = ".env"
 
 [tasks.dev]
-description = "Build and open the native Infactory app (quit it first to reload changes)"
+description = "Build and open the native Gleanary app (quit it first to reload changes)"
 depends = ["app:build"]
-run = 'open "$MISE_PROJECT_ROOT/.build/Infactory.app"'
+run = 'open "$MISE_PROJECT_ROOT/.build/Gleanary.app"'
 
 [tasks."dev:release"]
-description = "Build an optimized Infactory app for graph performance (quit it first)"
+description = "Build an optimized Gleanary app for graph performance (quit it first)"
 run = '''
 CONFIGURATION=release bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"
-open "$MISE_PROJECT_ROOT/.build/Infactory.app"
+open "$MISE_PROJECT_ROOT/.build/Gleanary.app"
 '''
 
 [tasks."app:build"]
-description = "Build and sign a local sandboxed Infactory.app bundle"
+description = "Build and sign a local sandboxed Gleanary.app bundle"
 run = 'bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
 
 [tasks.format]

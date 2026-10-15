@@ -1,15 +1,15 @@
-# Infactory: Agent-Native Personal Knowledge System
+# Gleanary: Agent-Native Personal Knowledge System
 
 **Status:** Implementation specification for an existing application  
 **Last updated:** 2026-10-12  
-**Primary audience:** Codex working in the Infactory repository  
+**Primary audience:** Codex working in the Gleanary repository
 **Directive:** Build and validate a working vertical slice. Prefer running software and measured user experience over speculative abstractions.
 
 ---
 
 ## 0. Codex: Read This First
 
-You are the lead engineer and product-minded implementer of **Infactory**, an existing **Swift application backed by SQLite that already uses Apple Intelligence**. Your job is to evolve the real application into a compelling, local-first, agent-native second brain, **not** to bootstrap a replacement project.
+You are the lead engineer and product-minded implementer of **Gleanary**, an existing **Swift application backed by SQLite that already uses Apple Intelligence**. Your job is to evolve the real application into a compelling, local-first, agent-native second brain, **not** to bootstrap a replacement project.
 
 **Operating instructions:**
 
@@ -34,14 +34,14 @@ You are the lead engineer and product-minded implementer of **Infactory**, an ex
 
 ## 1. Product Thesis
 
-**Infactory is a local-first personal information factory.** It helps a person acquire, organize, find, evaluate, connect, and synthesize information through a **single persistent, shared conversation** with a small team of specialized agents.
+**Gleanary is a local-first personal information factory.** It helps a person acquire, organize, find, evaluate, connect, and synthesize information through a **single persistent, shared conversation** with a small team of specialized agents.
 
-The user should not need to know whether their request is technically ingestion, retrieval, metadata normalization, research, synthesis, or curation. They express an intent, optionally `@mention` a specialist, and Infactory handles the underlying work.
+The user should not need to know whether their request is technically ingestion, retrieval, metadata normalization, research, synthesis, or curation. They express an intent, optionally `@mention` a specialist, and Gleanary handles the underlying work.
 
 ### North-star experience
 
-1. Open Infactory and see one conversation, `#general`.
-2. Paste an article or arXiv URL and ask Infactory to save and summarize it.
+1. Open Gleanary and see one conversation, `#general`.
+2. Paste an article or arXiv URL and ask Gleanary to save and summarize it.
 3. The librarian records the canonical source and files it in the current Johnny Decimal scheme.
 4. The researcher produces a useful, grounded summary, not just a generic restatement.
 5. The curator notices relevant existing material and offers a meaningful connection or consolidation.
@@ -826,4 +826,4 @@ The following references guide integration. They do not supersede current SDK do
 
 ## Final Instruction
 
-**Go build the smallest real Infactory experience that demonstrates the promise:** one conversation, a few useful specialists, genuine source ingestion, Johnny Decimal filing, source-grounded synthesis, local persistence, meaningful collaboration, and retrieval. Preserve the working Swift/SQLite/Apple Intelligence application. Make optional ChatGPT integration compliant and testable. Ship a cohesive, delightful prototype, measure it with users, and let actual friction determine the next architectural abstraction.
+**Go build the smallest real Gleanary experience that demonstrates the promise:** one conversation, a few useful specialists, genuine source ingestion, Johnny Decimal filing, source-grounded synthesis, local persistence, meaningful collaboration, and retrieval. Preserve the working Swift/SQLite/Apple Intelligence application. Make optional ChatGPT integration compliant and testable. Ship a cohesive, delightful prototype, measure it with users, and let actual friction determine the next architectural abstraction.
