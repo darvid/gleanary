@@ -505,7 +505,12 @@ struct ContentView: View {
         } else {
             KnowledgeAtlasView(
                 atlas: atlas, store: library.store,
-                refreshToken: library.documentGrid.generation, openItem: openFromAtlas
+                refreshToken: library.documentGrid.generation, openItem: openFromAtlas,
+                openCapturedSource: { captureID in
+                    source = SourceCitation(
+                        captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: nil
+                    )
+                }
             )
         }
     }
@@ -534,7 +539,7 @@ struct ContentView: View {
     }
 
     private func openFromAtlas(_ id: UUID) {
-        atlas.selectedID = .item(id)
+        atlas.selectedID = atlas.layout.tile(.item(id))?.id ?? .item(id)
         preview.selectedID = id
         atlasItem = id
     }
@@ -950,8 +955,7 @@ struct ContentView: View {
 
     /// A fetch in progress writes the summary itself once the page arrives.
     private var summaryEnabled: Bool {
-        guard let id = preview.selectedID else { return library.canGenerateSummaries }
-        return library.canGenerateSummaries && library.bookmarkFetch(for: id) == nil
+        library.canGenerateSummary(for: preview.selectedID)
     }
 
     /// Only Generate Summary stops from here; stopping a page fetch would discard the page.

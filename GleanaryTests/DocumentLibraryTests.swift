@@ -45,6 +45,48 @@ private struct DeletionFixtureEmbedder: EmbeddingProviding {
 
 @Suite(.serialized)
 struct DocumentLibraryTests {
+    @Test @MainActor func filingChipsAndActionsShareTextBaselinesWhenWrapping() async throws {
+        for width in [260.0, 400.0] {
+            for dark in [false, true] {
+                let measurements = FilingBaselineMeasurements()
+                let host = NSHostingView(rootView: FilingBaselineProbe(measurements: measurements)
+                    .preferredColorScheme(dark ? .dark : .light)
+                    .background(Color(nsColor: .windowBackgroundColor)))
+                let window = NSWindow(
+                    contentRect: NSRect(x: 0, y: 0, width: width, height: 140),
+                    styleMask: [.borderless], backing: .buffered, defer: false
+                )
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.appearance = window.appearance
+                window.contentView = host
+                defer { window.contentView = nil; window.close() }
+                try await Task.sleep(for: .milliseconds(100))
+                host.layoutSubtreeIfNeeded()
+                let label = try #require(measurements.values["label"])
+                let chip = try #require(measurements.values["chip"])
+                let change = try #require(measurements.values["change"])
+                let suggest = try #require(measurements.values["suggest"])
+                #expect(abs(label - chip) < 1)
+                #expect(abs(change - suggest) < 1)
+                if width == 400 {
+                    #expect(abs(chip - change) < 1)
+                } else {
+                    #expect(change > chip + 8)
+                }
+                window.displayIfNeeded()
+                host.needsDisplay = true
+                host.display()
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try png.write(to: FileManager.default.temporaryDirectory.appending(
+                    path: "gleanary-filing-baseline-\(Int(width))-\(dark ? "dark" : "light").png"
+                ))
+            }
+        }
+    }
+
     @Test @MainActor func savedDocumentPreviewFitsNarrowPanes() async throws {
         let fixture = try LibraryFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open()
@@ -218,12 +260,41 @@ struct DocumentLibraryTests {
         preview.selectedID = id
         await preview.load(from: fixture.store)
         #expect(preview.generatedSummary)
+        #expect(preview.details.kind == "summary")
+        #expect(ReadingKind(libraryKind: preview.details.kind) == .notes)
         let citation = try #require(preview.citation)
         let detail = try await fixture.store.captureDetail(id: citation.captureID)
         #expect(detail.document.markdown == captured.markdown)
         #expect(detail.artifacts.contains { $0.hash == original.hash })
         #expect(try await artifacts
             .data(for: original) == Data("Retained original cobaltbeacon prose.".utf8))
+        let researchSource = try await fixture.store.researchSource(noteID: id)
+        let task = try await fixture.store.beginConversation(
+            "Summarize this source",
+            owner: .researcher
+        )
+        let research = try await fixture.store.saveResearch(
+            "# Research summary\n\nA separate generated note.", name: "Research: saved source",
+            sources: [researchSource], taskID: task, provider: "synthetic-fixture", kind: "summary"
+        )
+        let home = try #require(await fixture.store.categories().first)
+        for noteID in [id, research.id] {
+            try await fixture.store.fileNote(noteID, categoryID: home.id, includeSources: false)
+        }
+        let atlasSnapshot = try await fixture.store.atlasSnapshot()
+        #expect(atlasSnapshot.items.allSatisfy { $0.kind == "summary" })
+        let atlas = KnowledgeAtlasModel(snapshot: atlasSnapshot)
+        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 1)
+        let card = try #require(atlas.layout.tile(.item(id))?.node.item)
+        #expect(card.captureID == citation.captureID)
+        #expect(card.cardKindLabel == "Source")
+        #expect(card.summaryLabel == "2 summaries")
+        #expect(Set(card.summaryDocuments.map(\.id)) == [id, research.id])
+        #expect(atlas.layout.tile(.item(research.id))?.id == .item(id))
+        #expect(atlas.root.itemCount == 2)
+        atlas.kindFilter = .notes
+        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
+        #expect(atlas.layout.tile(.item(id))?.node.item?.cardKindLabel == "Summary")
         var edited = try #require(await fixture.store.document(id: id))
         edited.markdown = "My own revised annotation."
         _ = try await fixture.store.save(edited)
@@ -297,6 +368,8 @@ struct DocumentLibraryTests {
         preview.selectedID = sourceID
         await preview.load(from: fixture.store)
         #expect(preview.coverage == .partial)
+        #expect(preview.details.kind == "source")
+        #expect(ReadingKind(libraryKind: preview.details.kind) == .sources)
         #expect(preview.categories.first?.id == category.id)
         #expect(preview.related.first?.id == summary.id)
         let cancelledRefresh = Task { await preview.load(from: fixture.store) }
@@ -313,7 +386,19 @@ struct DocumentLibraryTests {
             selected: summary.id,
             name: "gleanary-library-summary"
         )
+        try await fixture.store.fileNote(summary.id, categoryID: category.id, includeSources: false)
+        let atlasSnapshot = try await fixture.store.atlasSnapshot()
+        let atlasLayout = AtlasLayout(root: AtlasHierarchy.project(atlasSnapshot), bounds: .zero)
+        let card = try #require(atlasLayout.tile(.item(sourceID)))
+        #expect(card.node.item?.summaries.map(\.id) == [summary.id])
+        #expect(card.node.itemCount == 2)
+        #expect(atlasLayout.tile(.item(summary.id))?.id == card.id)
         try await fixture.store.remove(summary)
+        let refreshedAtlas = try await AtlasLayout(
+            root: AtlasHierarchy.project(fixture.store.atlasSnapshot()),
+            bounds: .zero
+        )
+        #expect(refreshedAtlas.tile(.item(sourceID))?.node.item?.summaries.isEmpty == true)
         #expect(try await fixture.store.relatedLibraryDocuments(to: sourceID).isEmpty)
         #expect(try await fixture.store.documentPage(scope: .notes).total == 1)
         let reopened = DocumentStore(url: fixture.store.url)
@@ -1016,6 +1101,50 @@ struct DocumentLibraryTests {
         try await Task.sleep(for: .milliseconds(650))
         host.layoutSubtreeIfNeeded()
         try screenshot(host, name: name)
+    }
+}
+
+@MainActor private final class FilingBaselineMeasurements {
+    var values: [String: CGFloat] = [:]
+}
+
+private struct FilingBaselineProbe: View {
+    let measurements: FilingBaselineMeasurements
+    private let baseline = Alignment(horizontal: .leading, vertical: .firstTextBaseline)
+
+    var body: some View {
+        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+            GridRow {
+                Text("Filed in").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                    .overlay(alignment: baseline) { marker("label") }
+                VStack(alignment: .leading, spacing: 8) {
+                    ChipFlow(spacing: 8) {
+                        CategoryChip(category: DecimalCategory(
+                            id: UUID(), code: "15", name: "Tools & software"
+                        ))
+                        .overlay(alignment: baseline) { marker("chip") }
+                        Button("Change…") {}.buttonStyle(.link)
+                            .overlay(alignment: baseline) { marker("change") }
+                        Button {} label: { Label("Suggest", systemImage: "sparkles") }
+                            .buttonStyle(.link)
+                            .overlay(alignment: baseline) { marker("suggest") }
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .font(.callout).padding(14)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .padding(8)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .coordinateSpace(name: "filing-baselines")
+    }
+
+    private func marker(_ name: String) -> some View {
+        Color.clear.frame(width: 1, height: 1)
+            .alignmentGuide(.firstTextBaseline) { _ in 0 }
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.frame(in: .named("filing-baselines")).minY
+            } action: { measurements.values[name] = $0 }
     }
 }
 

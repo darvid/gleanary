@@ -121,6 +121,15 @@ struct DocumentPreview: View {
     var refreshDocument: ((MarkdownDocument) -> Void)?
     var showsSummaryActions = true
     @Environment(\.colorScheme) private var colorScheme
+    private var appearance = ReadingAppearance()
+
+    private var readingKind: ReadingKind {
+        ReadingKind(libraryKind: model.details.kind)
+    }
+
+    private var readingFont: ReadingFont {
+        appearance[readingKind]
+    }
 
     private var dark: Bool {
         colorScheme == .dark
@@ -157,12 +166,30 @@ struct DocumentPreview: View {
                         infoCard(document)
                         VStack(alignment: .leading, spacing: 12) {
                             if let contentTitle {
-                                Text(contentTitle).font(.title3.weight(.semibold))
+                                Text(contentTitle)
+                                    .font(readingFont.scaledFont(17.0 / 14, weight: .semibold))
                                     .accessibilityAddTraits(.isHeader)
                             }
-                            MarkdownPreview(markdown: document.markdown, font: .system(size: 14))
+                            MarkdownPreview(markdown: document.markdown, readingFont: readingFont)
                                 .textSelection(.enabled)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(20)
+                        .background {
+                            if readingKind == .notes {
+                                NotebookDots()
+                                    .clipShape(RoundedRectangle(
+                                        cornerRadius: 16,
+                                        style: .continuous
+                                    ))
+                            }
+                        }
+                        .background(
+                            Color.primary.opacity(dark ? 0.035 : 0.025),
+                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        )
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Document content")
                         if showsLibraryDetails, !model.links.isEmpty {
                             itemList(
                                 "Linked",
@@ -241,7 +268,7 @@ struct DocumentPreview: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
             Text(document.name)
-                .font(.title.weight(.bold))
+                .font(readingFont.scaledFont(22.0 / 14, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
@@ -543,7 +570,7 @@ struct ChipFlow: Layout {
         let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
         let width = rows.map { $0.reduce(0) { $0 + $1.width } + spacing * CGFloat($0.count - 1) }
             .max() ?? 0
-        let height = rows.map { $0.map(\.height).max() ?? 0 }.reduce(0, +)
+        let height = rows.map(rowHeight).reduce(0, +)
             + spacing * CGFloat(max(rows.count - 1, 0))
         return CGSize(width: width, height: height)
     }
@@ -555,20 +582,41 @@ struct ChipFlow: Layout {
         var index = 0
         for row in rows(width: bounds.width, subviews: subviews) {
             var x = bounds.minX
-            for size in row {
-                subviews[index].place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-                x += size.width + spacing
+            let baseline = rowBaseline(row)
+            for dimensions in row {
+                subviews[index].place(
+                    at: CGPoint(x: x, y: y + baseline - dimensions[.firstTextBaseline]),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: dimensions.width, height: dimensions.height)
+                )
+                x += dimensions.width + spacing
                 index += 1
             }
-            y += (row.map(\.height).max() ?? 0) + spacing
+            y += rowHeight(row) + spacing
         }
     }
 
-    private func rows(width: CGFloat, subviews: Subviews) -> [[CGSize]] {
-        var rows: [[CGSize]] = [[]]
+    func explicitAlignment(
+        of guide: VerticalAlignment, in bounds: CGRect, proposal _: ProposedViewSize,
+        subviews: Subviews, cache _: inout ()
+    ) -> CGFloat? {
+        guard guide == .firstTextBaseline else { return nil }
+        return rows(width: bounds.width, subviews: subviews).first.map(rowBaseline)
+    }
+
+    private func rowBaseline(_ row: [ViewDimensions]) -> CGFloat {
+        row.map { $0[.firstTextBaseline] }.max() ?? 0
+    }
+
+    private func rowHeight(_ row: [ViewDimensions]) -> CGFloat {
+        rowBaseline(row) + (row.map { $0.height - $0[.firstTextBaseline] }.max() ?? 0)
+    }
+
+    private func rows(width: CGFloat, subviews: Subviews) -> [[ViewDimensions]] {
+        var rows: [[ViewDimensions]] = [[]]
         var used: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            let size = subview.dimensions(in: ProposedViewSize(width: width, height: nil))
             if !rows[rows.count - 1].isEmpty, used + spacing + size.width > width {
                 rows.append([])
                 used = 0
@@ -580,10 +628,36 @@ struct ChipFlow: Layout {
     }
 }
 
+/// A repeating tile keeps drawing cost independent of the note's length.
+private struct NotebookDots: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    private static let lightTile = makeTile(dark: false)
+    private static let darkTile = makeTile(dark: true)
+
+    private static func makeTile(dark: Bool) -> NSImage {
+        NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
+            (dark ? NSColor.white : .black).setFill()
+            NSBezierPath(ovalIn: NSRect(x: 9.4, y: 9.4, width: 1.2, height: 1.2)).fill()
+            return true
+        }
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(ImagePaint(image: Image(nsImage: colorScheme == .dark ? Self.darkTile : Self
+                    .lightTile)))
+            .opacity(contrast == .increased ? 0 : colorScheme == .dark ? 0.10 : 0.08)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 /// Render local Markdown as native, selectable text. No scripts or remote images are loaded.
 struct MarkdownPreview: View {
     let markdown: String
     var font: Font = .body
+    var readingFont: ReadingFont?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -591,7 +665,10 @@ struct MarkdownPreview: View {
                 if block.hasPrefix("```") {
                     Text(block.components(separatedBy: "\n").dropFirst().dropLast()
                         .joined(separator: "\n"))
-                        .font(.body.monospaced()).frame(maxWidth: .infinity, alignment: .leading)
+                        .font(readingFont
+                            .map { .system(size: $0.size, design: .monospaced) } ?? .body
+                            .monospaced())
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12).background(Color(nsColor: .controlBackgroundColor))
                 } else if let rows = Self.tableRows(block) {
                     ScrollView(.horizontal) {
@@ -615,7 +692,11 @@ struct MarkdownPreview: View {
                     Text(Self
                         .inline(String(block.dropFirst(heading))
                             .trimmingCharacters(in: .whitespaces)))
-                        .font(heading == 1 ? .title2.weight(.semibold) : .headline)
+                        .font(readingFont?.scaledFont(
+                            heading == 1 ? 17.0 / 14 : 1,
+                            weight: .semibold
+                        )
+                            ?? (heading == 1 ? .title2.weight(.semibold) : .headline))
                         .padding(.top, 8).accessibilityAddTraits(.isHeader)
                 } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
@@ -641,7 +722,7 @@ struct MarkdownPreview: View {
                 }
             }
         }
-        .font(font)
+        .font(readingFont?.font ?? font)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 

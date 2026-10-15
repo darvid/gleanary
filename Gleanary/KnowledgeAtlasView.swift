@@ -10,6 +10,7 @@ struct KnowledgeAtlasView: View {
     /// Changes whenever the Library's contents may have changed.
     var refreshToken = 0
     let openItem: (UUID) -> Void
+    var openCapturedSource: ((UUID) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -175,8 +176,19 @@ struct KnowledgeAtlasView: View {
                 Text(tile.node.label).font(.caption.weight(.medium)).lineLimit(1)
                 Text(detail(of: tile)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if let item = tile.node.item {
-                    Button("Open") { openItem(item.id) }.buttonStyle(.bordered)
-                        .labelStyle(.titleOnly)
+                    Button(item.summaryDocuments.isEmpty ? "Open" : "Open Source") {
+                        openSource(for: item)
+                    }.buttonStyle(.bordered).labelStyle(.titleOnly)
+                    if let summary = item.summaryDocuments.first, item.summaryDocuments.count == 1 {
+                        Button("Open Summary") { openItem(summary.id) }
+                            .buttonStyle(.bordered).labelStyle(.titleOnly)
+                    } else if !item.summaryDocuments.isEmpty {
+                        Menu("Summaries") {
+                            ForEach(item.summaryDocuments) { summary in
+                                Button(summary.title) { openItem(summary.id) }
+                            }
+                        }.labelStyle(.titleOnly)
+                    }
                 } else if tile.childCount > 0, tile.id != atlas.focusID {
                     Button("Zoom in") { atlas.activate(tile.id) }.buttonStyle(.bordered)
                         .labelStyle(.titleOnly)
@@ -184,6 +196,16 @@ struct KnowledgeAtlasView: View {
             }
         } else if let root = atlas.layout.root {
             Text(summary(of: root)).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+
+    func openSource(for item: AtlasItem) {
+        if item.isSourceCard, item.kind == "summary", let captureID = item.captureID,
+           let openCapturedSource
+        {
+            openCapturedSource(captureID)
+        } else {
+            openItem(item.id)
         }
     }
 
@@ -416,6 +438,14 @@ struct KnowledgeAtlasView: View {
                             openItem(item)
                         }
                     }
+                    .accessibilityActions {
+                        ForEach(tile.node.item?.summaryDocuments ?? []) { summary in
+                            Button("Open summary: \(summary.title)") { openItem(summary.id) }
+                        }
+                        if let item = tile.node.item, item.isSourceCard {
+                            Button("Open source") { openSource(for: item) }
+                        }
+                    }
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -441,7 +471,8 @@ struct KnowledgeAtlasView: View {
     private func detail(of tile: AtlasTile) -> String {
         if let item = tile.node.item {
             return [
-                item.kindLabel,
+                item.cardKindLabel,
+                item.summaryLabel,
                 item.host,
                 item.updatedAt.formatted(date: .abbreviated, time: .omitted),
             ].compactMap(\.self).joined(separator: " · ")

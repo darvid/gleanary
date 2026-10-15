@@ -84,6 +84,175 @@ private func expectSiblingsTileWithoutOverlap(_ layout: AtlasLayout) {
 }
 
 struct KnowledgeAtlasProjectionTests {
+    @Test @MainActor func groupsSingleSourceSummariesWithoutLosingDocumentsOrSearch() throws {
+        let home = category("15", "Tools & software", id: 1)
+        var source = item(1, in: [home])
+        source.sourceIDs = [fixtureID(50)]
+        var first = item(2, in: [home], kind: "summary")
+        first.sourceIDs = source.sourceIDs
+        var second = item(3, in: [home], kind: "summary")
+        second.sourceIDs = source.sourceIDs
+        let snapshot = AtlasSnapshot(categories: [home], items: [source, first, second])
+        let atlas = KnowledgeAtlasModel(snapshot: snapshot)
+        atlas.setViewport(CGSize(width: 640, height: 480))
+        let region = try #require(atlas.layout.tile(.category(home.id)))
+        #expect(atlas.root.itemCount == 3)
+        #expect(region.childCount == 1)
+        let card = try #require(atlas.layout.tile(.item(source.id)))
+        #expect(card.node.item?.summaries.map(\.id) == [second.id, first.id])
+        #expect(card.node.itemCount == 3)
+        #expect(card.node.lastActivity == second.updatedAt)
+        #expect(atlas.layout.tile(.item(first.id))?.id == card.id)
+        atlas.setMatches([first.id, second.id])
+        #expect(atlas.matchCounts[0] == 2)
+        #expect(try atlas.matchCounts[#require(atlas.layout.index[card.id])] == 2)
+        #expect(atlas.activate(.item(first.id)) == .open(first.id))
+        #expect(atlas.selectedID == .item(source.id))
+        #expect(atlas.activate(.item(source.id)) == .open(source.id))
+        let regrouping = KnowledgeAtlasModel(snapshot: AtlasSnapshot(
+            categories: [home],
+            items: [first]
+        ))
+        regrouping.selectedID = .item(first.id)
+        regrouping.apply(snapshot)
+        #expect(regrouping.selectedID == .item(source.id))
+        atlas.kindFilter = .notes
+        #expect(atlas.root.itemCount == 2)
+        #expect(atlas.layout.tile(.item(first.id))?.id == .item(first.id))
+        atlas.kindFilter = .sources
+        #expect(atlas.root.itemCount == 1)
+    }
+
+    @Test @MainActor func groupedCaptureOpensItsRetainedOriginalAndKeepsBothSummaries() throws {
+        var captured = item(1, kind: "summary")
+        captured.captureID = fixtureID(51)
+        captured.sourceIDs = [fixtureID(50)]
+        var research = item(2, kind: "summary")
+        research.sourceIDs = captured.sourceIDs
+        let atlas = KnowledgeAtlasModel(snapshot: AtlasSnapshot(
+            categories: [],
+            items: [captured, research]
+        ))
+        let card = try #require(atlas.layout.tile(.item(captured.id))?.node.item)
+        #expect(card.isSourceCard)
+        #expect(card.summaryLabel == "2 summaries")
+        #expect(Set(card.summaryDocuments.map(\.id)) == [captured.id, research.id])
+        #expect(card.summaries.map(\.id) == [research.id])
+        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 1)
+        var openedNote: UUID?
+        var openedCapture: UUID?
+        let view = KnowledgeAtlasView(
+            atlas: atlas, store: nil, openItem: { openedNote = $0 },
+            openCapturedSource: { openedCapture = $0 }
+        )
+        view.openSource(for: card)
+        #expect(openedCapture == captured.captureID)
+        #expect(openedNote == nil)
+        #expect(atlas.activate(.item(research.id)) == .open(research.id))
+        #expect(atlas.activate(.item(captured.id)) == .open(captured.id))
+        // With no peer, a captured summary must not group itself away.
+        atlas.apply(AtlasSnapshot(categories: [], items: [captured]))
+        #expect(atlas.root.itemCount == 1)
+        let standalone = try #require(atlas.layout.tile(.item(captured.id))?.node.item)
+        #expect(standalone.summaries.isEmpty)
+        openedCapture = nil
+        view.openSource(for: standalone)
+        #expect(openedNote == captured.id)
+        #expect(openedCapture == nil)
+    }
+
+    @Test func independentFilingAmbiguousAndMultiSourceNotesStaySeparate() {
+        let home = category("15", "Tools", id: 1)
+        let other = category("16", "Research", id: 2)
+        var source = item(1, in: [home])
+        source.sourceIDs = [fixtureID(50)]
+        var summary = item(2, in: [other], kind: "summary")
+        summary.sourceIDs = source.sourceIDs
+        var multi = item(3, in: [home], kind: "summary")
+        multi.sourceIDs = [fixtureID(50), fixtureID(51)]
+        var comparison = item(4, in: [home], kind: "comparison")
+        comparison.sourceIDs = source.sourceIDs
+        var note = item(5, in: [home], kind: "note")
+        note.sourceIDs = source.sourceIDs
+        let snapshot = AtlasSnapshot(
+            categories: [home, other],
+            items: [source, summary, multi, comparison, note]
+        )
+        let layout = AtlasLayout(
+            root: AtlasHierarchy.project(snapshot),
+            bounds: CGRect(x: 0, y: 0, width: 800, height: 600)
+        )
+        #expect(layout.tiles.filter { $0.node.kind == .item }.count == 5)
+        var duplicate = item(6, in: [home])
+        duplicate.sourceIDs = source.sourceIDs
+        summary.categoryIDs = [home.id]
+        let ambiguous = AtlasHierarchy.project(AtlasSnapshot(
+            categories: [home],
+            items: [source, duplicate, summary]
+        ))
+        #expect(ambiguous.children.first?.children.count == 3)
+        let missing = AtlasHierarchy.project(AtlasSnapshot(categories: [home], items: [summary]))
+        #expect(missing.children.first?.children.first?.id == .item(summary.id))
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func groupedCardRendersWithSeparateOpenActions(summarizedCapture: Bool) async throws {
+        let home = category("15", "Tools & software", id: 1)
+        let source = AtlasItem(
+            id: fixtureID(1), title: "A saved source about testing",
+            kind: summarizedCapture ? "summary" : "source",
+            host: "fixture.example", updatedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            categoryIDs: [home.id], sourceIDs: [fixtureID(50)],
+            captureID: summarizedCapture ? fixtureID(51) : nil
+        )
+        var summary = item(2, in: [home], kind: "summary")
+        summary.sourceIDs = source.sourceIDs
+        // Add another independent item so the grouped card reads at a realistic width.
+        let snapshot = AtlasSnapshot(
+            categories: [home],
+            items: [source, summary, item(3, in: [home])]
+        )
+        for dark in [false, true] {
+            let atlas = KnowledgeAtlasModel(snapshot: snapshot)
+            atlas.reduceMotion = true
+            atlas.selectedID = .item(source.id)
+            let host = NSHostingView(rootView: KnowledgeAtlasView(
+                atlas: atlas,
+                store: nil,
+                openItem: { _ in }
+            )
+            .background(Color(nsColor: .windowBackgroundColor))
+            .preferredColorScheme(dark ? .dark : .light))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 680, height: 500),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            host.appearance = window.appearance
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            try await Task.sleep(for: .milliseconds(150))
+            atlas.focus(.category(home.id), animated: false)
+            host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            host.needsDisplay = true
+            host.display()
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let png = try #require(bitmap.representation(using: .png, properties: [:]))
+            try png
+                .write(to: FileManager.default.temporaryDirectory
+                    .appending(
+                        path: "gleanary-grouped-card-\(summarizedCapture ? "capture-summary-" : "")\(dark ? "dark" : "light").png"
+                    ))
+        }
+    }
+
     @Test func projectsCodesIntoNestedRegionsAndCountsEachItemOnce() throws {
         let fixture = AtlasFixture()
         let root = AtlasHierarchy.project(fixture.snapshot)

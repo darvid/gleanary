@@ -301,8 +301,12 @@ final class LibraryModel {
         ready && !busy
     }
 
+    func canGenerateSummary(for noteID: UUID?) -> Bool {
+        canGenerateSummaries && noteID.flatMap { bookmarkFetch(for: $0) } == nil
+    }
+
     func generateSummary(for document: MarkdownDocument) {
-        guard canGenerateSummaries else { return }
+        guard canGenerateSummary(for: document.id) else { return }
         busy = true
         error = nil
         generatingSummaryID = document.id

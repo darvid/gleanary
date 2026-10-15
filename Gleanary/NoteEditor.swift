@@ -14,6 +14,8 @@ struct NoteEditor: View {
     @State private var message: String?
     @State private var exporting = false
     @State private var confirmingDiscard = false
+    @State private var readingKind = ReadingKind.notes
+    private var appearance = ReadingAppearance()
 
     init(document: MarkdownDocument, library: LibraryModel, close: @escaping () -> Void) {
         self.document = document
@@ -67,10 +69,10 @@ struct NoteEditor: View {
             // The title as the reading view shows it, so editing doesn't change the page's shape.
             TextField("Title", text: $name)
                 .textFieldStyle(.plain)
-                .font(.title.weight(.bold))
+                .font(appearance[readingKind].scaledFont(22.0 / 14, weight: .bold))
                 .accessibilityLabel("Note name")
                 .padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 8)
-            MarkdownSourceEditor(text: $markdown, documentID: document.id)
+            MarkdownSourceEditor(text: $markdown, documentID: document.id, readingKind: readingKind)
                 .accessibilityLabel("Markdown content")
             if let message {
                 Label(message, systemImage: "exclamationmark.triangle")
@@ -133,8 +135,11 @@ struct NoteEditor: View {
             }
         }
         .task {
-            do { history = try await library.history(for: document.id) }
-            catch { message = "Could not load revision history: \(error.localizedDescription)" }
+            do {
+                let details = try await library.store.libraryItemDetails(for: document.id)
+                readingKind = ReadingKind(libraryKind: details.kind)
+                history = try await library.history(for: document.id)
+            } catch { message = "Could not load revision history: \(error.localizedDescription)" }
         }
     }
 }
@@ -145,12 +150,15 @@ struct MarkdownSourceEditor: View {
     @Binding var text: String
     /// Scopes the editor's undo history to one note.
     let documentID: UUID
+    var readingKind = ReadingKind.notes
+    private var appearance = ReadingAppearance()
 
     var body: some View {
         NativeTextViewWrapper(
             text: $text,
             configuration: MarkdownEditorConfiguration(textInsets: TextInsets(horizontal: 28)),
-            fontSize: NSFont.systemFontSize,
+            fontName: appearance[readingKind].nativeFont.fontName,
+            fontSize: appearance[readingKind].size,
             documentId: documentID.uuidString
         )
         .background(FirstRenderRedraw())

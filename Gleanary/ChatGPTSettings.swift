@@ -14,50 +14,41 @@ struct ChatGPTSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             InferenceSettingsRow(title: "Provider", detail: "Used for new chat messages.") {
-                HStack(spacing: 8) {
-                    Picker("AI provider", selection: Binding(
-                        get: { connection.useChatGPT }, set: { connection.selectProvider($0) }
-                    )) {
-                        Text("On-device").tag(false)
-                        Text("ChatGPT").tag(true)
-                    }
-                    .labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
-                    Color.clear.frame(width: actionWidth, height: 1).accessibilityHidden(true)
-                }.disabled(changingAccount)
+                Picker("AI provider", selection: Binding(
+                    get: { connection.useChatGPT }, set: { connection.selectProvider($0) }
+                )) {
+                    Text("On-device").tag(false)
+                    Text("ChatGPT").tag(true)
+                }
+                .labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
+                .disabled(changingAccount)
             }
             if connection.useChatGPT {
                 Divider()
-                InferenceSettingsRow(title: "Model") {
-                    HStack(spacing: 8) {
-                        Picker("ChatGPT model", selection: Binding(
-                            get: { connection.selectedModel }, set: { connection.selectModel($0) }
-                        )) {
-                            if connection.models.isEmpty {
-                                Text("No models loaded").tag("")
-                            }
-                            ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
-                        }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
-                        Button("Refresh models", systemImage: "arrow.clockwise") {
-                            Task { await connection.refreshModels() }
-                        }.labelStyle(.iconOnly).buttonStyle(.borderless).frame(width: actionWidth)
-                            .help("Refresh models")
-                    }.disabled(changingAccount)
-                }
+                InferenceSettingsRow(title: "Model", refreshModels: {
+                    Task { await connection.refreshModels() }
+                }) {
+                    Picker("ChatGPT model", selection: Binding(
+                        get: { connection.selectedModel }, set: { connection.selectModel($0) }
+                    )) {
+                        if connection.models.isEmpty {
+                            Text("No models loaded").tag("")
+                        }
+                        ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
+                    }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
+                }.disabled(changingAccount)
                 InferenceSettingsRow(title: "Filing model") {
-                    HStack(spacing: 8) {
-                        Picker("Filing model", selection: Binding(
-                            get: { connection.filingModel },
-                            set: { connection.selectFilingModel($0) }
-                        )) {
-                            Text("Same as chat").tag("")
-                            ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
-                        }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
-                        Color.clear.frame(width: actionWidth, height: 1).accessibilityHidden(true)
-                    }
-                    .disabled(changingAccount)
-                    .help(
-                        "Used to categorize unfiled items and plan imported folders. A small, fast model keeps large imports quick and within plan limits."
-                    )
+                    Picker("Filing model", selection: Binding(
+                        get: { connection.filingModel },
+                        set: { connection.selectFilingModel($0) }
+                    )) {
+                        Text("Same as chat").tag("")
+                        ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
+                    }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
+                        .disabled(changingAccount)
+                        .help(
+                            "Used to categorize unfiled items and plan imported folders. A small, fast model keeps large imports quick and within plan limits."
+                        )
                 }
             } else {
                 Text(localStatus).font(.caption).foregroundStyle(Color.primary.opacity(0.72))
@@ -114,7 +105,7 @@ struct ChatGPTSettings: View {
             .font(.callout).padding(.vertical, 16)
             DisclosureGroup(isExpanded: $showingDetails) {
                 Text(
-                    "ChatGPT uses your eligible plan, not an API key. Source-grounded research includes a second AI request to check the evidence. Library summaries and graph features use Apple Intelligence. Failed ChatGPT requests never silently switch providers."
+                    "ChatGPT uses your eligible plan, not an API key. Source-grounded research includes a second AI request to check the evidence. Saved-source summaries follow your selected AI provider. Graph features use Apple Intelligence. Failed ChatGPT requests never silently switch providers."
                 )
                 .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
@@ -211,12 +202,24 @@ struct ChatGPTSettings: View {
 private struct InferenceSettingsRow<Content: View>: View {
     let title: String
     var detail: String?
+    var refreshModels: (() -> Void)?
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         HStack(spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(title)
+                HStack(spacing: 8) {
+                    Text(title)
+                    if let refreshModels {
+                        Button(
+                            "Refresh models",
+                            systemImage: "arrow.clockwise",
+                            action: refreshModels
+                        )
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        .help("Refresh models")
+                    }
+                }
                 if let detail {
                     Text(detail).font(.caption).foregroundStyle(Color.primary.opacity(0.72))
                 }

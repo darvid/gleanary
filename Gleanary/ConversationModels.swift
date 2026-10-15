@@ -28,6 +28,49 @@ struct ConversationMessage: Identifiable, Sendable {
     let createdAt: Date
 }
 
+struct ConversationReference: Identifiable, Sendable {
+    let id: UUID
+    let title: String
+    let sourceURL: URL?
+    let artifactKind: String?
+    let taskID: UUID?
+
+    func isResearchResult(in message: ConversationMessage) -> Bool {
+        message.author == "researcher" && taskID != nil && taskID == message.taskID &&
+            (artifactKind == "summary" || artifactKind == "comparison")
+    }
+
+    var researchTitle: String {
+        for prefix in ["Research: ", "Comparison: "] where title.hasPrefix(prefix) {
+            return String(title.dropFirst(prefix.count))
+        }
+        return title
+    }
+
+    var websiteURL: URL? {
+        guard let sourceURL, ["http", "https"].contains(sourceURL.scheme?.lowercased() ?? "")
+        else { return nil }
+        return sourceURL
+    }
+}
+
+extension ConversationMessage {
+    /// The app appends this bibliography to the saved artifact. Chat renders its references
+    /// separately, but only removes a trailer with exactly the expected source IDs and order.
+    var textWithoutResearchBibliography: String {
+        guard let heading = text.range(of: "\n\n## Saved sources\n\n", options: .backwards)
+        else { return text }
+        let lines = text[heading.upperBound...].components(separatedBy: "\n")
+        let sources = Array(references.dropFirst())
+        guard !sources.isEmpty, lines.count == sources.count,
+              zip(lines, sources.enumerated()).allSatisfy({ line, entry in
+                  line.hasPrefix("- [S\(entry.offset + 1): ") &&
+                      line.hasSuffix("](gleanary://note/\(entry.element.uuidString))")
+              }) else { return text }
+        return String(text[..<heading.lowerBound])
+    }
+}
+
 struct ConversationTurn: Sendable, Equatable {
     let author: String
     let text: String

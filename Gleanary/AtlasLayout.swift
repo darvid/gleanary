@@ -92,6 +92,9 @@ struct AtlasLayout: Sendable {
             end: position + 1, childCount: node.children.count, hasItemChildren: itemChildren
         ))
         index[node.id] = position
+        for summary in node.item?.summaries ?? [] {
+            index[.item(summary.id)] = position
+        }
         guard !node.children.isEmpty else { return }
 
         let cells: [CGRect]

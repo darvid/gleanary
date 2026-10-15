@@ -838,6 +838,14 @@ struct ChatGPTTests {
                 )
             }
         }
+        connection.selectProvider(false)
+        for scheme in [ColorScheme.light, .dark] {
+            try await renderSettings(
+                model: model, library: library, page: .inference, scheme: scheme,
+                suffix: "on-device.\(scheme == .light ? "light" : "dark")"
+            )
+        }
+        connection.selectProvider(true)
         connection.setConsent(false)
         try await renderSettings(
             model: model,
@@ -877,7 +885,8 @@ struct ChatGPTTests {
             library: library,
             initialPage: page
         )
-        .environment(\.colorScheme, scheme))
+        .environment(\.colorScheme, scheme)
+        .background(Color(nsColor: .windowBackgroundColor)))
         view.appearance = NSAppearance(named: scheme == .light ? .aqua : .darkAqua)
         view.frame = NSRect(origin: .zero, size: ConversationSettings.size)
         let window = NSWindow(
@@ -894,6 +903,9 @@ struct ChatGPTTests {
         try await Task.sleep(for: .milliseconds(50))
         view.layoutSubtreeIfNeeded()
         window.displayIfNeeded()
+        view.needsDisplay = true
+        view.display()
+        try await Task.sleep(for: .milliseconds(100))
         #expect(view.fittingSize == ConversationSettings.size)
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -1141,6 +1153,172 @@ extension ChatGPTTests {
         #expect(requests.count == 2)
         let body = try String(decoding: #require(requests.first?.httpBody), as: UTF8.self)
         #expect(body.contains("grounded_summary"))
+        _ = try await session.signOut()
+    }
+
+    @Test func chatGPTSummariesKeepTenPointsAndVerifyEveryBatch() async throws {
+        let account = registration()
+        let text = (1 ... 11).map { "Synthetic finding \($0) is supported by its test." }
+            .joined(separator: " ")
+        let evidence = SummaryEvidence(text)
+        try #require(evidence.items.count == 11)
+        let draft = EvidenceSummaryDraft(
+            overview: .init(
+                text: "The source reports synthetic test findings.",
+                evidenceIDs: ["E1"]
+            ),
+            takeaways: (1 ... 10).map {
+                .init(
+                    text: "Finding \($0) is supported.",
+                    evidenceIDs: ["E\($0 + 1)"],
+                    section: $0 <= 5 ? "Findings" : "Details"
+                )
+            }
+        )
+        let proposal = try String(decoding: JSONEncoder().encode(draft), as: UTF8.self)
+        let transport = FixtureChatGPTStream([
+            proposal,
+            #"{"supported":[true,true,true]}"#,
+            #"{"supported":[true,true,true]}"#,
+            #"{"supported":[true,false,true]}"#,
+            #"{"supported":[true,true]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        let document = CapturedDocument(
+            title: "Synthetic findings",
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: text,
+                text: text
+            )]
+        )
+        let summary = try await ChatGPTConversationInference(
+            session: session,
+            model: "fixture-model"
+        ).summarize(document)
+        #expect(summary.contains("## Findings"))
+        #expect(summary.contains("## Details"))
+        #expect(summary.contains("- Finding 10 is supported."))
+        #expect(!summary.contains("- Finding 7 is supported."))
+        #expect(summary.components(separatedBy: "\n- ").count - 1 == 9)
+        let requests = await transport.requests
+        #expect(requests.count == 5)
+        for (request, count) in zip(requests.dropFirst(), [3, 3, 3, 2]) {
+            let body = try #require(request.httpBody)
+            let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            let input = try #require(json["input"] as? [[String: Any]])
+            let prompt = try #require(input.first?["content"] as? String)
+            #expect(prompt.contains("Point 0:"))
+            #expect(!prompt.contains("Point \(count):"))
+            let text = try #require(json["text"] as? [String: Any])
+            let format = try #require(text["format"] as? [String: Any])
+            let schema = try #require(format["schema"] as? [String: Any])
+            let properties = try #require(schema["properties"] as? [String: Any])
+            let supported = try #require(properties["supported"] as? [String: Any])
+            #expect(supported["minItems"] as? Int == count)
+            #expect(supported["maxItems"] as? Int == count)
+        }
+        _ = try await session.signOut()
+    }
+
+    @Test func chatGPTSummaryRejectsMismatchedReviewBatchBeforeContinuing() async throws {
+        let account = registration()
+        let text = "First fact. Second fact. Third fact. Fourth fact."
+        let draft = EvidenceSummaryDraft(
+            overview: .init(text: "First fact.", evidenceIDs: ["E1"]),
+            takeaways: (2 ... 4).map { .init(text: "Fact \($0).", evidenceIDs: ["E\($0)"]) }
+        )
+        let transport = try FixtureChatGPTStream([
+            String(decoding: JSONEncoder().encode(draft), as: UTF8.self),
+            #"{"supported":[true,true]}"#,
+        ])
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        let document = CapturedDocument(
+            title: "Synthetic facts",
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: text,
+                text: text
+            )]
+        )
+        await #expect(throws: LinkSummaryError.invalidOutput) {
+            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+                .summarize(document)
+        }
+        #expect(await transport.requests.count == 2)
+        _ = try await session.signOut()
+    }
+
+    @Test func chatGPTLongSourceRetainsMoreThanFourExcerptsPerSection() async throws {
+        let text = (1 ... 500).map { "Finding \($0): " + String(
+            repeating: "synthetic evidence ",
+            count: 9
+        ) + "remains available." }
+            .joined(separator: " ")
+        let sections = AppleLinkSummarizer.chunks(
+            text,
+            limit: ChatGPTConversationInference.summarySection
+        )
+        #expect(sections.count > 1)
+        let selected = sections
+            .map { Array(SummaryEvidence($0).items.suffix(SummaryPolicy.maximumExcerpts)) }
+        let retained = selected.flatMap { $0.map(\.text) }.joined(separator: "\n\n")
+        let evidence = SummaryEvidence(retained)
+        let last = try #require(evidence.items.last)
+        let draft = EvidenceSummaryDraft(
+            overview: .init(text: "The final finding remains available.", evidenceIDs: [last.id]),
+            takeaways: []
+        )
+        var responses = try selected.map {
+            try String(
+                decoding: JSONEncoder().encode(SummaryExcerpts(excerpts: $0.map(\.id))),
+                as: UTF8.self
+            )
+        }
+        try responses += [
+            String(decoding: JSONEncoder().encode(draft), as: UTF8.self),
+            #"{"supported":[true]}"#,
+        ]
+        let account = registration()
+        let transport = FixtureChatGPTStream(responses)
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        let document = CapturedDocument(
+            title: "Long synthetic evidence",
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: text,
+                text: text
+            )]
+        )
+        #expect(try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            .summarize(document) == "The final finding remains available.")
+        let requests = await transport.requests
+        #expect(requests.count == sections.count + 2)
+        let request = try #require(requests.dropFirst(sections.count).first?.httpBody)
+        let body = String(decoding: request, as: UTF8.self)
+        #expect(try body.contains(#require(selected.first?.last).text))
+        #expect(body.contains(last.text))
         _ = try await session.signOut()
     }
 
