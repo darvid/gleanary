@@ -101,8 +101,8 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// Whether a run's own changes can be put back from its history.
     var undoable: Bool {
         switch self {
-        case .inboxSummarizer, .bookmarkFetcher, .weeklyDigest: true
-        case .linkChecker, .crossLinker, .unfiledFiler, .captureRetry: false
+        case .inboxSummarizer, .bookmarkFetcher, .linkChecker, .weeklyDigest: true
+        case .crossLinker, .unfiledFiler, .captureRetry: false
         }
     }
 
@@ -218,6 +218,8 @@ struct AutomationConfig: Sendable, Equatable, Identifiable {
     /// How long after a successful check an item is due again. Batches are sized so every
     /// item is checked within this.
     var recheck: TimeInterval
+    /// The link checker archives a link that stayed gone, with Undo, instead of proposing it.
+    var archivesDeadLinks = false
     var lastRunAt: Date?
 
     var id: AutomationKind {
@@ -294,7 +296,8 @@ struct AutomationEntry: Codable, Sendable, Equatable {
         case moved
         /// Not found; archiving is proposed only after repeated failures.
         case unreachable
-        /// Needs a login or refused the check; never archived for that.
+        /// Needs a login or refused the check, or Infactory wouldn't check the address; never
+        /// archived for that.
         case restricted
         /// Didn't answer properly; checked again soon.
         case retry
@@ -318,6 +321,9 @@ enum LinkProbe: Sendable, Equatable {
     case restricted(Int)
     /// Not found, gone, or the domain no longer resolves.
     case gone(String)
+    /// Infactory's own address rules wouldn't check it, such as a local or private address;
+    /// says nothing about the site, so it's never archived for that.
+    case refused
     /// A timeout or server error; worth checking again later.
     case transient(String)
 }
@@ -334,7 +340,7 @@ struct WebLinkProber: LinkProbing {
         catch {
             let code = (error as? URLError)?.code
             return code == .cannotFindHost || code == .dnsLookupFailed
-                ? .gone("The domain no longer resolves") : .gone("The address can't be checked")
+                ? .gone("The domain no longer resolves") : .refused
         }
         do {
             var response = try await request(url, method: "HEAD")

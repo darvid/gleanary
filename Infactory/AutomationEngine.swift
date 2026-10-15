@@ -201,7 +201,9 @@ actor AutomationEngine {
         for (index, candidate) in candidates.enumerated() {
             guard let result = probes[index] else { continue }
             run.examined += 1
-            if let proposal = try await recordLink(candidate, result, run: &run) {
+            if let proposal = try await recordLink(
+                candidate, result, archives: config.archivesDeadLinks, run: &run
+            ) {
                 proposals.append(proposal)
             }
         }
@@ -209,8 +211,7 @@ actor AutomationEngine {
             run.status = .partial
             run.report.append("Paused while the library was busy; the rest wait for the next run.")
         }
-        // The only changes this automation can make are proposals; nothing is archived or
-        // relinked here.
+        // Links are only ever proposed; archives too, unless dead links archive themselves.
         try await store.saveAgentChanges(proposals, taskID: run.id)
         run.proposed = proposals.count
     }
@@ -272,10 +273,11 @@ actor AutomationEngine {
     }
 
     /// Records one link's check, returning a proposal to update a moved link or archive one
-    /// that stayed gone.
+    /// that stayed gone. With `archives`, a link that stayed gone is archived here instead.
     private func recordLink(
         _ candidate: LinkCandidate,
         _ result: LinkProbe,
+        archives: Bool,
         run: inout AutomationRun
     ) async throws -> AgentChangeDraft? {
         let checked = dependencies.now()
@@ -324,21 +326,59 @@ actor AutomationEngine {
                 .restricted, id, title,
                 "Needs a login or refused the check (HTTP \(status)). Never archived for that."
             )
+        case .refused:
+            _ = try await record("refused", nil)
+            run.note(
+                .restricted, id, title,
+                "Infactory doesn't check local or private addresses. Never archived for that."
+            )
         case let .transient(reason):
             _ = try await record("transient", reason)
             run.note(.retry, id, title, "\(reason). Checked again tomorrow.")
         case let .gone(reason):
             let check = try await record("gone", failed: true, reason)
+            if archives, try await archiveAutomatically(
+                candidate, check: check, reason: reason, run: &run
+            ) {
+                return nil
+            }
             if let proposal = try await archiveProposal(candidate, check: check, reason: reason) {
                 run.note(.proposed, id, title, "\(reason). Archive it?")
                 return proposal
             }
+            let next = archives ? "it's archived" : "archiving is proposed"
             run.note(
                 .unreachable, id, title,
-                "\(reason). Failed \(check.failures) of \(Self.archiveFailures) checks before archiving is proposed; checking again tomorrow."
+                "\(reason). Failed \(check.failures) of \(Self.archiveFailures) checks before \(next); checking again tomorrow."
             )
         }
         return nil
+    }
+
+    /// Whether a gone link has failed often enough, over long enough, to archive.
+    private func staysGone(_ check: ItemCheck) -> Bool {
+        guard check.failures >= Self.archiveFailures, let first = check.firstFailureAt else {
+            return false
+        }
+        return dependencies.now().timeIntervalSince(first) >= Self.archiveSpan
+    }
+
+    /// Archives a link that stayed gone, with Undo, when archiving it was never proposed or
+    /// done before; anything you decided on, or haven't yet, is left to the review sheet.
+    /// False hands the link back to the usual proposal.
+    private func archiveAutomatically(
+        _ candidate: LinkCandidate,
+        check: ItemCheck,
+        reason: String,
+        run: inout AutomationRun
+    ) async throws -> Bool {
+        guard staysGone(check), try await !store.archiveEverConsidered(candidate.id),
+              let draft = await archiveDraft(candidate, check: check, reason: reason),
+              try await store.archiveAutomatically(draft, runID: run.id, at: dependencies.now())
+        else { return false }
+        run.changed += 1
+        run.note(.changed, candidate.id, candidate.title, "Archived. \(draft.reason)")
+        return true
     }
 
     /// Archiving is proposed only once a link has failed repeatedly over a week, never for a
@@ -348,10 +388,18 @@ actor AutomationEngine {
         check: ItemCheck,
         reason: String
     ) async throws -> AgentChangeDraft? {
-        guard check.failures >= Self.archiveFailures, let first = check.firstFailureAt,
-              dependencies.now().timeIntervalSince(first) >= Self.archiveSpan,
-              try await !store.archiveConsidered(candidate.id)
-        else { return nil }
+        guard staysGone(check), try await !store.archiveConsidered(candidate.id) else {
+            return nil
+        }
+        return await archiveDraft(candidate, check: check, reason: reason)
+    }
+
+    private func archiveDraft(
+        _ candidate: LinkCandidate,
+        check: ItemCheck,
+        reason: String
+    ) async -> AgentChangeDraft? {
+        guard let first = check.firstFailureAt else { return nil }
         let since = first.formatted(date: .abbreviated, time: .omitted)
         var detail = "\(reason). Checked \(check.failures) times since \(since). Your saved copy is intact."
         if let snapshot = await dependencies.archive.snapshot(of: candidate.url) {

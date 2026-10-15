@@ -394,6 +394,12 @@ enum DatabaseSchema {
             """)
         }
         migrator.registerMigration("automation-upkeep-v1", migrate: automationUpkeep)
+        migrator.registerMigration("automation-archive-v1") { db in
+            // Whether the link checker archives dead links itself rather than asking first.
+            try db.execute(
+                sql: "ALTER TABLE automations ADD COLUMN archivesDeadLinks INTEGER NOT NULL DEFAULT 0"
+            )
+        }
         try migrator.migrate(database)
     }
 
