@@ -5,6 +5,7 @@ actor AgentCoordinator {
     let ingestion: IngestionEngine
     private(set) var inference: any ConversationInferring
     let search: SearchEngine
+    let researchFetcher: any SourceFetching
     let writingStyles: @Sendable () -> WritingStyleChoice
     /// One task runs at a time; the Writer's confirmed scope resumes under the same guard.
     var executing = false
@@ -18,6 +19,7 @@ actor AgentCoordinator {
         writingStyles: @escaping @Sendable () -> WritingStyleChoice = { WritingStyleChoice() }
     ) {
         self.store = store
+        researchFetcher = fetcher
         self.inference = inference
         self.writingStyles = writingStyles
         ingestion = IngestionEngine(
@@ -42,6 +44,10 @@ actor AgentCoordinator {
         guard !executing else { throw ConversationError.busy }
         executing = true
         defer { executing = false }
+        if let run = try await store.noteSeriesRun(taskID: taskID) {
+            try await continueNoteSeries(run, changed: changed)
+            return
+        }
         let route = try ConversationRoute(request)
         let context = try await planningContext(taskID: taskID, selected: selected)
         let plan: ConversationPlan
@@ -118,7 +124,7 @@ actor AgentCoordinator {
     }
 
     private static func composes(_ plan: ConversationPlan) -> Bool {
-        plan.steps.first?.action == .compose
+        plan.steps.first?.action == .compose || plan.steps.first?.action == .researchSeries
     }
 
     /// "@writer refresh" with one document selected re-runs that document's request directly.
@@ -309,7 +315,7 @@ actor AgentCoordinator {
                 author: .curator,
                 changed: changed
             )
-        case .research, .related, .inspect:
+        case .research, .webResearch, .related, .inspect:
             try await readRecords(
                 step,
                 taskID: taskID,
@@ -317,7 +323,7 @@ actor AgentCoordinator {
                 references: references,
                 changed: changed
             )
-        case .saveNote, .organize, .compose, .refresh:
+        case .saveNote, .organize, .compose, .refresh, .researchSeries:
             try await write(
                 step,
                 taskID: taskID,
@@ -368,6 +374,12 @@ actor AgentCoordinator {
         references: [UUID],
         changed: @escaping @Sendable () async -> Void
     ) async throws {
+        if step.action == .webResearch {
+            return try await researchWeb(
+                taskID: taskID, question: step.argument,
+                references: step.targets, changed: changed
+            )
+        }
         guard !references.isEmpty else { try await askForTargets(taskID: taskID); return }
         switch step.action {
         case .research:
@@ -406,6 +418,13 @@ actor AgentCoordinator {
         case .organize:
             try await organize(
                 taskID: taskID, request: route.text, selected: references, changed: changed
+            )
+        case .researchSeries:
+            try await startNoteSeries(
+                taskID: taskID,
+                request: route.text,
+                selected: references,
+                changed: changed
             )
         case .compose, .refresh:
             try await writer(

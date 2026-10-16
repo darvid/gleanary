@@ -409,6 +409,15 @@ enum DatabaseSchema {
             UPDATE automations SET dailyCalls = 200 WHERE id = 'weekly-digest' AND dailyCalls = 0;
             """)
         }
+        migrator.registerMigration("web-research-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE web_research_evidence (
+                noteID TEXT PRIMARY KEY NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                evidence BLOB NOT NULL, createdAt REAL NOT NULL
+            );
+            """)
+        }
+        migrator.registerMigration("note-series-v1", migrate: NoteSeriesSchema.create)
         try migrator.migrate(database)
     }
 

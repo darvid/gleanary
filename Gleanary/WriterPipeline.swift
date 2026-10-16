@@ -38,6 +38,7 @@ struct WriterPipeline {
         await progress("Extracting 0 of \(total)", .researcher)
         var items: [(id: UUID, title: String, records: [FactRecord])] = []
         var versions: [SourceVersion] = []
+        var webSources: [UUID: [WebResearchResult.Citation]] = [:]
         var extracted = 0
         for (index, id) in request.selection.enumerated() {
             try Task.checkCancellation()
@@ -63,13 +64,17 @@ struct WriterPipeline {
                 records = fresh
                 extracted += 1
             }
+            if let web = try await store.webResearchEvidence(noteID: id) {
+                _ = try web.markdown()
+                webSources[id] = web.passages.flatMap(\.citations)
+            }
             versions.append(version)
             items.append((id, source.title, records ?? []))
         }
         guard !items.isEmpty else { throw ConversationError.missingSource }
         await progress("Writing", .writer)
         let document = WriterDocument(
-            evidence: WriterEvidence(items, fields: request.brief.fields),
+            evidence: WriterEvidence(items, fields: request.brief.fields, webSources: webSources),
             style: request.style, generalKnowledge: request.generalKnowledge,
             personal: request.personal
         )

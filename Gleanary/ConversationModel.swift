@@ -150,6 +150,22 @@ final class ConversationModel {
         let request = submittedRequest ?? retry?.request ?? composer
         do {
             try await configureInference()
+            if let retry, try await store.noteSeriesRun(taskID: retry.id) != nil {
+                try await store.retryNoteSeries(taskID: retry.id)
+                error = nil
+                await refresh()
+                let coordinator = coordinator
+                let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+                run(retry.id) {
+                    try await coordinator.execute(
+                        taskID: retry.id,
+                        request: request,
+                        selected: retry.sources,
+                        changed: changed
+                    )
+                }
+                return
+            }
             let route = try ConversationRoute(request)
             let last = messages.last(where: { $0.author != "user" && !$0.references.isEmpty })
             let lastSources = last?

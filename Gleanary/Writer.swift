@@ -237,7 +237,7 @@ struct FactRecord: Codable, Sendable, Equatable {
         }
     }
 
-    private static func normalized(_ text: String) -> String {
+    static func normalized(_ text: String) -> String {
         text.lowercased()
             .replacingOccurrences(of: "[“”„]", with: "\"", options: .regularExpression)
             .replacingOccurrences(of: "[‘’]", with: "'", options: .regularExpression)
@@ -257,8 +257,14 @@ struct WriterEvidence: Sendable {
     let sources: [Source]
     let fields: [String]
     let records: [String: FactRecord]
+    let webSources: [UUID: [WebResearchResult.Citation]]
 
-    init(_ items: [(id: UUID, title: String, records: [FactRecord])], fields: [String]) {
+    init(
+        _ items: [(id: UUID, title: String, records: [FactRecord])],
+        fields: [String],
+        webSources: [UUID: [WebResearchResult.Citation]] = [:]
+    ) {
+        self.webSources = webSources
         var next = 0
         var all: [String: FactRecord] = [:]
         sources = items.enumerated().map { offset, item in
@@ -533,7 +539,17 @@ struct WriterDocument: Sendable {
                 )
         }
         parts.append("## Sources\n\n" + order.enumerated().map { offset, id in
-            "\(offset + 1). [\(AgentCoordinator.markdownLabel(evidence.title(of: id)))](gleanary://note/\(id.uuidString))"
+            let savedLink = "\(offset + 1). [\(AgentCoordinator.markdownLabel(evidence.title(of: id)))](gleanary://note/\(id.uuidString))"
+            var seen = Set<URL>()
+            let links = (evidence.webSources[id] ?? []).filter {
+                WebResearchResult.safeURL($0.url) && seen.insert($0.url).inserted
+            }.map { citation in
+                "   - [\(AgentCoordinator.markdownLabel(citation.title))](<\(citation.url.absoluteString)>)"
+            }
+            return savedLink +
+                (links
+                    .isEmpty ? "" : "\n   Web citations retained with this saved research note:\n" +
+                    links.joined(separator: "\n"))
         }.joined(separator: "\n"))
         if !personal {
             let count = order.count == 1 ? "1 saved source" : "\(order.count) saved sources"
