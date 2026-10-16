@@ -34,6 +34,7 @@ extension DocumentStore {
         )
         var seen = Set<String>()
         var start = 0
+        let activityBatch = UUID()
         while start < bookmarks.count {
             try Task.checkCancellation()
             let batch = bookmarks[start ..< min(start + Self.bookmarkImportBatch, bookmarks.count)]
@@ -42,6 +43,7 @@ extension DocumentStore {
                 plan: plan,
                 categories: byCode,
                 original: original,
+                activityBatch: activityBatch,
                 seen: &seen
             )
             report.imported += written.imported
@@ -60,10 +62,15 @@ extension DocumentStore {
         plan: BookmarkFolderPlan,
         categories byCode: [String: UUID],
         original: Artifact,
+        activityBatch: UUID,
         seen: inout Set<String>
     ) throws -> BookmarkImportReport {
         var accepted = seen
-        let partial = try readyDatabase().write { db in
+        let partial = try activityWrite(
+            actor: "import",
+            batchID: activityBatch,
+            label: "Imported bookmarks"
+        ) { db in
             var partial = BookmarkImportReport()
             try Self.recordArtifact(original, in: db)
             for bookmark in batch {

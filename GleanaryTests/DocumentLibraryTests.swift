@@ -757,6 +757,8 @@ struct DocumentLibraryTests {
         let original = try await fixture.store.document(id: id)
         let database = try DatabaseQueue(path: fixture.store.url.path)
         try await database.write { db in
+            // Recreate the older schema, before activity triggers referenced sourceURL.
+            try ActivityTestSchema.removeTracking(in: db)
             try db.execute(sql: """
             ALTER TABLE notes DROP COLUMN sourceURL;
             ALTER TABLE notes DROP COLUMN faviconURL;

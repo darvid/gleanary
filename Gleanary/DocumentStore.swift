@@ -97,7 +97,7 @@ actor DocumentStore {
 
     func save(_ document: MarkdownDocument) throws -> MarkdownDocument {
         try Self.validate(document)
-        let result = try readyDatabase().write { db -> SaveResult in
+        let result = try activityWrite(actor: "manual") { db -> SaveResult in
             if try Bool.fetchOne(
                 db,
                 sql: "SELECT EXISTS(SELECT 1 FROM purged_notes WHERE noteID = ?)",
@@ -134,7 +134,7 @@ actor DocumentStore {
 
     func importDocuments(_ documents: [MarkdownDocument]) throws {
         try documents.forEach(Self.validate)
-        try readyDatabase().write { db in
+        try activityWrite(actor: "import", batchID: UUID(), label: "Imported documents") { db in
             for document in documents {
                 let duplicate = try Bool.fetchOne(db, sql: """
                 SELECT EXISTS(SELECT 1 FROM notes WHERE deletedAt IS NULL AND name = ? AND markdown = ?)
@@ -152,7 +152,7 @@ actor DocumentStore {
     }
 
     func remove(_ document: MarkdownDocument) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             guard let row = try Row.fetchOne(
                 db,
                 sql: "SELECT * FROM notes WHERE id = ?",

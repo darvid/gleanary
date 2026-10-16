@@ -418,6 +418,7 @@ enum DatabaseSchema {
             """)
         }
         migrator.registerMigration("note-series-v1", migrate: NoteSeriesSchema.create)
+        migrator.registerMigration("library-activity-v1", migrate: ActivitySchema.create)
         try migrator.migrate(database)
     }
 

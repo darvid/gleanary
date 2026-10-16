@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var chatting: Bool
     /// The Automations screen, in place of the library; Chat still takes precedence.
     @State private var automating = false
+    @State private var showingActivity = false
     var initialSelection: UUID?
     @State private var scope: LibraryScope? = .all
     @State private var sidebarVisible = true
@@ -77,7 +78,7 @@ struct ContentView: View {
             }
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting {
+            if showingFiling, !chatting, !showingActivity {
                 // One unit, so the edge slides in with the panel instead of appearing first.
                 HStack(spacing: 0) {
                     Divider()
@@ -120,7 +121,8 @@ struct ContentView: View {
         .focusedSceneValue(\.gleanaryActions, chatting ? nil : GleanaryActions(
             enabled: library.ready && !library.busy,
             newNote: {
-                // Captures has no reading pane to edit in.
+                // Activity and Captures have no editing pane.
+                showingActivity = false
                 if scope == .captures {
                     scope = .all
                 }
@@ -187,10 +189,12 @@ struct ContentView: View {
             await loadCategories()
             await library.refreshCaptures()
         }
-        .task(id: "\(library.ready)/\(library.documentGrid.generation)/\(chatting)/\(automating)") {
+        .task(
+            id: "\(library.ready)/\(library.documentGrid.generation)/\(chatting)/\(automating)/\(showingActivity)"
+        ) {
             // The map normally owns this load, but Chat and Automations share its sidebar
             // even when no map has been mounted during this launch.
-            if library.ready, chatting || automating {
+            if library.ready, chatting || automating || showingActivity {
                 await atlas.load(from: library.store)
             }
         }
@@ -284,6 +288,12 @@ struct ContentView: View {
     @ViewBuilder private var main: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
+        } else if showingActivity {
+            if library.ready {
+                ActivityView(store: library.store, open: openSavedItem, openSource: { source = $0 })
+            } else {
+                ProgressView("Opening activity…")
+            }
         } else if automating {
             AutomationsView(model: library.automations, open: openSavedItem)
         } else if presentation == .list || scope == .captures || scope == .archived {
@@ -308,7 +318,8 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
-                Text(chatting ? "Chat" : automating ? "Automations" : scopeTitle)
+                Text(chatting ? "Chat" : showingActivity ? "Activity" : automating ? "Automations" :
+                    scopeTitle)
                     .font(.headline).lineLimit(1)
             }
         }
@@ -317,7 +328,7 @@ struct ContentView: View {
         if !chatting {
             ToolbarSpacer(.flexible)
         }
-        if !chatting, !automating {
+        if !chatting, !automating, !showingActivity {
             ToolbarItem {
                 Picker("Presentation", selection: $presentation) {
                     Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
@@ -529,6 +540,7 @@ struct ContentView: View {
     private func openSavedItem(_ id: UUID) {
         chatting = false
         automating = false
+        showingActivity = false
         pendingSelection = id
         if scope == .all {
             revealPendingSelection()
@@ -569,7 +581,7 @@ struct ContentView: View {
     private var location: NavigationLocation {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
-            automations: automating
+            automations: automating, activity: showingActivity
         )
     }
 
@@ -609,6 +621,7 @@ struct ContentView: View {
         restoring = target
         chatting = target.chatting
         automating = target.automations
+        showingActivity = target.activity
         if scope != target.scope {
             // The scope change resets the Atlas, so its region and item follow it.
             pendingRestore = target
@@ -692,6 +705,10 @@ struct ContentView: View {
                 }
             }.tag(SidebarItem.automations)
             Section("Library") {
+                Label("Activity", systemImage: "clock")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingActivity ? .white : .black))
+                    .tag(SidebarItem.activity)
                 Label("All items", systemImage: "tray.full")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
                     .tag(SidebarItem.library(.all))
@@ -792,20 +809,24 @@ struct ContentView: View {
 
     /// Pass nil for the conversation row.
     private func sidebarColor(_ item: LibraryScope?) -> Color {
-        let selected = item.map { !chatting && !automating && scope == $0 } ?? chatting
+        let selected = item
+            .map { !chatting && !automating && !showingActivity && scope == $0 } ?? chatting
         return colorScheme == .dark || selected ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
-            chatting ? .conversation : automating ? .automations : scope.map(SidebarItem.library)
+            chatting ? .conversation : showingActivity ? .activity : automating ? .automations :
+                scope.map(SidebarItem.library)
         } set: { item in
             switch item {
-            case .conversation: chatting = true; automating = false
-            case .automations: chatting = false; automating = true
+            case .conversation: chatting = true; automating = false; showingActivity = false
+            case .automations: chatting = false; automating = true; showingActivity = false
+            case .activity: chatting = false; automating = false; showingActivity = true
             case let .library(scope):
                 chatting = false
                 automating = false
+                showingActivity = false
                 self.scope = scope
             case nil: break
             }
@@ -1202,6 +1223,8 @@ struct ContentView: View {
             Button("Show in Captures") {
                 library.captureFailure = nil
                 chatting = false
+                automating = false
+                showingActivity = false
                 scope = .captures
             }
             Button("Try Again") {
@@ -1391,5 +1414,6 @@ private struct LibrarySidebarLabelStyle: LabelStyle {
 private enum SidebarItem: Hashable {
     case conversation
     case automations
+    case activity
     case library(LibraryScope)
 }
