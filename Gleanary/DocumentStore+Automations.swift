@@ -684,7 +684,7 @@ extension DocumentStore {
         runID: UUID,
         at date: Date
     ) throws -> MarkdownDocument {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "automation", batchID: runID, label: "Automation changes") { db in
             let note = try Self.writeNote(document, graph: false, in: db)
             if let inbox = try String.fetchOne(
                 db, sql: "SELECT id FROM decimal_categories WHERE code = ?",
@@ -746,7 +746,11 @@ extension DocumentStore {
         at date: Date
     ) throws -> Bool {
         guard let noteID = draft.noteID else { return false }
-        return try readyDatabase().write { db in
+        return try activityWrite(
+            actor: "automation",
+            batchID: runID,
+            label: "Automation changes"
+        ) { db in
             guard try Bool.fetchOne(db, sql: """
             SELECT EXISTS(SELECT 1 FROM notes WHERE id = ? AND deletedAt IS NULL
                 AND archivedAt IS NULL)

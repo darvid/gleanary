@@ -255,7 +255,11 @@ extension DocumentStore {
             }
         }
         try Task.checkCancellation()
-        return try readyDatabase().write { db in
+        return try activityWrite(
+            actor: "agent",
+            batchID: run.id,
+            label: "Published research series"
+        ) { db in
             if try Bool.fetchOne(
                 db,
                 sql: "SELECT published FROM note_series_runs WHERE id = ?",

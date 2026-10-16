@@ -116,7 +116,11 @@ extension DocumentStore {
     /// single revision, then filings. A change whose item moved on since the proposal is marked
     /// stale, not forced.
     func applyAgentChanges(_ ids: [UUID]) throws -> AgentApplyReport {
-        try readyDatabase().write { db in
+        try activityWrite(
+            actor: "agent",
+            batchID: UUID(),
+            label: "Applied reviewed changes"
+        ) { db in
             let rows = try Self.agentRows(ids, status: "pending", in: db)
             var report = AgentApplyReport()
             func record(_ succeeded: Bool, _ batch: [Row]) throws {
@@ -157,7 +161,7 @@ extension DocumentStore {
     /// Reverts applied changes: filings first so a category they created can then be removed.
     /// A title or body edited again since is left as it is.
     func undoAgentChanges(_ ids: [UUID]) throws -> Int {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual", batchID: UUID(), label: "Undid reviewed changes") { db in
             let rows = try Self.agentRows(ids, status: "applied", in: db)
             var undone = try Self.undoEach(
                 rows, kinds: ["link", "archive", "relink", "filing"], in: db
@@ -287,8 +291,8 @@ extension DocumentStore {
             arguments: [noteID]
         ).map { FilingSnapshot(categoryID: $0["categoryID"], primary: $0["isPrimary"]) }
         try db.execute(
-            sql: "UPDATE note_categories SET isPrimary = 0 WHERE noteID = ?",
-            arguments: [noteID]
+            sql: "UPDATE note_categories SET isPrimary = 0 WHERE noteID = ? AND categoryID != ?",
+            arguments: [noteID, categoryID]
         )
         try db.execute(sql: """
         INSERT INTO note_categories VALUES (?, ?, 1)
@@ -351,14 +355,11 @@ extension DocumentStore {
               let previous = try? JSONDecoder().decode(
                   [FilingSnapshot].self, from: Data(snapshot.utf8)
               ) else { return false }
-        let noteID = note.id.uuidString
-        try db.execute(sql: "DELETE FROM note_categories WHERE noteID = ?", arguments: [noteID])
-        for membership in previous {
-            try db.execute(
-                sql: "INSERT INTO note_categories VALUES (?, ?, ?)",
-                arguments: [noteID, membership.categoryID, membership.primary]
-            )
-        }
+        try replaceMemberships(
+            previous
+                .map { try FilingMembership(categoryID: uuid($0.categoryID), primary: $0.primary) },
+            table: "note_categories", column: "noteID", id: note.id, in: db
+        )
         return true
     }
 

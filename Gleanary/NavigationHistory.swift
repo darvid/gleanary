@@ -9,6 +9,7 @@ struct NavigationLocation: Equatable {
     var atlasFocus: AtlasNodeID
     var atlasItem: UUID?
     var automations = false
+    var activity = false
 }
 
 /// Back and forward through visited locations, like a browser: visiting after going back drops

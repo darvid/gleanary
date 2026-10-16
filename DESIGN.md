@@ -228,6 +228,18 @@ button radius. Code blocks use a rectangular control surface.
   empty sidebar homes in Chat and Automations. Both load and refresh the
   shared category snapshot without requiring a visit to the map first.
   Empty homes remain reachable.
+- **Activity:** a sidebar destination with a native daily list and a
+  read-only inspection pane. Day headers summarize matching activity;
+  repeated edits and bulk operations expand into individual changes.
+  Search, event-type filters, Today, and a date picker narrow the list.
+  Date jumps use a native date field and Today/Yesterday shortcuts. Empty
+  results fill the list column so controls stay above and the tracking
+  note stays below; only the empty-state message is centered.
+  The inspection pane reuses document reading and revision diffs. Its
+  controls stack at narrow widths. Committed changes appear live; derived
+  indexing and proposals do not. Earlier note history is labeled; fuller
+  tracking starts at the migration date. Permanent deletion scrubs event
+  titles, relationship labels, and revision pointers for both endpoints.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
 - **Preview actions:** Open Original uses `.borderedProminent`;

@@ -93,6 +93,7 @@ extension FocusedValues {
 private struct GleanaryCommands: Commands {
     @FocusedValue(\.gleanaryActions) private var actions
     @FocusedValue(\.navigationActions) private var navigation
+    @FocusedValue(\.activitySearch) private var activitySearch
     var body: some Commands {
         CommandMenu("Go") {
             Button("Back") { navigation?.back() }.keyboardShortcut("[")
@@ -111,7 +112,13 @@ private struct GleanaryCommands: Commands {
                 .disabled(actions?.enabled != true || actions?.categorize == nil)
         }
         CommandGroup(after: .textEditing) {
-            Button("Focus Input") { actions?.focus() }.keyboardShortcut("f")
+            Button("Focus Input") {
+                if let activitySearch {
+                    activitySearch()
+                } else {
+                    actions?.focus()
+                }
+            }.keyboardShortcut("f")
         }
     }
 }

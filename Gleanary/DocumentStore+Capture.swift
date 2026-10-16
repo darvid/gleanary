@@ -197,7 +197,7 @@ extension DocumentStore {
         guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               markdown.utf8.count <= CaptureLimits.markdownBytes
         else { throw CaptureError.noContent }
-        return try readyDatabase().write { db in
+        return try activityWrite(actor: "app", batchID: job.id, label: "Saved source") { db in
             try Self.requireActive(job, in: db)
             let sourceID = try String.fetchOne(
                 db,
@@ -331,7 +331,7 @@ extension DocumentStore {
               artifact.kind == .markdown, artifact.hash == ContentHash.of(summary)
         else { throw LinkSummaryError.failed }
         try Task.checkCancellation()
-        return try readyDatabase().write { db in
+        return try activityWrite(actor: "app", batchID: UUID(), label: "Generated summary") { db in
             guard let row = try Row.fetchOne(
                 db,
                 sql: "SELECT * FROM notes WHERE id = ?",

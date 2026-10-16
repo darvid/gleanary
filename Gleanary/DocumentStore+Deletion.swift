@@ -25,7 +25,7 @@ extension DocumentStore {
     /// Physical file deletion is retried separately because SQLite cannot transact filesystem
     /// changes.
     func permanentlyRemove(_ document: MarkdownDocument) throws -> Set<UUID> {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             let id = document.id.uuidString
             guard let revision = try String.fetchOne(
                 db,

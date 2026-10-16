@@ -263,7 +263,7 @@ extension DocumentStore {
         sources: [SourceVersion]
     ) throws -> MarkdownDocument {
         try Task.checkCancellation()
-        return try readyDatabase().write { db in
+        return try activityWrite(actor: "agent", batchID: taskID, label: "Wrote document") { db in
             try Self.requireRunningTask(taskID, in: db)
             let note = MarkdownDocument(name: rendered.title, markdown: rendered.markdown)
             try Self.validate(note)

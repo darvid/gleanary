@@ -15,7 +15,7 @@ extension DocumentStore {
     /// Keeps the item whole but out of the way: hidden from the library, Atlas, search and chat
     /// retrieval until unarchived. Passages stay, so unarchiving needs no reindex.
     func archive(_ noteID: UUID, reason: String) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             _ = try Self.liveNote(noteID, in: db)
             try db.execute(
                 sql: "UPDATE notes SET archivedAt = ?, archiveReason = ? WHERE id = ? AND archivedAt IS NULL",
@@ -25,7 +25,7 @@ extension DocumentStore {
     }
 
     func unarchive(_ noteID: UUID) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             try db.execute(
                 sql: "UPDATE notes SET archivedAt = NULL, archiveReason = NULL WHERE id = ?",
                 arguments: [noteID.uuidString]

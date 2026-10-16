@@ -258,7 +258,7 @@ extension DocumentStore {
         guard (kind == "web-research") == (webEvidence != nil)
         else { throw ConversationError.uncitedWebResearch }
         try Task.checkCancellation()
-        return try readyDatabase().write { db in
+        return try activityWrite(actor: "agent", batchID: taskID, label: "Saved research") { db in
             try Self.requireConversationTask(taskID, in: db)
             if let existing = try String.fetchOne(
                 db,
@@ -476,7 +476,7 @@ extension DocumentStore {
     /// Adds a secondary home, leaving the primary as it is. False when the item was already
     /// filed there, so Undo never removes a home it didn't add.
     func addSecondaryHome(_ noteID: UUID, categoryID: UUID) throws -> Bool {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             _ = try Self.liveNote(noteID, in: db)
             try db.execute(
                 sql: "INSERT OR IGNORE INTO note_categories VALUES (?, ?, 0)",
@@ -499,7 +499,7 @@ extension DocumentStore {
     /// remaining one primary; removing the last leaves it unfiled. Returns the homes before,
     /// for Undo.
     func removeHome(_ noteID: UUID, categoryID: UUID) throws -> [FilingMembership] {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual", batchID: UUID(), label: "Changed filing") { db in
             _ = try Self.liveNote(noteID, in: db)
             let before = try Self.filingMemberships(
                 table: "note_categories", column: "noteID", id: noteID, in: db
@@ -523,7 +523,7 @@ extension DocumentStore {
 
     /// Makes one of the item's homes its primary one. Returns the homes before, for Undo.
     func makePrimaryHome(_ noteID: UUID, categoryID: UUID) throws -> [FilingMembership] {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual", batchID: UUID(), label: "Changed primary home") { db in
             _ = try Self.liveNote(noteID, in: db)
             let before = try Self.filingMemberships(
                 table: "note_categories", column: "noteID", id: noteID, in: db
@@ -544,7 +544,7 @@ extension DocumentStore {
 
     /// Puts the item's homes back as they were; categories deleted since are skipped.
     func restoreHomes(_ noteID: UUID, _ homes: [FilingMembership]) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual", batchID: UUID(), label: "Restored filing") { db in
             _ = try Self.liveNote(noteID, in: db)
             let existing = try Set(String.fetchAll(db, sql: "SELECT id FROM decimal_categories"))
             try Self.replaceMemberships(
@@ -556,7 +556,7 @@ extension DocumentStore {
 
     /// Removes a secondary home; a home that has since become primary stays.
     func removeSecondaryHome(_ noteID: UUID, categoryID: UUID) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual") { db in
             try db.execute(
                 sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ? AND isPrimary = 0",
                 arguments: [noteID.uuidString, categoryID.uuidString]
@@ -570,12 +570,12 @@ extension DocumentStore {
         primary: Bool = true,
         includeSources: Bool = false
     ) throws {
-        try readyDatabase().write { db in
+        try activityWrite(actor: "manual", batchID: UUID(), label: "Changed filing") { db in
             _ = try Self.liveNote(noteID, in: db)
             if primary {
                 try db.execute(
-                    sql: "UPDATE note_categories SET isPrimary = 0 WHERE noteID = ?",
-                    arguments: [noteID.uuidString]
+                    sql: "UPDATE note_categories SET isPrimary = 0 WHERE noteID = ? AND categoryID != ?",
+                    arguments: [noteID.uuidString, categoryID.uuidString]
                 )
             }
             try db.execute(sql: """
@@ -663,7 +663,11 @@ extension DocumentStore {
     func reviewProposal(_ id: UUID, action: String) throws {
         guard ["apply", "reject", "undo"].contains(action)
         else { throw ConversationError.staleProposal }
-        let stale = try readyDatabase().write { db -> Bool in
+        let stale = try activityWrite(
+            actor: "manual",
+            batchID: UUID(),
+            label: "Reviewed connection"
+        ) { db -> Bool in
             guard let row = try Row.fetchOne(
                 db,
                 sql: "SELECT * FROM knowledge_proposals WHERE id = ?",
@@ -854,19 +858,38 @@ extension DocumentStore {
         )
     }
 
-    private static func replaceMemberships(
+    static func replaceMemberships(
         _ memberships: [FilingMembership],
         table: String,
         column: String,
         id: UUID,
         in db: Database
     ) throws {
-        try db.execute(sql: "DELETE FROM \(table) WHERE \(column) = ?", arguments: [id.uuidString])
-        for membership in memberships {
+        // Preserve unchanged rows so activity reflects filing changes, not a table rebuild.
+        let previous = try filingMemberships(table: table, column: column, id: id, in: db)
+        for home in previous
+            where !memberships.contains(where: { $0.categoryID == home.categoryID })
+        {
             try db.execute(
-                sql: "INSERT INTO \(table)(\(column), categoryID, isPrimary) VALUES (?, ?, ?)",
-                arguments: [id.uuidString, membership.categoryID.uuidString, membership.primary]
+                sql: "DELETE FROM \(table) WHERE \(column) = ? AND categoryID = ?",
+                arguments: [id.uuidString, home.categoryID.uuidString]
             )
+        }
+        for home in previous
+            where home.primary && !memberships
+            .contains(where: { $0.categoryID == home.categoryID && $0.primary })
+        {
+            try db.execute(
+                sql: "UPDATE \(table) SET isPrimary = 0 WHERE \(column) = ? AND categoryID = ?",
+                arguments: [id.uuidString, home.categoryID.uuidString]
+            )
+        }
+        for membership in memberships {
+            try db.execute(sql: """
+            INSERT INTO \(table)(\(column), categoryID, isPrimary) VALUES (?, ?, ?)
+            ON CONFLICT(\(column), categoryID) DO UPDATE SET isPrimary = excluded.isPrimary
+                WHERE isPrimary != excluded.isPrimary
+            """, arguments: [id.uuidString, membership.categoryID.uuidString, membership.primary])
         }
     }
 
