@@ -418,7 +418,7 @@ struct ConversationView: View {
         if let result = researchResult(in: message) {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
-                    let role = result.artifactKind == "comparison" ? "Comparison" : "Summary"
+                    let role = result.researchKindTitle
                     Text(role).font(.caption.weight(.semibold))
                     reference(
                         result.id,

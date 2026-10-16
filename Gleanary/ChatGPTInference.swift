@@ -219,7 +219,7 @@ struct ChatGPTConversationInference: ConversationInferring {
         return try await consume(request, progress: progress)
     }
 
-    private func authorizedRequest(
+    func authorizedRequest(
         body: Data,
         fence: (accountID: String, epoch: UUID)
     ) async throws -> URLRequest {
@@ -427,6 +427,9 @@ struct ChatGPTSSEDecoder {
         throw interrupted
     }
 
+    private var completedMessages: [String: String] = [:]
+    private var messageOrder: [String] = []
+
     private var interrupted: ChatGPTError {
         .streamInterrupted(events: eventCount, last: lastStage, characters: text.count)
     }
@@ -459,6 +462,8 @@ struct ChatGPTSSEDecoder {
             guard let delta = event["delta"] as? String else { throw ChatGPTError.invalidStream }
             text += delta
             guard text.utf8.count <= 64000 else { throw ChatGPTError.invalidStream }
+        case "response.output_item.done":
+            try collectCompletedMessage(event)
         case "response.completed":
             return try completed(event)
         case "response.failed", "error":
@@ -470,6 +475,25 @@ struct ChatGPTSSEDecoder {
         default: break
         }
         return nil
+    }
+
+    private mutating func collectCompletedMessage(_ event: [String: Any]) throws {
+        guard let item = event["item"] as? [String: Any] else { throw ChatGPTError.invalidStream }
+        guard item["type"] as? String == "message" else { return }
+        guard item["status"] as? String == "completed", let id = item["id"] as? String,
+              let content = item["content"] as? [[String: Any]]
+        else { throw ChatGPTError.invalidStream }
+        let complete = content.filter { $0["type"] as? String == "output_text" }
+            .compactMap { $0["text"] as? String }.joined()
+        guard !complete.isEmpty, complete.utf8.count <= 64000,
+              completedMessages[id].map({ $0 == complete }) ?? true
+        else { throw ChatGPTError.invalidStream }
+        if completedMessages[id] == nil {
+            messageOrder.append(id)
+        }
+        completedMessages[id] = complete
+        guard completedMessages.values.reduce(0, { $0 + $1.utf8.count }) <= 64000
+        else { throw ChatGPTError.invalidStream }
     }
 
     private func stage(for type: String) -> ChatGPTStreamStage {
@@ -486,6 +510,9 @@ struct ChatGPTSSEDecoder {
     private mutating func completed(_ event: [String: Any]) throws -> String {
         guard let response = event["response"] as? [String: Any],
               response["status"] as? String == "completed" else { throw ChatGPTError.invalidStream }
+        if !messageOrder.isEmpty {
+            text = messageOrder.compactMap { completedMessages[$0] }.joined()
+        }
         if let output = response["output"] as? [[String: Any]] {
             let complete = output.flatMap { ($0["content"] as? [[String: Any]]) ?? [] }
                 .filter { $0["type"] as? String == "output_text" }
@@ -594,7 +621,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
         }
     }
 
-    private func structured<Value: Decodable>(
+    func structured<Value: Decodable>(
         prompt: String,
         instructions: String,
         name: String,

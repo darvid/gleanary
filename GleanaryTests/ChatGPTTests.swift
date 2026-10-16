@@ -761,6 +761,25 @@ struct ChatGPTTests {
         ])
     }
 
+    @Test func structuredStreamsAcceptDoneMessagesOnlyAfterSuccessfulCompletion() throws {
+        let item = #"data: {"type":"response.output_item.done","item":{"type":"message","id":"fixture-message","status":"completed","content":[{"type":"output_text","text":"{\"valid\":true}"}]}}"#
+        var decoder = ChatGPTSSEDecoder()
+        _ = try decoder.consume(item)
+        #expect(try decoder.consume("") == nil)
+        _ = try decoder.consume(item)
+        #expect(try decoder.consume("") == nil)
+        _ = try decoder
+            .consume(
+                #"data: {"type":"response.completed","response":{"status":"completed","output":[]}}"#
+            )
+        #expect(try decoder.consume("") == #"{"valid":true}"#)
+        var interrupted = ChatGPTSSEDecoder()
+        _ = try interrupted.consume(item)
+        _ = try interrupted.consume("")
+        _ = try interrupted.consume("data: [DONE]")
+        #expect(throws: ChatGPTError.self) { try interrupted.consume("") }
+    }
+
     @Test func streamingRequiresCompletionAndMapsPlanLimits() throws {
         var decoder = ChatGPTSSEDecoder()
         #expect(try decoder.consume(": heartbeat") == nil)

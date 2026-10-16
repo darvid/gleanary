@@ -252,8 +252,11 @@ extension DocumentStore {
         sources: [ResearchSource],
         taskID: UUID,
         provider: String,
-        kind: String = "summary"
+        kind: String = "summary",
+        webEvidence: WebResearchResult? = nil
     ) throws -> MarkdownDocument {
+        guard (kind == "web-research") == (webEvidence != nil)
+        else { throw ConversationError.uncitedWebResearch }
         try Task.checkCancellation()
         return try readyDatabase().write { db in
             try Self.requireConversationTask(taskID, in: db)
@@ -274,6 +277,14 @@ extension DocumentStore {
                 throw ConversationError.invalidOutput
             }
             let saved = try Self.writeNote(note, in: db)
+            if let webEvidence {
+                _ = try webEvidence.markdown()
+                try db.execute(
+                    sql: "INSERT INTO web_research_evidence VALUES (?, ?, ?)",
+                    arguments: [saved.id.uuidString, JSONEncoder().encode(webEvidence),
+                                Date().timeIntervalSince1970]
+                )
+            }
             for id in Set(sources.flatMap(\.sourceIDs)) {
                 try db.execute(
                     sql: "INSERT INTO note_sources(noteID, sourceID) VALUES (?, ?)",
@@ -298,6 +309,15 @@ extension DocumentStore {
                 in: db
             )
             return saved
+        }
+    }
+
+    func webResearchEvidence(noteID: UUID) throws -> WebResearchResult? {
+        try readyDatabase().read { db in
+            try Data.fetchOne(
+                db, sql: "SELECT evidence FROM web_research_evidence WHERE noteID = ?",
+                arguments: [noteID.uuidString]
+            ).map { try JSONDecoder().decode(WebResearchResult.self, from: $0) }
         }
     }
 

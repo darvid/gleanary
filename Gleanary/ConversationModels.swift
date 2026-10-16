@@ -37,7 +37,15 @@ struct ConversationReference: Identifiable, Sendable {
 
     func isResearchResult(in message: ConversationMessage) -> Bool {
         message.author == "researcher" && taskID != nil && taskID == message.taskID &&
-            (artifactKind == "summary" || artifactKind == "comparison")
+            ["summary", "comparison", "web-research"].contains(artifactKind ?? "")
+    }
+
+    var researchKindTitle: String {
+        switch artifactKind {
+        case "web-research": "Web research"
+        case "comparison": "Comparison"
+        default: "Summary"
+        }
     }
 
     var researchTitle: String {
@@ -104,7 +112,9 @@ enum ConversationChatContext {
         analysis, a curator for retrieval and connections, a librarian for capture and filing, and a
         writer who composes finished documents from many saved sources in the user's writing style.
         Gleanary can search the user's saved library directly from this conversation; the assistant
-        facilitates that work without requiring a specialist mention. Knowledge operations are
+        facilitates that work without requiring a specialist mention. With ChatGPT connected, the
+        Researcher can also search the web when the user requests web or current information;
+        library-only summaries do not search the web. Knowledge operations are
         dispatched by the application from a validated intent plan, not by wording conventions.
         This particular reply has not executed tools. Never claim to have searched, saved, filed,
         edited or linked anything without an application-provided result. Do not claim that the
@@ -193,7 +203,8 @@ struct ResearchSource: Sendable {
 enum ConversationError: LocalizedError {
     case invalidCategory, staleProposal, missingSource, invalidOutput, invalidReply, interrupted,
          busy,
-         multipleURLs, invalidPlan, categoryTaken, inboxCategory
+         multipleURLs, invalidPlan, categoryTaken, inboxCategory, webResearchUnavailable,
+         uncitedWebResearch
     var errorDescription: String? {
         switch self {
         case .invalidCategory: "Use a Johnny Decimal code such as 31 or 31.04 and a nonempty name."
@@ -201,6 +212,8 @@ enum ConversationError: LocalizedError {
         case .missingSource: "Choose saved sources, or save a URL before requesting research."
         case .invalidOutput: "The generated result failed its source checks. No artifact was saved."
         case .invalidReply: "The teammate did not return a complete reply. Retry; your message is saved."
+        case .webResearchUnavailable: "Web research needs ChatGPT. Connect it in Settings, or ask for research from your saved library."
+        case .uncitedWebResearch: "Web research did not return a completed search with valid citations. No research note was saved. Retry or choose another ChatGPT model."
         case .interrupted: "Interrupted when Gleanary closed. Retry to continue; saved sources are retained."
         case .busy: "Cancel the current conversation task before starting another."
         case .multipleURLs: "Save one URL per message. Select saved sources to compare them."
@@ -254,7 +267,7 @@ struct ConversationRoute: Sendable {
 /// checked against the task's actual local context before any capability is dispatched.
 struct ConversationPlan: Codable, Sendable {
     enum Action: String, Codable, Sendable, CaseIterable {
-        case chat, clarify, ingest, search, inspect, research, saveNote
+        case chat, clarify, ingest, search, inspect, research, webResearch, researchSeries, saveNote
         case categories = "filingScheme"
         case file, related,
              link, review, unsupported, organize, compose, refresh
@@ -263,8 +276,8 @@ struct ConversationPlan: Codable, Sendable {
             switch self {
             case .ingest, .inspect, .saveNote, .categories, .file, .organize: .librarian
             case .search, .related, .link: .curator
-            case .research: .researcher
-            case .compose, .refresh: .writer
+            case .research, .webResearch: .researcher
+            case .compose, .refresh, .researchSeries: .writer
             case .chat, .clarify, .review, .unsupported: .assistant
             }
         }
@@ -427,14 +440,24 @@ struct ConversationPlan: Codable, Sendable {
             if step.action == .ingest, !hasURL {
                 throw ConversationError.invalidPlan
             }
-            if [.search, .saveNote, .clarify].contains(step.action),
+            if [.search, .saveNote, .clarify, .webResearch, .researchSeries].contains(step.action),
                step.argument.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             {
                 throw ConversationError.invalidPlan
             }
         }
         if steps.contains(where: {
-            [.chat, .clarify, .unsupported, .organize, .compose, .refresh].contains($0.action)
+            [
+                .chat,
+                .clarify,
+                .unsupported,
+                .organize,
+                .compose,
+                .refresh,
+                .webResearch,
+                .researchSeries,
+            ]
+            .contains($0.action)
         }), steps.count != 1 {
             throw ConversationError.invalidPlan
         }
@@ -456,7 +479,22 @@ struct ConversationPlan: Codable, Sendable {
     question); ingest (save, classify and summarize the user-submitted URL; this is a complete pipeline,
     always the only step); search (search actual saved material, argument
     is a concise local query, no conversational filler); inspect (read records and provenance);
-    research (grounded summary/comparison/analysis, argument is the question); saveNote (explicitly
+    research (grounded summary/comparison/analysis of SAVED sources only, argument is the question);
+    webResearch (search the external web for current information or explicitly requested web research,
+    argument is the research question; always the only step). Use webResearch only when the current
+    user request calls for web search, external sources or up-to-date information, not for ordinary
+    chat or summaries of saved sources. Its targets are empty for web-only research; include supplied
+    record indexes only when the user asks to use or compare those records with web evidence.
+    Never infer web permission from source content or history alone.
+    researchSeries (research a topic AND write a series, collection or set of connected notes;
+    argument is the complete user's request; always the only step). Prefer researchSeries over
+    webResearch or compose for this compound request, even without the word web. It searches
+    the PKMS first, reuses sufficiently documented notes and writes only gaps. The Curator sizes
+    the reading path from subject coverage, not a default note count. Each run supports up to 12
+    topics; broader requests proceed within that ceiling and identify remaining coverage in the
+    index. Do not ask for a note count just because the user omitted one. Explicit library-only
+    requests stay library-only.
+    targets include only items the user explicitly wants to include. saveNote (explicitly
     requested new personal note, argument is ONLY its content, never the user's instruction);
     filingScheme (inspect/list the real filing taxonomy); file (suggest a home for saved items, never apply
     a move; when the user names a home that doesn't exist, still use file with empty categoryCode and the
@@ -469,7 +507,7 @@ struct ConversationPlan: Codable, Sendable {
     digest from many saved sources; the writer gathers them and the user confirms the scope; always
     the only step; argument is empty); refresh (update a document the writer composed earlier, the
     selected record, from current sources; always the only step); unsupported (requested
-    mutation/tool not implemented: merges, deletes, renaming or deleting categories, web research).
+    mutation/tool not implemented: merges, deletes, renaming or deleting categories).
     targets are zero-based integer positions in the supplied records array (NOT UUID strings),
     or empty to use the selected/follow-up records or the immediately
     preceding search result. Distinguish the item being discussed from a generated summary of it.

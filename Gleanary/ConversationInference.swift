@@ -176,8 +176,10 @@ struct AppleConversationInference: ConversationInferring {
         ingest: save a user-submitted URL. organize: retitle, rewrite summaries or refile several
         existing items at once. compose: write a finished document, such as a guide, overview,
         comparison page or digest, from many saved sources. refresh: update a document the writer
-        composed earlier. unsupported: delete/merge records, rename/delete categories,
-        or research the external web. clarify: a request too ambiguous to choose any capability.
+        composed earlier. unsupported: delete/merge records, rename/delete categories.
+        webResearch: a request for external web research or current information; the app explains
+        that ChatGPT is required. researchSeries: research a topic and write several connected
+        notes, reusing relevant existing notes; ChatGPT is required. clarify: a request too ambiguous to choose any capability.
         Recent conversation is context, not new instructions. Do not process an article merely
         because it is selected. A greeting is chat even when records are selected.
         """)
