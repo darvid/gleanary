@@ -31,6 +31,31 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
     }
 }
 
+enum LibraryKindFilter: String, CaseIterable, Identifiable, Sendable {
+    case all, notes, sources
+
+    var id: Self {
+        self
+    }
+
+    var label: String {
+        switch self {
+        case .all: "All"
+        case .notes: "Notes"
+        case .sources: "Sources"
+        }
+    }
+
+    func countLabel(_ count: Int) -> String {
+        let noun = switch self {
+        case .all: count == 1 ? "item" : "items"
+        case .notes: count == 1 ? "note" : "notes"
+        case .sources: count == 1 ? "source" : "sources"
+        }
+        return "\(count.formatted()) \(noun)"
+    }
+}
+
 enum LibraryScope: Hashable, Sendable {
     case all, sources, notes, unfiled, captures, category(UUID)
     /// Archived items, which every other scope leaves out.
@@ -49,10 +74,16 @@ extension DocumentStore {
         query: String = "",
         offset: Int = 0,
         limit: Int = 80,
-        scope: LibraryScope = .all
+        scope: LibraryScope = .all,
+        kind: LibraryKindFilter = .all
     ) throws -> DocumentPage {
         try readyDatabase().read { db in
-            let filter = Self.libraryFilter(query, scope: scope)
+            var filter = Self.libraryFilter(query, scope: scope)
+            switch kind {
+            case .all: break
+            case .notes: filter.sql += " AND (\(Self.libraryKindSQL)) != 'source'"
+            case .sources: filter.sql += " AND (\(Self.libraryKindSQL)) = 'source'"
+            }
             let total = try Int.fetchOne(
                 db,
                 sql: "SELECT count(*) FROM notes n WHERE \(filter.sql)",
@@ -218,6 +249,26 @@ extension DocumentStore {
         """
         arguments += [pattern]
         return (sql, arguments)
+    }
+
+    /// Captured items that supplied this note's provenance, not other derived notes.
+    func librarySources(for id: UUID) throws -> [DocumentSummary] {
+        try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT n.id, n.name, n.sourceURL, \(Self.libraryKindSQL) AS kind
+            FROM notes n WHERE n.deletedAt IS NULL AND n.id != ? AND EXISTS (
+                SELECT 1 FROM captures c JOIN note_sources ns ON ns.sourceID = c.sourceID
+                WHERE c.noteID = n.id AND ns.noteID = ?
+            ) ORDER BY n.name COLLATE NOCASE, n.id
+            """, arguments: [id.uuidString, id.uuidString]).map { row in
+                let source: String? = row["sourceURL"]
+                return try DocumentSummary(
+                    id: Self.uuid(row["id"]), name: row["name"],
+                    sourceURL: source.flatMap(URL.init(string:)),
+                    faviconData: nil, faviconChecked: true, kind: row["kind"]
+                )
+            }
+        }
     }
 
     func relatedLibraryDocuments(to id: UUID) throws -> [DocumentSummary] {

@@ -8,6 +8,26 @@ import SwiftUI
 import Synchronization
 import Testing
 
+private struct ChatCommandProbe: View {
+    @FocusedValue(\.gleanaryActions) private var actions
+    let report: (GleanaryActions?) -> Void
+
+    var body: some View {
+        VStack {
+            Button("Probe clear") { actions?.clearConversation?() }
+                .keyboardShortcut("k").disabled(actions?.clearConversation == nil)
+            Button("Probe focus") { actions?.focus() }
+                .keyboardShortcut("f").disabled(actions?.enabled != true)
+            Button("Probe send") { actions?.sendMessage?() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(actions?.sendMessage == nil)
+        }
+        .hidden().accessibilityHidden(true)
+        .onChange(of: actions?.enabled, initial: true) { report(actions) }
+        .onChange(of: actions?.clearConversation != nil) { report(actions) }
+    }
+}
+
 private struct ConversationFixtureInference: ConversationInferring {
     var generatedTitle = "Local-first knowledge notes"
     var titleFails = false
@@ -1440,6 +1460,544 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(model.messages.isEmpty)
     }
 
+    @Test @MainActor func detailAttachmentsAppendDeduplicateAndPreserveTheConversation(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var notes: [MarkdownDocument] = []
+        for index in 0 ..< 5 {
+            try await notes.append(store.save(MarkdownDocument(
+                name: "Note \(index)",
+                markdown: "Evidence \(index)."
+            )))
+        }
+        let task = try await store.beginConversation("Earlier question", owner: .assistant)
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        let messages = try await store.conversationMessages()
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        model.composer = "An unsent follow-up"
+        let initialFocus = model.composerFocusRequest
+        #expect(await model.addToChat(.note(notes[0].id)))
+        #expect(model.ready)
+        #expect(model.composerFocusRequest != initialFocus)
+        #expect(await model.addToChat(.note(notes[1].id)))
+        #expect(await model.addToChat(.note(notes[0].id)))
+        #expect(model.selectedSources == [notes[0].id, notes[1].id])
+        #expect(model.referenceDetails[notes[0].id]?.attachmentKind == "Note")
+        #expect(await model.addToChat(.note(notes[2].id)))
+        #expect(await model.addToChat(.note(notes[3].id)))
+        #expect(await model.addToChat(.note(notes[4].id)) == false)
+        #expect(model.error?.contains("four attachments") == true)
+        #expect(await model.addToChat(.note(notes[0].id)))
+        #expect(model.error == nil)
+        model.select(notes[1].id)
+        #expect(await model.addToChat(.note(notes[4].id)))
+        #expect(model.selectedSources == [notes[0].id, notes[2].id, notes[3].id, notes[4].id])
+        #expect(model.composer == "An unsent follow-up")
+        #expect(model.messages.map(\.id) == messages.map(\.id))
+        #expect(try await store.conversationMessages().map(\.id) == messages.map(\.id))
+        #expect(try await store.conversationTasks().count == 1)
+        #expect(!model.running)
+        #expect(!model.chatGPT.consented)
+    }
+
+    @Test @MainActor func detailAttachmentsRejectDeletedAndMissingItemsWithoutReplacingContext(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Kept note", markdown: "Evidence."))
+        let removed = try await store.save(MarkdownDocument(
+            name: "Deleted note",
+            markdown: "Gone."
+        ))
+        try await store.remove(removed)
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        #expect(await model.addToChat(.note(note.id)))
+        #expect(await model.addToChat(.note(removed.id)) == false)
+        #expect(await model.addToChat(.note(UUID())) == false)
+        #expect(await model.addToChat(.source(UUID())) == false)
+        #expect(model.selectedSources == [note.id])
+        #expect(model.messages.isEmpty)
+        #expect(!model.running)
+    }
+
+    @Test @MainActor func sourceAttachmentsAndHeadersDistinguishProvenanceFromDerivedNotes(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try #require(URL(string: "https://source.example/context"))
+        _ = try await store.enqueueCapture(CaptureRequest(
+            url: url, identity: "fixture:detail-context", label: "Original article"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
+            title: "Redesigning source control at Example | Engineering", sourceURL: url,
+            coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Retained evidence.",
+                text: "Retained evidence."
+            )]
+        ), artifacts: [], summary: "Generated summary, not original evidence.")
+        let captureID = try #require(await store.captureID(for: sourceID))
+        let evidence = try await store.researchSource(noteID: sourceID)
+        var derived: [MarkdownDocument] = []
+        for title in ["Research: Redesigning source control at Example", "Another interpretation"] {
+            let task = try await store.beginConversation("Summarize", owner: .researcher)
+            try await derived.append(store.saveResearch(
+                "Derived explanation.", name: title, sources: [evidence], taskID: task,
+                provider: "fixture"
+            ))
+            try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        }
+        let preview = DocumentPreviewModel()
+        preview.selectedID = derived[0].id
+        await preview.load(from: store)
+        #expect(preview.sources.map(\.id) == [sourceID])
+        #expect(preview.related.map(\.id) == [derived[1].id])
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        #expect(await model.addToChat(.note(derived[0].id)))
+        #expect(await model.addToChat(.source(captureID)))
+        #expect(model.selectedSources == [derived[0].id, sourceID])
+        #expect(model.referenceDetails[sourceID]?.attachmentKind == "Source")
+        #expect(model.referenceDetails[derived[0].id]?.attachmentKind == "Note")
+        let context = try await store.researchSource(noteID: model.selectedSources[1])
+        #expect(context.document.markdown == "Retained evidence.")
+        #expect(context.note.markdown == "Generated summary, not original evidence.")
+        if ProcessInfo.processInfo.environment["GLEANARY_DETAIL_SCREENSHOTS"] == "1" {
+            for dark in [false, true] {
+                for width in [380.0, 680.0] {
+                    try await detailScreenshot(
+                        DocumentPreview(model: preview, showsLibraryDetails: true)
+                            .environment(\.addToChat) { target in
+                                await model.addToChat(target) ? nil : model.error
+                            },
+                        width: width, dark: dark, name: "note-\(Int(width))"
+                    )
+                }
+                try await detailScreenshot(
+                    CaptureSourceView(citation: SourceCitation(
+                        captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: url
+                    ), library: LibraryModel(store: store))
+                        .environment(\.addToChat) { target in
+                            await model.addToChat(target) ? nil : model.error
+                        },
+                    width: 700, dark: dark, name: "source"
+                )
+            }
+        }
+        try await store.archive(sourceID, reason: "Fixture")
+        await preview.load(from: store)
+        #expect(preview.sources.map(\.id) == [sourceID])
+        preview.selectedID = sourceID
+        await preview.load(from: store)
+        #expect(preview.sources.isEmpty)
+        preview.selectedID = nil
+        await preview.load(from: store)
+        #expect(preview.sources.isEmpty && preview.related.isEmpty)
+        let source = try #require(await store.document(id: sourceID))
+        try await store.remove(source)
+        #expect(await model.addToChat(.source(captureID)) == false)
+        preview.selectedID = derived[0].id
+        await preview.load(from: store)
+        #expect(preview.sources.isEmpty)
+    }
+
+    @Test @MainActor func headerSourcesAreNotLostWhenRelatedNotesExceedTheirPageLimit(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var evidence: [ResearchSource] = []
+        for title in ["First article", "Second article"] {
+            _ = try await store.enqueueCapture(CaptureRequest(
+                identity: "fixture:\(title)", label: title
+            ))
+            let job = try #require(await store.claimCapture())
+            let id = try await store.publishCapture(job, document: CapturedDocument(
+                title: title, coverage: .article,
+                blocks: [ContentBlock(
+                    kind: .paragraph,
+                    markdown: "Saved evidence.",
+                    text: "Saved evidence."
+                )]
+            ), artifacts: [])
+            try await evidence.append(store.researchSource(noteID: id))
+        }
+        var first: MarkdownDocument?
+        for index in 0 ..< 22 {
+            let task = try await store.beginConversation("Compare", owner: .researcher)
+            let note = try await store.saveResearch(
+                "Two-source interpretation.", name: "Comparison \(index)", sources: evidence,
+                taskID: task, provider: "fixture", kind: "comparison"
+            )
+            if first == nil {
+                first = note
+            }
+            try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        }
+        let preview = DocumentPreviewModel()
+        preview.selectedID = try #require(first).id
+        await preview.load(from: store)
+        #expect(preview.sources.map(\.id) == evidence.map(\.note.id))
+        #expect(preview.related.count == 20)
+        #expect(preview.related.allSatisfy { $0.kind == "comparison" })
+        if ProcessInfo.processInfo.environment["GLEANARY_DETAIL_SCREENSHOTS"] == "1" {
+            try await detailScreenshot(
+                DocumentPreview(model: preview), width: 380, dark: true, name: "multiple-sources"
+            )
+        }
+    }
+
+    @Test @MainActor func acceptedMessagesMoveContextOutOfTheComposerAndKeepItAcrossReloads(
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Research: Redesigning source control at Example",
+            markdown: "Saved interpretation."
+        ))
+        _ = try await store.enqueueCapture(CaptureRequest(
+            identity: "fixture:sent-context",
+            label: "Source"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
+            title: "Original engineering article", coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Original evidence.",
+                text: "Original evidence."
+            )]
+        ), artifacts: [])
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(
+                store: store,
+                inference: ConversationFixtureInference(wait: true)
+            )
+        )
+        #expect(await model.addToChat(.note(note.id)))
+        #expect(await model.addToChat(.note(sourceID)))
+        model.composer = "Can you give this note a shorter title?"
+        await model.send()
+        #expect(model.composer.isEmpty)
+        #expect(model.selectedSources.isEmpty)
+        let sent = try #require(model.messages.first { $0.author == "user" })
+        #expect(sent.references == [note.id, sourceID])
+        let task = try #require(model.tasks.first { $0.id == sent.taskID })
+        #expect(task.sources == [note.id, sourceID])
+        #expect(model.running)
+        if ProcessInfo.processInfo.environment["GLEANARY_DETAIL_SCREENSHOTS"] == "1" {
+            for dark in [false, true] {
+                try await detailScreenshot(
+                    ConversationView(model: model, library: LibraryModel(store: store)),
+                    width: 680, dark: dark, name: "sent-context"
+                )
+            }
+        }
+        await model.cancel()
+        let reopened = DocumentStore(url: store.url)
+        _ = try await reopened.open()
+        #expect(try await reopened.conversationMessages().first?.references == [note.id, sourceID])
+        // A retry uses its old context without consuming the person's new draft attachments.
+        #expect(await model.addToChat(.note(note.id)))
+        model.composer = "A different unsent question"
+        await model.send(retry: task)
+        #expect(model.selectedSources == [note.id])
+        #expect(model.composer == "A different unsent question")
+        #expect(model.messages.last { $0.author == "user" }?.references == [note.id, sourceID])
+        await model.cancel()
+        let database = try await store.readyDatabase()
+        try await database.write { db in
+            // Recreate a pre-fix message whose context lived only in sourceRefs.
+            try db.execute(
+                sql: "UPDATE conversation_messages SET refs = ? WHERE id = ?",
+                arguments: [
+                    JSONEncoder().encode([UUID]()), sent.id.uuidString,
+                ]
+            )
+        }
+        #expect(try await reopened.conversationMessages().first?.references == [note.id, sourceID])
+        _ = try await store.permanentlyRemove(note)
+        await model.refresh()
+        #expect(model.referenceDetails[note.id] == nil)
+        #expect(model.titles[note.id] == "Deleted document")
+    }
+
+    @Test @MainActor func rejectedMessageKeepsDraftAndAttachments() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Note", markdown: "Saved evidence."))
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        #expect(await model.addToChat(.note(note.id)))
+        model.composer = "A question that cannot be saved"
+        let database = try await store.readyDatabase()
+        try await database.write { db in
+            try db.execute(sql: """
+            CREATE TRIGGER reject_fixture_message BEFORE INSERT ON conversation_tasks
+            BEGIN SELECT RAISE(ABORT, 'Synthetic submission failure'); END
+            """)
+        }
+        await model.send()
+        #expect(model.error != nil)
+        #expect(model.composer == "A question that cannot be saved")
+        #expect(model.selectedSources == [note.id])
+        #expect(try await store.conversationMessages().isEmpty)
+        #expect(try await store.conversationTasks().isEmpty)
+        #expect(!model.running)
+    }
+
+    @Test @MainActor func libraryTypesComposeWithCategorySearchAndPageCache() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        _ = try await store.enqueueCapture(CaptureRequest(
+            identity: "fixture:type-filter",
+            label: "Source"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
+            title: "Original source", coverage: .article,
+            blocks: [ContentBlock(kind: .paragraph, markdown: "Evidence.", text: "Evidence.")]
+        ), artifacts: [])
+        let note = try await store.save(MarkdownDocument(
+            name: "Personal note",
+            markdown: "My interpretation."
+        ))
+        let source = try await store.researchSource(noteID: sourceID)
+        let task = try await store.beginConversation("Summarize", owner: .researcher)
+        let summary = try await store.saveResearch(
+            "Summary.",
+            name: "Generated summary",
+            sources: [source],
+            taskID: task,
+            provider: "fixture"
+        )
+        for id in [sourceID, note.id, summary.id] {
+            try await store.fileNote(id, categoryID: home.id)
+        }
+        #expect(try await store.documentPage(scope: .category(home.id), kind: .all).total == 3)
+        #expect(try await store.documentPage(scope: .category(home.id), kind: .sources).documents
+            .map(\.id) == [sourceID])
+        let notes = try await store.documentPage(scope: .category(home.id), kind: .notes)
+        #expect(Set(notes.documents.map(\.id)) == [note.id, summary.id])
+        #expect(try await store.documentPage(
+            query: "Personal",
+            scope: .category(home.id),
+            kind: .sources
+        ).total == 0)
+        #expect(try await store.documentPage(
+            query: "Personal",
+            scope: .category(home.id),
+            kind: .notes
+        ).total == 1)
+        let first = try await store.documentPage(limit: 1, scope: .category(home.id), kind: .notes)
+        let second = try await store.documentPage(
+            offset: 1,
+            limit: 1,
+            scope: .category(home.id),
+            kind: .notes
+        )
+        #expect(first.total == 2 && second.total == 2)
+        #expect(first.documents.first?.id != second.documents.first?.id)
+        let grid = DocumentGridModel(store: store)
+        grid.scope = .category(home.id)
+        grid.kindFilter = .notes
+        await grid.reloadIfNeeded()
+        #expect(grid.total == 2)
+        grid.kindFilter = .sources
+        await grid.reloadIfNeeded()
+        #expect(grid.total == 1)
+        #expect(grid.document(at: 0)?.id == sourceID)
+        #expect(grid.scope == .category(home.id))
+        grid.kindFilter = .all
+        await grid.reloadIfNeeded()
+        #expect(grid.total == 3)
+    }
+
+    @Test func readerTypographyGrowsWithoutChangingStoredPreferences() {
+        let regular = ReadingFont(family: "Georgia", size: 14)
+        #expect(regular.readerModeFont.size == 18)
+        #expect(regular.readerModeFont.family == regular.family)
+        #expect(regular.size == 14)
+        #expect(ReadingFont(family: "", size: 22).readerModeFont.size == 24)
+        #expect(ReadingFont(family: "", size: 32).readerModeFont.size == 32)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_DETAIL_SCREENSHOTS"] == "1"))
+    @MainActor func sourceActionsReaderAndFilingHaveNativeLayouts() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try #require(URL(string: "https://source.example/reader"))
+        _ = try await store.enqueueCapture(CaptureRequest(
+            url: url,
+            identity: "fixture:reader-controls",
+            label: "Source"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
+            title: "Engineering notes on source control", sourceURL: url, coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: String(
+                    repeating: "Readable retained evidence about source control and engineering decisions. ",
+                    count: 18
+                ),
+                text: "Readable retained evidence."
+            )]
+        ), artifacts: [])
+        let home = try #require(await store.categories().first { $0.code == "31.04" })
+        try await store.fileNote(sourceID, categoryID: home.id)
+        let preview = DocumentPreviewModel()
+        preview.selectedID = sourceID
+        await preview.load(from: store)
+        #expect(preview.canGenerateSummary)
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        let view = DocumentPreview(
+            model: preview,
+            summaryEnabled: true,
+            fileDocument: { _ in },
+            suggestHome: HomeSuggester(
+                suggest: model.suggestHome, file: model.fileAsSuggested,
+                undo: model.undoSuggestedFiling,
+                addHome: model.addSuggestedHome, removeHome: model.removeSuggestedHome
+            )
+        )
+        .environment(\.addToChat) { target in await model.addToChat(target) ? nil : model.error }
+        .environment(\.enterReader) { _ in }
+        for dark in [false, true] {
+            for width in [380.0, 680.0] {
+                try await detailScreenshot(
+                    view,
+                    width: width,
+                    dark: dark,
+                    name: "actions-\(Int(width))"
+                )
+            }
+            try await detailScreenshot(view, width: 960, dark: dark, name: "detail-centered")
+            try await detailScreenshot(
+                view.environment(\.isReaderMode, true),
+                width: 960,
+                dark: dark,
+                name: "reader"
+            )
+        }
+        let evidence = try await store.researchSource(noteID: sourceID)
+        let task = try await store.beginConversation("Summarize", owner: .researcher)
+        let note = try await store.saveResearch(
+            "A focused explanation of source control.\n\n> Retained evidence stays attached to its source.\n\n- Read the original.\n- Compare the saved notes.\n\n[Original source](gleanary://note/\(sourceID.uuidString))",
+            name: "A clearer view of source control", sources: [evidence], taskID: task,
+            provider: "fixture"
+        )
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        let captureID = try #require(await store.captureID(for: sourceID))
+        try await detailScreenshot(
+            SourceReaderView(captureID: captureID, store: store),
+            width: 960,
+            dark: true,
+            name: "retained-source-reader"
+        )
+        let suite = "gleanary-reader-layout-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("list", forKey: "libraryPresentation")
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        for dark in [false, true] {
+            try await detailScreenshot(
+                ContentView(
+                    library: LibraryModel(store: store),
+                    conversation: model,
+                    initialSelection: note.id
+                )
+                .defaultAppStorage(defaults),
+                width: 1100, dark: dark, name: "reader-layout", enterReader: true
+            )
+        }
+    }
+
+    @MainActor private func detailScreenshot(
+        _ view: some View, width: Double, dark: Bool, name: String, enterReader: Bool = false
+    ) async throws {
+        let appearance = try #require(NSAppearance(named: dark ? .darkAqua : .aqua))
+        let host = NSHostingView(rootView: view
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .preferredColorScheme(dark ? .dark : .light))
+        host.appearance = appearance
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 780),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = appearance
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(400))
+        if enterReader {
+            window.makeKeyAndOrderFront(nil)
+            let event = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "R",
+                charactersIgnoringModifiers: "r", isARepeat: false, keyCode: 15
+            ))
+            #expect(window.performKeyEquivalent(with: event))
+            try await Task.sleep(for: .milliseconds(400))
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(abs(host.bounds.width - width) < 1)
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent(
+            "gleanary-chat-detail-\(name)-\(dark ? "dark" : "light").png"
+        ))
+        if enterReader {
+            let escape = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\u{1B}",
+                charactersIgnoringModifiers: "\u{1B}", isARepeat: false, keyCode: 53
+            ))
+            #expect(window.performKeyEquivalent(with: escape))
+            try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let exited = try #require(bitmap.representation(using: .png, properties: [:]))
+            try exited.write(to: FileManager.default.temporaryDirectory.appendingPathComponent(
+                "gleanary-chat-detail-\(name)-exited.png"
+            ))
+            // Reverse the fade before it finishes; shortcuts must remain usable.
+            let reenter = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "R",
+                charactersIgnoringModifiers: "r", isARepeat: false, keyCode: 15
+            ))
+            #expect(window.performKeyEquivalent(with: reenter))
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(window.performKeyEquivalent(with: escape))
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(window.performKeyEquivalent(with: reenter))
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(window.performKeyEquivalent(with: escape))
+            try await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
     @Test @MainActor func completedTaskHasNoProgressOrCancelWhileWorkerFinishesCleanup(
     ) async throws {
         let (root, store) = try await fixture()
@@ -1471,6 +2029,145 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(runningChanges.withLock { $0 } == 1)
         #expect(checkedCleanup)
         #expect(model.activeTask == nil)
+    }
+
+    @Test(
+        .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_TOOLBAR_SCREENSHOTS"] == "1"),
+        arguments: [false, true]
+    )
+    @MainActor func sidebarToolbarHasStableGeometry(dark: Bool) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "gleanary-toolbar-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(287.0, forKey: "sidebarWidth")
+        let controller =
+            NSHostingController(rootView: ContentView(library: LibraryModel(store: store))
+                    .defaultAppStorage(defaults).preferredColorScheme(dark ? .dark : .light))
+        let window = NSWindow(contentViewController: controller)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.styleMask.insert(.fullSizeContentView)
+        window.setContentSize(NSSize(width: 1100, height: 780))
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentViewController = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(500))
+        let toolbar = try #require(window.toolbar)
+        #expect(toolbar.items.first?.itemIdentifier.rawValue == "navigation")
+        let frame = try #require(window.contentView?.superview)
+        try saveToolbarScreenshot(frame, name: "shown-\(dark ? "dark" : "light")")
+        let navigation = try #require(toolbar.items.first?.view)
+        let initial = navigation.convert(navigation.bounds, to: nil)
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command, .control], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "s",
+            charactersIgnoringModifiers: "s", isARepeat: false, keyCode: 1
+        ))
+        for name in ["hidden", "restored"] {
+            #expect(window.performKeyEquivalent(with: event))
+            for _ in 0 ..< 6 {
+                try await Task.sleep(for: .milliseconds(50))
+                let current = try #require(toolbar.items.first?.view)
+                #expect(current === navigation)
+                #expect(abs(current.convert(current.bounds, to: nil).minX - initial.minX) < 1)
+            }
+            try saveToolbarScreenshot(frame, name: "\(name)-\(dark ? "dark" : "light")")
+        }
+    }
+
+    @MainActor private func saveToolbarScreenshot(_ view: NSView, name: String) throws {
+        view.layoutSubtreeIfNeeded()
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let scale = Double(bitmap.pixelsWide) / view.bounds.width
+        let content = try #require(bitmap.colorAt(x: Int(294 * scale), y: Int(600 * scale))?
+            .usingColorSpace(.deviceRGB))
+        // Both sides of the sidebar boundary share the content's solid titlebar color.
+        for x in [280.0, 294.0] {
+            let titlebar = try #require(bitmap.colorAt(x: Int(x * scale), y: Int(12 * scale))?
+                .usingColorSpace(.deviceRGB))
+            #expect(abs(titlebar.redComponent - content.redComponent) < 0.01)
+            #expect(abs(titlebar.greenComponent - content.greenComponent) < 0.01)
+            #expect(abs(titlebar.blueComponent - content.blueComponent) < 0.01)
+        }
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png.write(to: URL(fileURLWithPath: "/tmp/gleanary-toolbar-\(name).png"))
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_CHAT_SHORTCUTS"] == "1"))
+    @MainActor func chatSceneCommandsReachFocusedComposerWithoutClearingImmediately() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let task = try await store.beginConversation("Earlier fixture message", owner: .assistant)
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(
+                store: store,
+                inference: ConversationFixtureInference()
+            )
+        )
+        await model.load()
+        model.composer = "Unsent fixture draft"
+        let suite = "gleanary-chat-shortcuts-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        var commands: GleanaryActions?
+        let controller = NSHostingController(rootView:
+            ContentView(library: LibraryModel(store: store), conversation: model)
+                .background { ChatCommandProbe { commands = $0 } }
+                .defaultAppStorage(defaults))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 1100, height: 780))
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentViewController = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(commands?.enabled == true)
+        #expect(commands?.clearConversation != nil)
+        #expect(commands?.sendMessage != nil)
+        #expect(commands?.importBookmarks == nil)
+        let focus = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "f",
+            charactersIgnoringModifiers: "f", isARepeat: false, keyCode: 3
+        ))
+        #expect(window.performKeyEquivalent(with: focus))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(window.firstResponder is NSTextView)
+        let send = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        ))
+        #expect(window.performKeyEquivalent(with: send))
+        for _ in 0 ..< 40 {
+            if model.composer.isEmpty, !model.running {
+                break
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(model.composer.isEmpty)
+        #expect(model.messages.filter { $0.author == "user" && $0.text == "Unsent fixture draft" }
+            .count == 1)
+        model.composer = "Keep this unsent draft"
+        let visibleWindows = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
+        let clear = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "k",
+            charactersIgnoringModifiers: "k", isARepeat: false, keyCode: 40
+        ))
+        #expect(window.performKeyEquivalent(with: clear))
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(window.attachedSheet != nil || NSApp.windows.contains {
+            $0.isVisible && !visibleWindows.contains(ObjectIdentifier($0))
+        })
+        #expect(!model.messages.isEmpty)
+        #expect(model.composer == "Keep this unsent draft")
+        #expect(try await !store.conversationMessages().isEmpty)
     }
 
     @Test @MainActor func clearingConversationCancelsWorkAndKeepsUnsentDraft() async throws {

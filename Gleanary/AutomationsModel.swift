@@ -6,6 +6,10 @@ import Observation
 @MainActor @Observable final class AutomationsModel {
     private(set) var configs: [AutomationConfig] = []
     private(set) var runs: [AutomationKind: [AutomationRun]] = [:]
+    private(set) var historyPages: [AutomationKind: AutomationRunPage] = [:]
+    private(set) var loadingHistory = false
+    @ObservationIgnored private var requestedHistoryPages: [AutomationKind: Int] = [:]
+    @ObservationIgnored private var loadToken = UUID()
     /// Proposals waiting for review, per automation.
     private(set) var pending: [AutomationKind: [AgentChange]] = [:]
     /// Item titles for showing proposals.
@@ -54,20 +58,35 @@ import Observation
         configs.first { $0.kind == kind } ?? AutomationConfig(kind: kind)
     }
 
+    func showHistoryPage(_ page: Int, of kind: AutomationKind) async {
+        guard !loadingHistory else { return }
+        loadingHistory = true
+        defer { loadingHistory = false }
+        requestedHistoryPages[kind] = max(0, page)
+        await load()
+    }
+
     func load() async {
+        let token = UUID()
+        loadToken = token
+        let requestedPages = requestedHistoryPages
         do {
             configs = try await store.automationConfigs()
             var updatedRuns: [AutomationKind: [AutomationRun]] = [:]
+            var updatedHistory: [AutomationKind: AutomationRunPage] = [:]
             var updatedPending: [AutomationKind: [AgentChange]] = [:]
             var updatedBacklog: [AutomationKind: Int] = [:]
             for kind in AutomationKind.allCases {
                 // A run in progress shows as Running… above the history, not as an empty row.
                 updatedRuns[kind] = try await store.automationRuns(kind)
                     .filter { $0.status != .running }
+                updatedHistory[kind] = try await store.automationRunPage(
+                    kind,
+                    page: requestedPages[kind] ?? 0
+                )
                 updatedPending[kind] = try await store.pendingAutomationChanges(kind)
                 updatedBacklog[kind] = try await engine.backlog(config(kind))
             }
-            backlog = updatedBacklog
             var updatedTitles = titles
             let missing = Set(updatedPending.values.joined().flatMap { [$0.noteID, $0.targetID] }
                 .compactMap(\.self)).filter { updatedTitles[$0] == nil }
@@ -75,17 +94,26 @@ import Observation
             for id in missing {
                 updatedTitles[id] = found[id] ?? "Deleted item"
             }
-            let undo = try await store.runUndoState(updatedRuns.values.joined().map(\.id))
+            let visibleRuns = Array(updatedRuns.values.joined()) + updatedHistory.values
+                .flatMap(\.runs)
+            let undo = try await store.runUndoState(visibleRuns.map(\.id))
             let gone = try await store.missingNotes(Array(Set(
-                updatedRuns.values.joined().flatMap(\.entries).compactMap(\.itemID)
+                visibleRuns.flatMap(\.entries).compactMap(\.itemID)
             )))
+            guard loadToken == token else { return }
+            backlog = updatedBacklog
+            historyPages = updatedHistory
+            requestedHistoryPages = updatedHistory.mapValues(\.index)
             runs = updatedRuns
             undoableRuns = undo.applied
             undoneRuns = undo.undone
             goneItems = gone
             pending = updatedPending
             titles = updatedTitles
-        } catch { self.error = error.localizedDescription }
+        } catch {
+            guard loadToken == token else { return }
+            self.error = error.localizedDescription
+        }
     }
 
     /// Starts the schedule, first catching up on anything missed while the app was closed.

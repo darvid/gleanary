@@ -12,9 +12,7 @@ final class KnowledgeAtlasModel {
         case open(UUID)
     }
 
-    enum KindFilter: Equatable {
-        case all, sources, notes
-    }
+    typealias KindFilter = LibraryKindFilter
 
     enum Direction {
         case left, right, up, down
@@ -78,7 +76,10 @@ final class KnowledgeAtlasModel {
     @ObservationIgnored private var transitionTask: Task<Void, Never>?
 
     init(snapshot: AtlasSnapshot? = nil) {
-        let root = AtlasHierarchy.project(snapshot ?? AtlasSnapshot(categories: [], items: []))
+        let root = AtlasHierarchy.project(
+            snapshot ?? AtlasSnapshot(categories: [], items: []),
+            groupingSummaries: false
+        )
         self.root = root
         layout = AtlasLayout(root: root, bounds: .zero)
         self.snapshot = snapshot
@@ -164,10 +165,17 @@ final class KnowledgeAtlasModel {
         case .sources: source.items = source.items.filter { $0.kind == "source" }
         case .notes: source.items = source.items.filter { $0.kind != "source" }
         }
-        let projected = AtlasHierarchy.project(source, groupingSummaries: kindFilter != .notes)
+        let projected = AtlasHierarchy.project(source, groupingSummaries: false)
+        root = hidesEmptyCategories ? AtlasHierarchy.withoutEmptyCategories(
+            projected,
+            preserving: focusID
+        ) : projected
         emptyCategoryCount = AtlasHierarchy.emptyCategoryCount(projected)
+            - (hidesEmptyCategories ? AtlasHierarchy.emptyCategoryCount(root) : 0)
         emptyCategoryIDs = AtlasHierarchy.emptyCategoryIDs(projected)
-        root = hidesEmptyCategories ? AtlasHierarchy.withoutEmptyCategories(projected) : projected
+        if hidesEmptyCategories {
+            emptyCategoryIDs.subtract(AtlasHierarchy.emptyCategoryIDs(root))
+        }
         // Layouts depend only on the hierarchy and viewport, so unchanged regions stay put and
         // the camera can be kept as is.
         layout = AtlasLayout(root: root, bounds: CGRect(origin: .zero, size: viewport))
@@ -346,6 +354,12 @@ final class KnowledgeAtlasModel {
     }
 
     func focus(_ id: AtlasNodeID, animated: Bool = true) {
+        if layout.index[id] == nil, case let .category(categoryID) = id,
+           snapshot?.categories.contains(where: { $0.id == categoryID }) == true
+        {
+            focusID = id
+            rebuild()
+        }
         guard let tile = layout.tile(id), tile.node.kind != .item else { return }
         focusID = id
         navigations += 1

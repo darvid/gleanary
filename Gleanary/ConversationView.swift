@@ -89,6 +89,12 @@ struct ConversationView: View {
             await preview.load(from: model.store)
         }
         .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
+        .onChange(of: model.composerFocusRequest) { composing = true }
+        .onChange(of: source?.id) {
+            if source == nil {
+                composing = true
+            }
+        }
         .sheet(item: $reviewingChanges) { target in
             let changes = model.agentChanges[target.id] ?? []
             AgentChangesReview(
@@ -134,16 +140,23 @@ struct ConversationView: View {
             case let .failure(error): model.error = error.localizedDescription
             }
         }
-        .focusedSceneValue(\.gleanaryActions, GleanaryActions(
+        .focusedSceneValue(\.gleanaryActions, sceneActions)
+    }
+
+    private var sceneActions: GleanaryActions {
+        var actions = GleanaryActions(
             enabled: model.ready,
-            newNote: {
-                model
-                    .composer =
-                    "@librarian save: "; composing = true
-            },
+            newNote: { model.composer = "@librarian save: "; composing = true },
             attach: { importing = true },
             focus: { composing = true }
-        ))
+        )
+        if canClearConversation {
+            actions.clearConversation = { confirmingClear = true }
+        }
+        if model.ready, !draftIsEmpty {
+            actions.sendMessage = send
+        }
+        return actions
     }
 
     func savedDocumentPreview(for preview: DocumentPreviewModel) -> DocumentPreview {
@@ -157,6 +170,7 @@ struct ConversationView: View {
             cancelSummary: summaryCancel(for: preview),
             bookmarkFetch: preview.selectedID
                 .flatMap { library.bookmarkFetch(for: $0)?.progress },
+            openDocument: open,
             suggestHome: HomeSuggester(
                 suggest: { try await model.suggestHome(for: $0) },
                 file: { id, suggestion in
@@ -209,6 +223,10 @@ struct ConversationView: View {
         )
     }
 
+    private var canClearConversation: Bool {
+        model.ready && !model.messages.isEmpty && !model.clearingConversation
+    }
+
     private func summaryCancel(for preview: DocumentPreviewModel) -> (() -> Void)? {
         guard let id = library.generatingSummaryID, id == preview.selectedID else { return nil }
         return library.cancelSummary
@@ -225,7 +243,7 @@ struct ConversationView: View {
                 Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
                     confirmingClear = true
                 }
-                .disabled(!model.ready || model.messages.isEmpty || model.clearingConversation)
+                .disabled(!canClearConversation)
             }
             .menuIndicator(.hidden)
             .help("Conversation options")
@@ -350,7 +368,9 @@ struct ConversationView: View {
                     ? message.text : message.textWithoutResearchBibliography)
                     .textSelection(.enabled)
             }
-            references(for: message)
+            if message.author != "user" {
+                references(for: message)
+            }
             if let taskID = message.taskID, message.author == "user",
                let task = model.tasks.first(where: { $0.id == taskID }),
                ["failed", "cancelled"].contains(task.state)
@@ -478,22 +498,51 @@ struct ConversationView: View {
     }
 
     private func userBubble(_ message: ConversationMessage) -> some View {
-        Text(message.text).textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(
-                Color.primary.opacity(0.09),
-                in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-            )
-            .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
-            .frame(maxWidth: 560, alignment: .trailing)
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 80)
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(
-                "You, \(message.createdAt.formatted(date: .omitted, time: .shortened))"
-            )
-            .accessibilityValue(message.text)
+        VStack(alignment: .leading, spacing: 9) {
+            if !message.references.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(message.references, id: \.self) { id in
+                        sentContext(id)
+                    }
+                }
+            }
+            Text(message.text).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(
+            Color.primary.opacity(0.09),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
+        .frame(maxWidth: 560, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 80)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "You, \(message.createdAt.formatted(date: .omitted, time: .shortened))"
+        )
+    }
+
+    @ViewBuilder private func sentContext(_ id: UUID) -> some View {
+        if let reference = model.referenceDetails[id] {
+            Button { open(id) } label: {
+                Label(
+                    "\(reference.attachmentKind): \(reference.title)",
+                    systemImage:
+                    reference.hasCapture ? "doc.text" : "note.text"
+                )
+                .lineLimit(2).multilineTextAlignment(.leading)
+                .font(.callout)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .help("Open the attached item")
+        } else {
+            Label("Deleted item", systemImage: "doc.text")
+                .font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     private func filingDetail(_ change: FilingChange) -> String {
@@ -712,13 +761,6 @@ struct ConversationView: View {
                     Color.primary.opacity(0.1),
                     lineWidth: 1
                 ))
-                .background {
-                    Button("Send message", action: send).keyboardShortcut(
-                        .return,
-                        modifiers: .command
-                    )
-                    .hidden().accessibilityHidden(true).disabled(!model.ready || draftIsEmpty)
-                }
         }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
             .frame(maxWidth: .infinity)
     }
@@ -729,10 +771,11 @@ struct ConversationView: View {
             HStack(spacing: 6) {
                 ForEach(model.selectedSources, id: \.self) { id in
                     let title = model.titles[id] ?? "Saved document"
+                    let kind = model.referenceDetails[id]?.attachmentKind ?? "Note"
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text").foregroundStyle(.secondary)
                             .accessibilityHidden(true)
-                        Text(title).lineLimit(1).frame(maxWidth: 220)
+                        Text("\(kind): \(title)").lineLimit(1).frame(maxWidth: 220)
                         Button("Remove \(title)", systemImage: "xmark") { model.select(id) }
                             .labelStyle(.iconOnly).buttonStyle(.borderless)
                             .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -742,7 +785,7 @@ struct ConversationView: View {
                     .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
                     .help("Used as a source for your next message")
                     .accessibilityElement(children: .contain)
-                    .accessibilityLabel("Source: \(title)")
+                    .accessibilityLabel("\(kind): \(title)")
                 }
             }.padding(.leading, 4)
         }.scrollIndicators(.never)
@@ -761,6 +804,52 @@ struct ConversationView: View {
 
     private func open(_ id: UUID) {
         preview.selectedID = id; showingPreview = true
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var addToChat: (@MainActor (ChatAttachmentTarget) async -> String?)? = nil
+}
+
+struct AddToChatButton: View {
+    let target: ChatAttachmentTarget
+    var compact = false
+    var added: () -> Void = {}
+    @Environment(\.addToChat) private var addToChat
+    @State private var adding = false
+    @State private var error: String?
+    @State private var showingError = false
+
+    var body: some View {
+        if let addToChat {
+            Button {
+                adding = true
+                Task {
+                    error = await addToChat(target)
+                    adding = false
+                    if error == nil {
+                        added()
+                    } else {
+                        showingError = true
+                    }
+                }
+            } label: {
+                if compact {
+                    Image(systemName: "text.bubble")
+                } else {
+                    Label("Add to Chat", systemImage: "text.bubble")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(adding)
+            .accessibilityLabel("Add to Chat")
+            .help("Attach this item to your chat draft without sending a message")
+            .alert("Could not add to Chat", isPresented: $showingError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(error ?? "Try again.")
+            }
+        }
     }
 }
 

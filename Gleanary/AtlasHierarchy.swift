@@ -231,11 +231,16 @@ enum AtlasHierarchy {
 
     /// The tree without categories that hold no items in their subtree. Hues and counts are
     /// unchanged, so the remaining regions keep their colors.
-    static func withoutEmptyCategories(_ node: AtlasNode) -> AtlasNode {
+    static func withoutEmptyCategories(
+        _ node: AtlasNode,
+        preserving focus: AtlasNodeID? = nil
+    ) -> AtlasNode {
         var node = node
         node.children = node.children
-            .filter { $0.kind == .item || $0.itemCount > 0 }
-            .map(withoutEmptyCategories)
+            .map { withoutEmptyCategories($0, preserving: focus) }
+            .filter {
+                $0.kind == .item || $0.itemCount > 0 || $0.id == focus || !$0.children.isEmpty
+            }
         return node
     }
 

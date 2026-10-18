@@ -7,6 +7,7 @@ final class DocumentGridModel {
     static let maximumPages = 6
     var query = ""
     var scope: LibraryScope = .all
+    var kindFilter = LibraryKindFilter.all
     private(set) var total = 0
     private(set) var generation = 0
     private(set) var cacheVersion = 0
@@ -21,8 +22,18 @@ final class DocumentGridModel {
     @ObservationIgnored private let favicons: FaviconLoader
     private var token = UUID()
     private var changeSequence: Int64 = 0
-    private var activeQuery = ""
-    private var activeScope: LibraryScope = .all
+    private struct Request: Equatable {
+        let query: String
+        let scope: LibraryScope
+        let kind: LibraryKindFilter
+    }
+
+    private var activeRequest = Request(query: "", scope: .all, kind: .all)
+    private var pendingRequest: Request?
+
+    private var requestedState: Request {
+        Request(query: String(query.prefix(1000)), scope: scope, kind: kindFilter)
+    }
 
     init(store: DocumentStore, favicons: FaviconLoader = FaviconLoader()) {
         self.store = store
@@ -31,6 +42,11 @@ final class DocumentGridModel {
 
     var cachedDocumentCount: Int {
         pages.values.reduce(0) { $0 + $1.count }
+    }
+
+    var hasLoaded: Bool {
+        _ = cacheVersion
+        return pages[0] != nil
     }
 
     func document(at index: Int) -> DocumentSummary? {
@@ -45,25 +61,32 @@ final class DocumentGridModel {
     func reload() async {
         token = UUID()
         let expected = token
+        let request = requestedState
+        pendingRequest = request
         defer {
             if token == expected {
                 loading = false
+                pendingRequest = nil
             }
         }
         tasks.values.forEach { $0.cancel() }
         tasks = [:]
         faviconTask?.cancel(); faviconTask = nil
-        pages = [:]; recency = []; visiblePages = []
-        activeQuery = String(query.prefix(1000))
-        activeScope = scope
-        total = 0; loading = true; error = nil
-        generation += 1
+        // Keep the current rows mounted until their replacement is ready.
+        loading = true; error = nil
         do {
-            let page = try await store.documentPage(query: activeQuery, scope: activeScope)
+            let page = try await store.documentPage(
+                query: request.query,
+                scope: request.scope,
+                kind: request.kind
+            )
             guard token == expected, !Task.isCancelled else { return }
+            pages = [:]; recency = []; visiblePages = []
+            activeRequest = request
             total = page.total
             changeSequence = page.changeSequence
             cache(page.documents, page: 0)
+            generation += 1
         } catch {
             guard token == expected, !Task.isCancelled else { return }
             self.error = error.localizedDescription
@@ -75,12 +98,11 @@ final class DocumentGridModel {
     /// Reopening a browser or mounting its search task should reuse matching, valid rows.
     /// Mutations still call reload() explicitly; an interrupted first load has no page to reuse.
     func reloadIfNeeded() async {
-        if loading, activeQuery == String(query.prefix(1000)), activeScope == scope {
+        if loading, pendingRequest == requestedState {
             return
         }
-        guard pages[0] == nil || activeQuery != String(query.prefix(1000)) || activeScope !=
-            scope ||
-            error != nil else { return }
+        guard loading || pages[0] == nil || activeRequest != requestedState || error != nil
+        else { return }
         await reload()
     }
 
@@ -101,17 +123,16 @@ final class DocumentGridModel {
     }
 
     func requestPage(_ page: Int) {
-        guard page >= 0, page * Self.pageSize < total, pages[page] == nil,
+        guard !loading, page >= 0, page * Self.pageSize < total, pages[page] == nil,
               tasks[page] == nil, tasks.count < 2, error == nil else { return }
         let expected = token
-        let search = activeQuery
-        let scope = activeScope
+        let request = activeRequest
         tasks[page] = Task { [weak self, store] in
             do {
                 let result = try await store.documentPage(
-                    query: search,
+                    query: request.query,
                     offset: page * Self.pageSize,
-                    scope: scope
+                    scope: request.scope, kind: request.kind
                 )
                 guard let self, token == expected, !Task.isCancelled else { return }
                 tasks[page] = nil

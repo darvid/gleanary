@@ -8,14 +8,22 @@ extension DocumentStore {
     ) throws -> [ConversationMessage] {
         try readyDatabase().read { db in
             try Row.fetchAll(db, sql: """
-            SELECT * FROM (SELECT * FROM conversation_messages
-            WHERE (? IS NULL OR sequence < ?) ORDER BY sequence DESC LIMIT ?) ORDER BY sequence
+            SELECT * FROM (SELECT m.*, t.sourceRefs AS taskSources
+            FROM conversation_messages m LEFT JOIN conversation_tasks t ON t.id = m.taskID
+            WHERE (? IS NULL OR m.sequence < ?) ORDER BY m.sequence DESC LIMIT ?) ORDER BY sequence
             """, arguments: [sequence, sequence, min(500, max(1, limit))]).map { row in
                 let task: String? = row["taskID"]
+                var references = try JSONDecoder().decode([UUID].self, from: row["refs"])
+                // Older user messages kept their context only on the associated task.
+                if row["author"] as String == "user", references.isEmpty,
+                   let sources: Data = row["taskSources"]
+                {
+                    references = try JSONDecoder().decode([UUID].self, from: sources)
+                }
                 return try ConversationMessage(
                     sequence: row["sequence"], id: Self.uuid(row["id"]), author: row["author"],
                     text: row["text"],
-                    references: JSONDecoder().decode([UUID].self, from: row["refs"]),
+                    references: references,
                     taskID: task.map(Self.uuid),
                     createdAt: Date(timeIntervalSince1970: row["createdAt"])
                 )
@@ -28,7 +36,8 @@ extension DocumentStore {
         return try readyDatabase().read { db in
             let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
             let rows = try Row.fetchAll(db, sql: """
-            SELECT n.id, n.name, n.sourceURL, a.kind, a.taskID
+            SELECT n.id, n.name, n.sourceURL, a.kind, a.taskID,
+                EXISTS(SELECT 1 FROM captures c WHERE c.noteID = n.id) AS hasCapture
             FROM notes n LEFT JOIN authored_artifacts a ON a.noteID = n.id
             WHERE n.deletedAt IS NULL AND n.id IN (\(placeholders))
             """, arguments: StatementArguments(ids.map(\.uuidString)))
@@ -38,9 +47,21 @@ extension DocumentStore {
                 return try (id, ConversationReference(
                     id: id, title: row["name"],
                     sourceURL: (row["sourceURL"] as String?).flatMap(URL.init(string:)),
-                    artifactKind: row["kind"], taskID: task.map(Self.uuid)
+                    artifactKind: row["kind"], taskID: task.map(Self.uuid),
+                    hasCapture: row["hasCapture"]
                 ))
             })
+        }
+    }
+
+    /// Resolve the retained source itself, not a generated note that cites it.
+    func sourceNoteID(for captureID: UUID) throws -> UUID {
+        try readyDatabase().read { db in
+            guard let id = try String.fetchOne(db, sql: """
+            SELECT c.noteID FROM captures c JOIN notes n ON n.id = c.noteID
+            WHERE c.id = ? AND n.deletedAt IS NULL
+            """, arguments: [captureID.uuidString]) else { throw CaptureError.deletedCapture }
+            return try Self.uuid(id)
         }
     }
 
@@ -139,7 +160,7 @@ extension DocumentStore {
             try Self.insertMessage(
                 author: "user",
                 text: request,
-                references: [],
+                references: sources,
                 taskID: id,
                 in: db
             )

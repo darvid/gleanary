@@ -11,6 +11,7 @@ import SwiftUI
     private(set) var error: String?
     private(set) var categories: [DecimalCategory] = []
     private(set) var related: [DocumentSummary] = []
+    private(set) var sources: [DocumentSummary] = []
     /// Items linked to this one, each with why.
     private(set) var links: [LinkedItem] = []
     private(set) var coverage: Coverage?
@@ -32,7 +33,7 @@ import SwiftUI
             citation = nil
             generatedSummary = false
             canGenerateSummary = false
-            categories = []; related = []; links = []; coverage = nil; warnings = []
+            categories = []; related = []; sources = []; links = []; coverage = nil; warnings = []
             authorProvider = nil
             details = LibraryItemDetails()
             composed = false
@@ -62,6 +63,7 @@ import SwiftUI
             }
             let filing = try await store.categories(for: id)
             let linked = try await store.relatedLibraryDocuments(to: id)
+            let provenance = try await store.librarySources(for: id)
             let itemLinks = try await store.linkedItems(for: id)
             let provider = try await store.libraryAuthorProvider(for: id)
             let itemDetails = try await store.libraryItemDetails(for: id)
@@ -72,7 +74,9 @@ import SwiftUI
             canGenerateSummary = eligible
             document = loaded
             categories = filing
-            related = linked
+            sources = provenance
+            let sourceIDs = Set(provenance.map(\.id))
+            related = linked.filter { !sourceIDs.contains($0.id) }
             links = itemLinks
             coverage = captured?.coverage
             warnings = captured?.warnings ?? []
@@ -88,6 +92,38 @@ import SwiftUI
             self.error = "Could not load this document. Select it again to retry."
             loading = false
         }
+    }
+}
+
+/// Text-only reading shared by saved notes and immutable captured sources.
+struct ReaderTextView: View {
+    let title: String
+    let markdown: String
+    let readingFont: ReadingFont
+    var notice: String?
+    var notebookBackground = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                Text(title)
+                    .font(readingFont.scaledFont(1.4, weight: .bold))
+                    .accessibilityAddTraits(.isHeader)
+                if let notice {
+                    Text(notice).font(.callout).foregroundStyle(.secondary)
+                }
+                MarkdownPreview(markdown: markdown, readingFont: readingFont)
+            }
+            .textSelection(.enabled)
+            .frame(maxWidth: 680, alignment: .leading).padding(32)
+            .frame(maxWidth: .infinity, alignment: .top)
+        }
+        .background {
+            if notebookBackground {
+                NotebookDots()
+            }
+        }
+        .accessibilityLabel("Reader text")
     }
 }
 
@@ -121,6 +157,9 @@ struct DocumentPreview: View {
     var refreshDocument: ((MarkdownDocument) -> Void)?
     var showsSummaryActions = true
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.addToChat) private var addToChat
+    @Environment(\.isReaderMode) private var readerMode
+    @Environment(\.enterReader) private var enterReader
     private var appearance = ReadingAppearance()
 
     private var readingKind: ReadingKind {
@@ -128,7 +167,7 @@ struct DocumentPreview: View {
     }
 
     private var readingFont: ReadingFont {
-        appearance[readingKind]
+        readerMode ? appearance[readingKind].readerModeFont : appearance[readingKind]
     }
 
     private var dark: Bool {
@@ -148,72 +187,101 @@ struct DocumentPreview: View {
         if model.loading {
             ProgressView("Loading preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let document = model.document {
-            GeometryReader { viewport in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        if let data = model.details.previewImage, let image = NSImage(data: data) {
-                            hero(image)
-                        }
-                        header(document)
-                        if model.citation != nil || sourceURL != nil || model.canGenerateSummary
-                            || generatingSummary
-                        {
-                            ViewThatFits(in: .horizontal) {
-                                actionBar(document, compact: false)
-                                actionBar(document, compact: true)
+            if readerMode {
+                ReaderTextView(
+                    title: document.name,
+                    markdown: document.markdown,
+                    readingFont: readingFont,
+                    notice: model.warnings.isEmpty ? nil : model.warnings.joined(separator: " "),
+                    notebookBackground: readingKind == .notes
+                )
+            } else {
+                GeometryReader { viewport in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            if let data = model.details.previewImage,
+                               let image = NSImage(data: data)
+                            {
+                                hero(image)
                             }
-                        }
-                        infoCard(document)
-                        VStack(alignment: .leading, spacing: 12) {
-                            if let contentTitle {
-                                Text(contentTitle)
-                                    .font(readingFont.scaledFont(17.0 / 14, weight: .semibold))
-                                    .accessibilityAddTraits(.isHeader)
+                            header(document)
+                            if model.citation != nil || sourceURL != nil || model.canGenerateSummary
+                                || generatingSummary || addToChat != nil
+                            {
+                                ViewThatFits(in: .horizontal) {
+                                    actionBar(document, compact: false)
+                                    actionBar(document, compact: true)
+                                }
                             }
-                            MarkdownPreview(markdown: document.markdown, readingFont: readingFont)
+                            infoCard(document)
+                            VStack(alignment: .leading, spacing: 12) {
+                                if contentTitle != nil || (enterReader != nil && !readerMode) {
+                                    HStack(alignment: .firstTextBaseline) {
+                                        if let contentTitle {
+                                            Text(contentTitle)
+                                                .font(readingFont.scaledFont(
+                                                    17.0 / 14,
+                                                    weight: .semibold
+                                                ))
+                                                .accessibilityAddTraits(.isHeader)
+                                        }
+                                        Spacer()
+                                        ReaderModeButton(target: .note(document.id))
+                                    }
+                                }
+                                MarkdownPreview(
+                                    markdown: document.markdown,
+                                    readingFont: readingFont
+                                )
                                 .textSelection(.enabled)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(20)
-                        .background {
-                            if readingKind == .notes {
-                                NotebookDots()
-                                    .clipShape(RoundedRectangle(
-                                        cornerRadius: 16,
-                                        style: .continuous
-                                    ))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(20)
+                            .background {
+                                if readingKind == .notes {
+                                    NotebookDots()
+                                        .clipShape(RoundedRectangle(
+                                            cornerRadius: 16,
+                                            style: .continuous
+                                        ))
+                                }
+                            }
+                            .background(
+                                Color.primary.opacity(dark ? 0.035 : 0.025),
+                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            )
+                            .accessibilityElement(children: .contain)
+                            .accessibilityLabel("Document content")
+                            if showsLibraryDetails, !model.links.isEmpty {
+                                itemList(
+                                    "Linked",
+                                    items: model.links.map { ($0.document, $0.rationale) }
+                                )
+                            }
+                            if showsLibraryDetails, !model.related.isEmpty {
+                                itemList(
+                                    "Other notes from these sources",
+                                    items: model.related.map { ($0, nil) }
+                                )
                             }
                         }
-                        .background(
-                            Color.primary.opacity(dark ? 0.035 : 0.025),
-                            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        // A vertical scroll view must not inherit the image or metadata's ideal
+                        // width.
+                        .frame(
+                            width: min(680, max(0, viewport.size.width - 64)),
+                            alignment: .leading
                         )
-                        .accessibilityElement(children: .contain)
-                        .accessibilityLabel("Document content")
-                        if showsLibraryDetails, !model.links.isEmpty {
-                            itemList(
-                                "Linked",
-                                items: model.links.map { ($0.document, $0.rationale) }
-                            )
-                        }
-                        if showsLibraryDetails, !model.related.isEmpty {
-                            itemList(
-                                "From the Same Sources",
-                                items: model.related.map { ($0, nil) }
-                            )
-                        }
+                        .padding(.horizontal, 32).padding(.vertical, 28)
+                        .frame(maxWidth: .infinity, alignment: .top)
                     }
-                    // A vertical scroll view must not inherit the image or metadata's ideal width.
-                    .frame(width: min(680, max(0, viewport.size.width - 64)), alignment: .leading)
-                    .padding(.horizontal, 32).padding(.vertical, 28)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .tint(categoryInk)
+                    .accessibilityLabel("Markdown preview")
+                    // The fetched page replaces the bookmark's note in place; fade rather than
+                    // jump.
+                    .id(document.revision)
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: document.revision)
                 }
-                .tint(categoryInk)
-                .accessibilityLabel("Markdown preview")
-                // The fetched page replaces the bookmark's note in place; fade rather than jump.
-                .id(document.revision)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.25), value: document.revision)
             }
         } else {
             ContentUnavailableView(
@@ -272,6 +340,21 @@ struct DocumentPreview: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
+            if !model.sources.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(model.sources.count == 1 ? "Source" : "Sources")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(model.sources) { source in
+                        Button { openDocument(source.id) } label: {
+                            Label(source.name, systemImage: "doc.text")
+                                .lineLimit(2).multilineTextAlignment(.leading)
+                        }
+                        .buttonStyle(.link).font(.callout)
+                        .accessibilityLabel("Source: \(source.name)")
+                        .help("Open the saved source in Library")
+                    }
+                }
+            }
         }
     }
 
@@ -296,13 +379,6 @@ struct DocumentPreview: View {
 
     private func actionBar(_ document: MarkdownDocument, compact: Bool) -> some View {
         HStack(spacing: 8) {
-            if let url = model.citation?.url ?? sourceURL {
-                Link(destination: url) {
-                    actionLabel("Open Original", systemImage: "safari", compact: compact)
-                }
-                .buttonStyle(.borderedProminent)
-                .help("Open the original page in your browser")
-            }
             if let citation = model.citation {
                 Button { openSource(citation) } label: {
                     actionLabel(
@@ -314,6 +390,14 @@ struct DocumentPreview: View {
                 .buttonStyle(.bordered)
                 .help("Read the text Gleanary captured from the page")
             }
+            if let url = model.citation?.url ?? sourceURL {
+                Link(destination: url) {
+                    actionLabel("Open Original", systemImage: "safari", compact: compact)
+                }
+                .buttonStyle(.bordered)
+                .help("Open the original page in your browser")
+            }
+            AddToChatButton(target: .note(document.id), compact: compact)
             if generatingSummary {
                 SummarizingButton(compact: compact, cancel: cancelSummary)
             } else if model.canGenerateSummary, showsSummaryActions {
@@ -940,15 +1024,23 @@ private struct FilingRow: View {
                         chip(home, primary: index == 0)
                     }
                 }
-                if let change {
-                    Button(categories.isEmpty ? "File…" : "Change…", action: change)
-                        .buttonStyle(.link)
-                }
-                if suggester != nil, case .idle = step {
-                    Button { ask() } label: { Label("Suggest", systemImage: "sparkles") }
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    if let change {
+                        Button(categories.isEmpty ? "File…" : "Change…", action: change)
+                            .buttonStyle(.link)
+                    }
+                    if suggester != nil, case .idle = step {
+                        Button { ask() } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                                Image(systemName: "sparkles").imageScale(.small)
+                                    .accessibilityHidden(true)
+                                Text("Suggest")
+                            }
+                        }
                         .buttonStyle(.link)
                         .help("Ask the Librarian for the best home")
-                }
+                    }
+                }.fixedSize(horizontal: true, vertical: false)
             }
             answer
         }

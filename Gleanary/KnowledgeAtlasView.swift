@@ -1,6 +1,19 @@
 import AppKit
 import SwiftUI
 
+struct LibraryKindPicker: View {
+    @Binding var selection: LibraryKindFilter
+
+    var body: some View {
+        Picker("Item type", selection: $selection) {
+            ForEach(LibraryKindFilter.allCases) { kind in
+                Text(kind.label).tag(kind)
+            }
+        }
+        .pickerStyle(.segmented).labelsHidden().accessibilityLabel("Item type")
+    }
+}
+
 /// A zoomable map of the whole Library: Johnny Decimal regions sized by item count, revealing
 /// subcategories and then individual items as the user zooms in.
 struct KnowledgeAtlasView: View {
@@ -9,6 +22,7 @@ struct KnowledgeAtlasView: View {
     let store: DocumentStore?
     /// Changes whenever the Library's contents may have changed.
     var refreshToken = 0
+    var kindSelection: Binding<LibraryKindFilter>?
     let openItem: (UUID) -> Void
     var openCapturedSource: ((UUID) -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -32,7 +46,22 @@ struct KnowledgeAtlasView: View {
                 Label(error, systemImage: "exclamationmark.triangle").font(.callout)
                     .foregroundStyle(.secondary).padding(.horizontal, 20).padding(.bottom, 8)
             }
-            if atlas.root.children.isEmpty {
+            if !atlas.loading, (atlas.focusTile?.node.itemCount ?? atlas.root.itemCount) == 0 {
+                ContentUnavailableView {
+                    Label(
+                        atlas
+                            .kindFilter == .all ? "No items here" :
+                            "No \(atlas.kindFilter.rawValue) here",
+                        systemImage: "doc.text.magnifyingglass"
+                    )
+                } description: {
+                    Text("Choose another type or category to explore your library.")
+                } actions: {
+                    if atlas.kindFilter != .all {
+                        Button("Show all types") { typeSelection.wrappedValue = .all }
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if atlas.root.children.isEmpty {
                 ContentUnavailableView(
                     atlas.loading ? "Loading library…" : "Nothing to map yet",
                     systemImage: "square.grid.3x3",
@@ -65,21 +94,31 @@ struct KnowledgeAtlasView: View {
     // MARK: Header and footer
 
     /// One row: the path to the focused region, its title and counts, then search.
+    private var typeSelection: Binding<LibraryKindFilter> {
+        kindSelection ?? $atlas.kindFilter
+    }
+
     private var header: some View {
-        HStack(spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                breadcrumb
-                if let focus = atlas.focusTile {
-                    Text(focus.node.label).font(.title3.weight(.semibold)).lineLimit(1)
-                        .accessibilityAddTraits(.isHeader)
-                    Text(summary(of: focus)).font(.callout).foregroundStyle(.secondary)
-                        .fadesOnChange(summary(of: focus))
-                        .monospacedDigit().lineLimit(1)
+        VStack(spacing: 12) {
+            HStack(spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    breadcrumb
+                    if let focus = atlas.focusTile {
+                        Text(focus.node.label).font(.title3.weight(.semibold)).lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(summary(of: focus)).font(.callout).foregroundStyle(.secondary)
+                            .fadesOnChange(summary(of: focus))
+                            .monospacedDigit().lineLimit(1)
+                    }
                 }
+                Spacer(minLength: 12)
+                searchField
             }
-            Spacer(minLength: 12)
-            emptyToggle
-            searchField
+            HStack {
+                LibraryKindPicker(selection: typeSelection).frame(maxWidth: 240)
+                Spacer(minLength: 12)
+                emptyToggle
+            }
         }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
     }
 
@@ -110,7 +149,8 @@ struct KnowledgeAtlasView: View {
         let count = atlas.emptyCategoryCount
         return Toggle(isOn: $hidesEmpty) {
             Label(
-                hidesEmpty && count > 0 ? "\(count) hidden" : "Hide empty",
+                hidesEmpty && count > 0 ? "\(count) empty categories hidden" :
+                    "Hide empty categories",
                 systemImage: "rectangle.dashed"
             )
             .monospacedDigit()
@@ -453,7 +493,7 @@ struct KnowledgeAtlasView: View {
     // MARK: Text
 
     private func summary(of tile: AtlasTile) -> String {
-        var parts = [count(tile.node.itemCount)]
+        var parts = [atlas.kindFilter.countLabel(tile.node.itemCount)]
         // Uncategorized and direct-item groups are not categories of their own.
         let regions = atlas.layout.children(of: atlas.layout.index[tile.id] ?? 0)
             .filter { [.category, .group].contains(atlas.layout.tiles[$0].node.kind) }.count

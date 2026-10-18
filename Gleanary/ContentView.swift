@@ -9,8 +9,11 @@ struct ContentView: View {
     /// The Automations screen, in place of the library; Chat still takes precedence.
     @State private var automating = false
     @State private var showingActivity = false
+    @State private var readerTarget: ChatAttachmentTarget?
+    @State private var readerPreview = DocumentPreviewModel()
     var initialSelection: UUID?
     @State private var scope: LibraryScope? = .all
+    @AppStorage("libraryKindFilter") private var kindFilter = LibraryKindFilter.all
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
     @State private var sidebarDragStart: Double?
@@ -44,6 +47,7 @@ struct ContentView: View {
     @State private var seenAtlasNavigations = 0
     @FocusState private var searchFocused: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(
         library: LibraryModel,
@@ -78,7 +82,7 @@ struct ContentView: View {
             }
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting, !showingActivity {
+            if showingFiling, !chatting, !showingActivity, readerTarget == nil {
                 // One unit, so the edge slides in with the panel instead of appearing first.
                 HStack(spacing: 0) {
                     Divider()
@@ -93,7 +97,9 @@ struct ContentView: View {
                 .transition(.move(edge: .trailing))
             }
         }
-        // A solid titlebar like ChatGPT's: content scrolls under it but never shows through.
+        // Keep the sidebar's animation out of the window toolbar's layout transaction.
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sidebarVisible)
+        // One solid titlebar; sidebar translucency stays below its bottom edge.
         .safeAreaInset(edge: .top, spacing: 0) {
             Divider().background(alignment: .bottom) {
                 Color(nsColor: .windowBackgroundColor).ignoresSafeArea(edges: .top)
@@ -118,20 +124,24 @@ struct ContentView: View {
             return .systemAction
         })
         // The conversation publishes its own actions while it is showing.
-        .focusedSceneValue(\.gleanaryActions, chatting ? nil : GleanaryActions(
-            enabled: library.ready && !library.busy,
-            newNote: {
-                // Activity and Captures have no editing pane.
-                showingActivity = false
-                if scope == .captures {
-                    scope = .all
-                }
-                editing = MarkdownDocument(name: "Untitled", markdown: "")
-            },
-            attach: { importing = true }, focus: { searchFocused = true },
-            importBookmarks: { importingBookmarks = true },
-            categorize: { categorizing = true }
-        ))
+        .focusedSceneValue(
+            \.gleanaryActions,
+            chatting && readerTarget == nil ? nil : GleanaryActions(
+                enabled: library.ready && !library.busy,
+                newNote: {
+                    // Activity and Captures have no editing pane.
+                    showingActivity = false
+                    readerTarget = nil
+                    if scope == .captures {
+                        scope = .all
+                    }
+                    editing = MarkdownDocument(name: "Untitled", markdown: "")
+                },
+                attach: { importing = true }, focus: { searchFocused = true },
+                importBookmarks: { importingBookmarks = true },
+                categorize: { categorizing = true }
+            )
+        )
         .fileImporter(isPresented: $importing, allowedContentTypes: [
             .pdf, .html, .plainText, UTType(filenameExtension: "md") ?? .plainText,
             UTType(filenameExtension: "markdown") ?? .plainText,
@@ -179,7 +189,10 @@ struct ContentView: View {
             guard library.ready else { return }
             library.automations.start()
             library.documentGrid.scope = scope ?? .all
+            library.documentGrid.kindFilter = kindFilter
             await library.documentGrid.reloadIfNeeded()
+            await atlas.load(from: library.store)
+            showInAtlas(scope ?? .all)
             if let initialSelection {
                 selection = [initialSelection]; preview.selectedID = initialSelection
                 if presentation == .map {
@@ -196,6 +209,17 @@ struct ContentView: View {
             // even when no map has been mounted during this launch.
             if library.ready, chatting || automating || showingActivity {
                 await atlas.load(from: library.store)
+            }
+        }
+        .onChange(of: kindFilter, initial: true) {
+            atlas.kindFilter = kindFilter
+            library.documentGrid.kindFilter = kindFilter
+            if atlasItem == nil {
+                selection = []; preview.selectedID = nil
+            }
+            page = 0
+            if library.ready {
+                Task { await library.documentGrid.reloadIfNeeded() }
             }
         }
         .task(id: library.documentGrid.query) {
@@ -229,9 +253,7 @@ struct ContentView: View {
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
             library.documentGrid.scope = scope ?? .all
-            if presentation == .map {
-                showInAtlas(scope ?? .all)
-            }
+            showInAtlas(scope ?? .all)
             revealPendingSelection()
             if let target = pendingRestore {
                 pendingRestore = nil
@@ -241,10 +263,13 @@ struct ContentView: View {
         }
         .onChange(of: presentation) {
             atlasItem = nil
-            if presentation == .map {
-                showInAtlas(scope ?? .all)
-            } else if let id = selection.first {
-                preview.selectedID = id
+            if presentation == .list {
+                if case let .category(id) = atlas.focusID {
+                    scope = .category(id)
+                }
+                if let id = selection.first {
+                    preview.selectedID = id
+                }
             }
         }
         .onChange(of: selection) { old, new in
@@ -257,6 +282,47 @@ struct ContentView: View {
         .onChange(of: library.documentGrid.generation) { page = 0 }
         .onDisappear { library.documentGrid.pause() }
         .onExitCommand { library.documentGrid.query = "" }
+        .environment(\.addToChat, conversation == nil ? nil : addToChat)
+        .environment(\.enterReader) { target in
+            source = nil
+            readerTarget = target
+        }
+    }
+
+    private func readerPane(_ target: ChatAttachmentTarget) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button("Exit Reader Mode", systemImage: "arrow.down.right.and.arrow.up.left") {
+                    readerTarget = nil
+                }.keyboardShortcut(.cancelAction).buttonStyle(.borderless)
+            }.padding(.horizontal, 24).padding(.vertical, 12)
+            Divider()
+            switch target {
+            case .note:
+                DocumentPreview(model: readerPreview)
+            case let .source(id):
+                SourceReaderView(
+                    captureID: id,
+                    store: library.store,
+                    refreshToken: library.documentGrid.generation
+                )
+            }
+        }
+        .environment(\.isReaderMode, true)
+        .environment(\.openURL, OpenURLAction { url in
+            if let id = NoteLink.id(from: url) {
+                openSavedItem(id)
+                return .handled
+            }
+            return .systemAction
+        })
+        .task(id: "\(target)/\(library.documentGrid.generation)") {
+            if case let .note(id) = target {
+                readerPreview.selectedID = id
+                await readerPreview.load(from: library.store)
+            }
+        }
     }
 
     /// Drag the sidebar's edge within this range; double-click it to go back to the default.
@@ -285,7 +351,23 @@ struct ContentView: View {
             .accessibilityHidden(true)
     }
 
-    @ViewBuilder private var main: some View {
+    private var main: some View {
+        ZStack {
+            browsingMain
+                .opacity(readerTarget == nil ? 1 : 0)
+                .disabled(readerTarget != nil)
+                .allowsHitTesting(readerTarget == nil)
+                .accessibilityHidden(readerTarget != nil)
+            if let readerTarget {
+                readerPane(readerTarget)
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readerTarget != nil)
+    }
+
+    @ViewBuilder private var browsingMain: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
         } else if showingActivity {
@@ -304,10 +386,10 @@ struct ContentView: View {
     }
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
+        ToolbarItem(id: "navigation", placement: .navigation) {
             HStack(spacing: 0) {
                 Button("Toggle Sidebar", systemImage: "sidebar.left") {
-                    withAnimation(.snappy(duration: 0.25)) { sidebarVisible.toggle() }
+                    sidebarVisible.toggle()
                 }
                 .labelStyle(.iconOnly).buttonStyle(.borderless)
                 .keyboardShortcut("s", modifiers: [.command, .control])
@@ -318,17 +400,19 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
-                Text(chatting ? "Chat" : showingActivity ? "Activity" : automating ? "Automations" :
+                Text(readerTarget != nil ? "Reader" : chatting ? "Chat" : showingActivity ?
+                    "Activity" : automating ? "Automations" :
                     scopeTitle)
                     .font(.headline).lineLimit(1)
             }
+            .transaction { $0.animation = nil }
         }
         .sharedBackgroundVisibility(.hidden)
         // Chat draws its own More menu; the library and Automations share this one.
         if !chatting {
             ToolbarSpacer(.flexible)
         }
-        if !chatting, !automating, !showingActivity {
+        if !chatting, !automating, !showingActivity, readerTarget == nil {
             ToolbarItem {
                 Picker("Presentation", selection: $presentation) {
                     Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
@@ -439,7 +523,9 @@ struct ContentView: View {
         } else if scopeIsEmpty {
             ContentUnavailableView {
                 Label(
-                    scope == .archived ? "Nothing archived" : "No items here",
+                    library.documentGrid
+                        .loading ? "Loading library…" : scope == .archived ? "Nothing archived" :
+                        "No items here",
                     systemImage: scope == .archived ? "archivebox" : "doc.text.magnifyingglass"
                 )
             } description: {
@@ -458,8 +544,9 @@ struct ContentView: View {
     /// A view with nothing in it and no search to change, so there's no list or item to show.
     private var scopeIsEmpty: Bool {
         let grid = library.documentGrid
-        return scope != .captures && editing == nil && grid.total == 0 && !grid.loading
-            && grid.query.isEmpty && grid.error == nil
+        return scope != .captures && editing == nil && grid
+            .total == 0 && (!grid.loading || grid.hasLoaded)
+            && grid.query.isEmpty && grid.error == nil && kindFilter == .all
     }
 
     private var splitColumns: some View {
@@ -525,7 +612,8 @@ struct ContentView: View {
         } else {
             KnowledgeAtlasView(
                 atlas: atlas, store: library.store,
-                refreshToken: library.documentGrid.generation, openItem: openFromAtlas,
+                refreshToken: library.documentGrid.generation,
+                kindSelection: $kindFilter, openItem: openFromAtlas,
                 openCapturedSource: { captureID in
                     source = SourceCitation(
                         captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: nil
@@ -538,6 +626,7 @@ struct ContentView: View {
     /// Shows a saved item from anywhere, such as the Captures list. Switching to All items
     /// clears the selection, so the item is selected after that, not before.
     private func openSavedItem(_ id: UUID) {
+        readerTarget = nil
         chatting = false
         automating = false
         showingActivity = false
@@ -581,7 +670,7 @@ struct ContentView: View {
     private var location: NavigationLocation {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
-            automations: automating, activity: showingActivity
+            automations: automating, activity: showingActivity, kindFilter: kindFilter
         )
     }
 
@@ -619,6 +708,9 @@ struct ContentView: View {
 
     private func restore(_ target: NavigationLocation) {
         restoring = target
+        readerTarget = nil
+        kindFilter = target.kindFilter
+        atlas.kindFilter = target.kindFilter
         chatting = target.chatting
         automating = target.automations
         showingActivity = target.activity
@@ -652,11 +744,7 @@ struct ContentView: View {
     /// Sidebar choices act as shortcuts into the Atlas instead of filtering a list.
     private func showInAtlas(_ scope: LibraryScope) {
         atlasItem = nil
-        atlas.kindFilter = switch scope {
-        case .sources: .sources
-        case .notes: .notes
-        default: .all
-        }
+        atlas.kindFilter = kindFilter
         switch scope {
         case .unfiled: atlas.focus(.uncategorized)
         case let .category(id): atlas.focus(.category(id))
@@ -807,18 +895,28 @@ struct ContentView: View {
         }
     }
 
+    private var sidebarScope: LibraryScope? {
+        guard scope == .all else { return scope }
+        switch kindFilter {
+        case .all: return .all
+        case .notes: return .notes
+        case .sources: return .sources
+        }
+    }
+
     /// Pass nil for the conversation row.
     private func sidebarColor(_ item: LibraryScope?) -> Color {
         let selected = item
-            .map { !chatting && !automating && !showingActivity && scope == $0 } ?? chatting
+            .map { !chatting && !automating && !showingActivity && sidebarScope == $0 } ?? chatting
         return colorScheme == .dark || selected ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
             chatting ? .conversation : showingActivity ? .activity : automating ? .automations :
-                scope.map(SidebarItem.library)
+                sidebarScope.map(SidebarItem.library)
         } set: { item in
+            readerTarget = nil
             switch item {
             case .conversation: chatting = true; automating = false; showingActivity = false
             case .automations: chatting = false; automating = true; showingActivity = false
@@ -827,10 +925,28 @@ struct ContentView: View {
                 chatting = false
                 automating = false
                 showingActivity = false
-                self.scope = scope
+                switch scope {
+                case .notes: kindFilter = .notes; self.scope = .all; atlas.reset()
+                case .sources: kindFilter = .sources; self.scope = .all; atlas.reset()
+                case .all: kindFilter = .all; self.scope = .all; atlas.reset()
+                default: self.scope = scope
+                }
             case nil: break
             }
         }
+    }
+
+    private func addToChat(_ target: ChatAttachmentTarget) async -> String? {
+        guard let conversation else { return "Chat is not available in this window." }
+        guard await conversation.addToChat(target) else {
+            return conversation.error ?? "Could not add this item. Try again."
+        }
+        source = nil
+        readerTarget = nil
+        automating = false
+        showingActivity = false
+        chatting = true
+        return nil
     }
 
     private func useInConversation(_ ids: [UUID]) {
@@ -850,10 +966,12 @@ struct ContentView: View {
                 HStack {
                     Text(scopeTitle).font(.title3.weight(.semibold))
                     Spacer()
-                    Text(library.documentGrid.total.formatted()).font(.caption.monospacedDigit())
+                    Text(kindFilter.countLabel(library.documentGrid.total))
+                        .font(.caption.monospacedDigit())
                         .countsOnChange(library.documentGrid.total)
                         .foregroundStyle(.secondary)
                 }
+                LibraryKindPicker(selection: $kindFilter)
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search this view", text: Binding(
@@ -891,8 +1009,10 @@ struct ContentView: View {
                 } description: {
                     Text(emptyListMessage)
                 } actions: {
-                    if !library.documentGrid.loading, scope == nil || scope == .all,
-                       library.documentGrid.query.isEmpty
+                    if kindFilter != .all {
+                        Button("Show all types") { kindFilter = .all }
+                    } else if !library.documentGrid.loading, scope == nil || scope == .all,
+                              library.documentGrid.query.isEmpty
                     {
                         Button("Import Bookmarks…") { importingBookmarks = true }
                     }
@@ -1155,7 +1275,7 @@ struct ContentView: View {
     }
 
     private var scopeTitle: String {
-        switch scope ?? .all {
+        switch sidebarScope ?? .all {
         case .all: "All items"
         case .sources: "Sources"
         case .notes: "Notes"

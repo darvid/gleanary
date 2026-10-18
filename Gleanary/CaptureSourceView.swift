@@ -9,6 +9,75 @@ extension SourceCitation: Identifiable {
     }
 }
 
+extension EnvironmentValues {
+    @Entry var enterReader: (@MainActor (ChatAttachmentTarget) -> Void)? = nil
+    @Entry var isReaderMode = false
+}
+
+struct ReaderModeButton: View {
+    let target: ChatAttachmentTarget
+    var entered: () -> Void = {}
+    @Environment(\.enterReader) private var enterReader
+    @Environment(\.isReaderMode) private var isReaderMode
+
+    var body: some View {
+        if let enterReader, !isReaderMode {
+            Button("Enter Reader Mode", systemImage: "arrow.up.left.and.arrow.down.right") {
+                enterReader(target)
+                entered()
+            }
+            .labelStyle(.iconOnly).buttonStyle(.borderless)
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .help("Expand reading to fill the content area (⇧⌘R)")
+        }
+    }
+}
+
+struct SourceReaderView: View {
+    let captureID: UUID
+    let store: DocumentStore
+    var refreshToken = 0
+    @State private var detail: CaptureDetail?
+    @State private var error: String?
+    private var appearance = ReadingAppearance()
+
+    var body: some View {
+        Group {
+            if let detail {
+                ReaderTextView(
+                    title: detail.document.title, markdown: detail.document.markdown,
+                    readingFont: appearance[.sources].readerModeFont,
+                    notice: detail.document.warnings.isEmpty ? nil : detail.document.warnings
+                        .joined(separator: " ")
+                )
+            } else if let error {
+                ContentUnavailableView(
+                    "Source unavailable",
+                    systemImage: "doc.text",
+                    description: Text(error)
+                )
+            } else {
+                ProgressView("Loading source…")
+            }
+        }
+        .task(id: "\(captureID)/\(refreshToken)") {
+            if detail?.id != captureID {
+                detail = nil
+            }
+            error = nil
+            do {
+                let loaded = try await store.captureDetail(id: captureID)
+                guard !Task.isCancelled else { return }
+                detail = loaded
+            } catch {
+                guard !Task.isCancelled else { return }
+                detail = nil
+                self.error = "This retained source is no longer available."
+            }
+        }
+    }
+}
+
 struct CaptureSourceView: View {
     let citation: SourceCitation
     let library: LibraryModel
@@ -28,6 +97,10 @@ struct CaptureSourceView: View {
             HStack {
                 Text(detail?.document.title ?? "Capture source").font(.title2).lineLimit(2)
                 Spacer()
+                if detail != nil {
+                    ReaderModeButton(target: .source(citation.captureID), entered: { dismiss() })
+                    AddToChatButton(target: .source(citation.captureID), added: { dismiss() })
+                }
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let detail {

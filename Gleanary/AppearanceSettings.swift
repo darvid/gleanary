@@ -41,6 +41,10 @@ struct ReadingFont: Equatable, Sendable {
         ) : 14
     }
 
+    var readerModeFont: ReadingFont {
+        ReadingFont(family: family, size: max(18, size + 2))
+    }
+
     @MainActor var nativeFont: NSFont {
         let system = NSFont.systemFont(ofSize: size)
         guard !family.isEmpty else { return system }
