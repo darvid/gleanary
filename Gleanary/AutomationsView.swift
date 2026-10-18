@@ -402,7 +402,8 @@ private struct AutomationDetail: View {
     }
 
     @ViewBuilder private var history: some View {
-        let runs = Array((model.runs[kind] ?? []).prefix(10))
+        let page = model.historyPages[kind] ?? AutomationRunPage(index: 0, total: 0, runs: [])
+        let runs = page.runs
         if runs.isEmpty {
             Text("No runs yet.").foregroundStyle(.secondary)
         } else {
@@ -411,10 +412,24 @@ private struct AutomationDetail: View {
                     Divider()
                 }
                 RunRow(
-                    model: model, run: run, expandedAtFirst: index == 0,
+                    model: model, run: run, expandedAtFirst: index == 0 && page.index == 0,
                     review: review, open: open
                 )
             }
+            Divider()
+            HStack {
+                Text(
+                    "\(page.index * AutomationRunPage.size + 1)–\(page.index * AutomationRunPage.size + runs.count) of \(page.total) runs"
+                )
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Spacer(minLength: 12)
+                Button("Newer") {
+                    Task { await model.showHistoryPage(page.index - 1, of: kind) }
+                }.disabled(!page.hasNewer || model.loadingHistory)
+                Button("Older") {
+                    Task { await model.showHistoryPage(page.index + 1, of: kind) }
+                }.disabled(!page.hasOlder || model.loadingHistory)
+            }.buttonStyle(.bordered).controlSize(.small)
         }
     }
 

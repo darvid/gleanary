@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 @testable import Gleanary
+import SwiftUI
 import Testing
 
 /// Serves a small article for any synthetic page, titled after its path.
@@ -338,6 +340,143 @@ private actor FirstRelatedJudge: LinkJudging {
         await model.load()
         #expect(model.runs[.linkChecker]?.isEmpty == true)
         #expect(!model.failed.contains(.linkChecker))
+    }
+
+    @Test func historyPagesAreBoundedOrderedAndExcludeActiveRuns() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, _, _) = try await library([])
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        var ids: [UUID] = []
+        for _ in 0 ..< 23 {
+            let id = try await store.beginAutomationRun(.bookmarkFetcher, at: date)
+            try await store.finishAutomationRun(AutomationRun(
+                id: id,
+                kind: .bookmarkFetcher,
+                startedAt: date,
+                status: .succeeded
+            ))
+            ids.append(id)
+        }
+        _ = try await store.beginAutomationRun(.bookmarkFetcher, at: date.addingTimeInterval(1))
+        _ = try await store.beginAutomationRun(.linkChecker, at: date)
+        var seen: [UUID] = []
+        for index in 0 ..< 5 {
+            let page = try await store.automationRunPage(.bookmarkFetcher, page: index)
+            #expect(page.index == index)
+            #expect(page.total == 23)
+            #expect(page.runs.count == (index == 4 ? 3 : 5))
+            #expect(page.hasNewer == (index > 0))
+            #expect(page.hasOlder == (index < 4))
+            seen += page.runs.map(\.id)
+        }
+        #expect(seen == Array(ids.reversed()))
+        #expect(try await store.automationRunPage(.bookmarkFetcher, page: Int.max).index == 4)
+        #expect(try await store.automationRunPage(.bookmarkFetcher, page: -1).index == 0)
+        let empty = try await store.automationRunPage(.linkChecker)
+        #expect(empty.total == 0 && empty.runs.isEmpty)
+        #expect(!empty.hasOlder && !empty.hasNewer)
+    }
+
+    @Test @MainActor func browsingOlderHistoryKeepsLatestStatusAndRefreshesThePage() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, ingestion, _) = try await library([])
+        let deletedID = UUID()
+        var ids: [UUID] = []
+        for index in 0 ..< 23 {
+            let date = Date(timeIntervalSince1970: 1_800_000_000 + Double(index))
+            let id = try await store.beginAutomationRun(.bookmarkFetcher, at: date)
+            var run = AutomationRun(
+                id: id,
+                kind: .bookmarkFetcher,
+                startedAt: date,
+                status: index == 22 ? .failed : .succeeded
+            )
+            if index == 0 {
+                run.note(.skipped, deletedID, "Deleted fixture", "No longer saved.")
+            }
+            try await store.finishAutomationRun(run)
+            ids.append(id)
+        }
+        let model = AutomationsModel(
+            store: store,
+            engine: engine(store, ingestion: ingestion),
+            schedules: false
+        )
+        await model.load()
+        #expect(model.historyPages[.bookmarkFetcher]?.runs.count == 5)
+        #expect(!model.goneItems.contains(deletedID))
+        await model.showHistoryPage(4, of: .bookmarkFetcher)
+        #expect(model.historyPages[.bookmarkFetcher]?.runs
+            .map(\.id) == Array(ids.prefix(3).reversed()))
+        #expect(model.goneItems.contains(deletedID))
+        #expect(model.runs[.bookmarkFetcher]?.first?.id == ids.last)
+        #expect(model.failed.contains(.bookmarkFetcher))
+        await model.load()
+        #expect(model.historyPages[.bookmarkFetcher]?.index == 4)
+        await model.showHistoryPage(0, of: .bookmarkFetcher)
+        #expect(model.historyPages[.bookmarkFetcher]?.runs.first?.id == ids.last)
+        #expect(!model.goneItems.contains(deletedID))
+        #expect(!model.loadingHistory)
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_AUTOMATION_SCREENSHOTS"] == "1"))
+    @MainActor func paginatedHistoryHasNativeLayouts() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (store, ingestion, _) = try await library([])
+        for index in 0 ..< 23 {
+            let date = Date().addingTimeInterval(Double(index - 23) * 1800)
+            let id = try await store.beginAutomationRun(.inboxSummarizer, at: date)
+            try await store.finishAutomationRun(AutomationRun(
+                id: id,
+                kind: .inboxSummarizer,
+                startedAt: date,
+                status: .succeeded
+            ))
+        }
+        let model = AutomationsModel(
+            store: store,
+            engine: engine(store, ingestion: ingestion),
+            schedules: false
+        )
+        await model.load()
+        for dark in [false, true] {
+            try await historyScreenshot(model, dark: dark, name: "recent")
+        }
+        await model.showHistoryPage(4, of: .inboxSummarizer)
+        try await historyScreenshot(model, dark: true, name: "older")
+    }
+
+    @MainActor private func historyScreenshot(
+        _ model: AutomationsModel,
+        dark: Bool,
+        name: String
+    ) async throws {
+        let host = NSHostingView(rootView: AutomationsView(model: model, open: { _ in })
+            .frame(width: 1100, height: 1100)
+            .background(Color(nsColor: .windowBackgroundColor))
+            .preferredColorScheme(dark ? .dark : .light))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 1100),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(400))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png
+            .write(
+                to: URL(
+                    fileURLWithPath: "/tmp/gleanary-automation-history-\(name)-\(dark ? "dark" : "light").png"
+                )
+            )
     }
 
     // MARK: Inbox summarizer

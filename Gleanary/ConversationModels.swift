@@ -28,12 +28,22 @@ struct ConversationMessage: Identifiable, Sendable {
     let createdAt: Date
 }
 
+enum ChatAttachmentTarget: Hashable, Sendable {
+    case note(UUID)
+    case source(UUID)
+}
+
 struct ConversationReference: Identifiable, Sendable {
     let id: UUID
     let title: String
     let sourceURL: URL?
     let artifactKind: String?
     let taskID: UUID?
+    var hasCapture = false
+
+    var attachmentKind: String {
+        hasCapture ? "Source" : "Note"
+    }
 
     func isResearchResult(in message: ConversationMessage) -> Bool {
         message.author == "researcher" && taskID != nil && taskID == message.taskID &&

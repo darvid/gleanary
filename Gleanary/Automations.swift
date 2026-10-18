@@ -287,6 +287,22 @@ struct AutomationRun: Identifiable, Sendable, Equatable {
     }
 }
 
+/// A bounded page of completed runs, newest first. History is retained on disk.
+struct AutomationRunPage: Sendable, Equatable {
+    static let size = 5
+    let index: Int
+    let total: Int
+    let runs: [AutomationRun]
+
+    var hasNewer: Bool {
+        index > 0
+    }
+
+    var hasOlder: Bool {
+        (index + 1) * Self.size < total
+    }
+}
+
 /// One item's outcome in an automation run.
 struct AutomationEntry: Codable, Sendable, Equatable {
     enum Outcome: String, Codable, Sendable, CaseIterable {

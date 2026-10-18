@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 @testable import Gleanary
 import GRDB
+import Observation
 import SwiftUI
+import Synchronization
 import Testing
 
 private struct LibraryFixture {
@@ -361,13 +363,13 @@ struct DocumentLibraryTests {
         let atlasSnapshot = try await fixture.store.atlasSnapshot()
         #expect(atlasSnapshot.items.allSatisfy { $0.kind == "summary" })
         let atlas = KnowledgeAtlasModel(snapshot: atlasSnapshot)
-        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 1)
+        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
         let card = try #require(atlas.layout.tile(.item(id))?.node.item)
         #expect(card.captureID == citation.captureID)
-        #expect(card.cardKindLabel == "Source")
-        #expect(card.summaryLabel == "2 summaries")
-        #expect(Set(card.summaryDocuments.map(\.id)) == [id, research.id])
-        #expect(atlas.layout.tile(.item(research.id))?.id == .item(id))
+        #expect(card.cardKindLabel == "Summary")
+        #expect(card.summaryLabel == nil)
+        #expect(card.summaryDocuments.isEmpty)
+        #expect(atlas.layout.tile(.item(research.id))?.id == .item(research.id))
         #expect(atlas.root.itemCount == 2)
         atlas.kindFilter = .notes
         #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
@@ -536,6 +538,36 @@ struct DocumentLibraryTests {
             ])
         #expect(MarkdownPreview.tableRows("Not a table | just prose") == nil)
         #expect(MarkdownPreview.blocks("```swift\nlet x = 1\n```").count == 1)
+    }
+
+    @Test @MainActor func categoryReloadKeepsRowsUntilTheirReplacementIsReady() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let notes = (0 ..< 12)
+            .map { MarkdownDocument(name: "Fixture \($0)", markdown: "Saved text.") }
+        _ = try await fixture.store.open(seed: notes)
+        let category = try #require(await fixture.store.categories().first)
+        try await fixture.store.fileNote(notes[0].id, categoryID: category.id)
+        let grid = DocumentGridModel(store: fixture.store)
+        await grid.reload()
+        let first = grid.document(at: 0)?.id
+        let generation = grid.generation
+        let retained = Mutex<(Int, Int, UUID?)?>(nil)
+        withObservationTracking {
+            _ = grid.loading
+        } onChange: {
+            let snapshot = MainActor.assumeIsolated {
+                (grid.total, grid.cachedDocumentCount, grid.document(at: 0)?.id)
+            }
+            retained.withLock { $0 = snapshot }
+        }
+        grid.scope = .category(category.id)
+        await grid.reloadIfNeeded()
+        let snapshot = try #require(retained.withLock { $0 })
+        #expect(snapshot.0 == 12 && snapshot.1 == 12 && snapshot.2 == first)
+        #expect(grid.total == 1 && grid.document(at: 0)?.id == notes[0].id)
+        #expect(grid.generation == generation + 1 && grid.hasLoaded && !grid.loading)
+        await grid.reloadIfNeeded()
+        #expect(grid.generation == generation + 1)
     }
 
     @Test @MainActor func libraryOpeningReusesLoadedRowsAndSearchOnlyReloadsWhenChanged(

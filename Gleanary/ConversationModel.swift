@@ -19,6 +19,7 @@ final class ConversationModel {
     var titles: [UUID: String] = [:]
     var referenceDetails: [UUID: ConversationReference] = [:]
     var composer = ""
+    private(set) var composerFocusRequest = UUID()
     var error: String?
     var ready = false
     var hasOlderMessages = true
@@ -183,8 +184,11 @@ final class ConversationModel {
                 captureID: captureID ?? retry?.captureID,
                 sources: context
             )
-            if submittedRequest == nil {
+            if submittedRequest == nil, retry == nil {
                 composer = ""
+                if !capturing, sources == nil {
+                    selectedSources.removeAll { context.contains($0) }
+                }
             }
             error = nil
             activeID = id
@@ -396,6 +400,43 @@ final class ConversationModel {
         } else if selectedSources.count < 4 {
             selectedSources.append(id)
         }
+    }
+
+    /// Detail actions append context without toggling existing attachments or sending.
+    func addToChat(_ target: ChatAttachmentTarget) async -> Bool {
+        if !ready {
+            await load()
+        }
+        guard ready, !submitting, !clearingConversation else {
+            error = "Chat is busy. Try adding the item again in a moment."
+            return false
+        }
+        let epoch = conversationEpoch
+        do {
+            let id: UUID = switch target {
+            case let .note(id): id
+            case let .source(captureID): try await store.sourceNoteID(for: captureID)
+            }
+            guard try await store.document(id: id) != nil else {
+                error = "This item was deleted and cannot be added to Chat."
+                return false
+            }
+            guard conversationEpoch == epoch, !submitting, !clearingConversation else {
+                return false
+            }
+            if !selectedSources.contains(id) {
+                guard selectedSources.count < 4 else {
+                    error = "Chat already has four attachments. Remove one before adding another."
+                    return false
+                }
+                selectedSources.append(id)
+            }
+            await refresh()
+            guard conversationEpoch == epoch, !clearingConversation else { return false }
+            error = nil
+            composerFocusRequest = UUID()
+            return true
+        } catch { self.error = error.localizedDescription; return false }
     }
 
     /// Library selection prepares evidence; it never sends a message or overwrites a draft.

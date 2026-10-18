@@ -115,6 +115,21 @@ extension DocumentStore {
         }
     }
 
+    func automationRunPage(_ kind: AutomationKind, page: Int = 0) throws -> AutomationRunPage {
+        try readyDatabase().read { db in
+            let total = try Int.fetchOne(db, sql: """
+            SELECT COUNT(*) FROM automation_runs WHERE automationID = ? AND status != 'running'
+            """, arguments: [kind.rawValue]) ?? 0
+            let index = min(max(0, page), max(0, (total - 1) / AutomationRunPage.size))
+            let runs = try Row.fetchAll(db, sql: """
+            SELECT * FROM automation_runs WHERE automationID = ? AND status != 'running'
+            ORDER BY startedAt DESC, rowid DESC LIMIT ? OFFSET ?
+            """, arguments: [kind.rawValue, AutomationRunPage.size, index * AutomationRunPage.size])
+                .compactMap(Self.automationRun)
+            return AutomationRunPage(index: index, total: total, runs: runs)
+        }
+    }
+
     /// A run left `running` by a quit or crash didn't finish; say so rather than show it running.
     func closeInterruptedAutomationRuns() throws {
         try readyDatabase().write { db in

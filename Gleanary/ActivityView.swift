@@ -385,7 +385,8 @@ private struct ActivityInspectionView: View {
                 if let detail = event.detail {
                     Text(detail).font(.callout).textSelection(.enabled)
                 }
-                if inspection.current != nil {
+                if let current = inspection.current {
+                    AddToChatButton(target: .note(current.id))
                     ViewThatFits(in: .horizontal) {
                         HStack {
                             comparisonPicker

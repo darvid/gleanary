@@ -77,6 +77,8 @@ struct GleanaryActions {
     /// Nil where the Library isn't showing, such as the conversation.
     var importBookmarks: (() -> Void)?
     var categorize: (() -> Void)?
+    var clearConversation: (() -> Void)?
+    var sendMessage: (() -> Void)?
 }
 
 private struct GleanaryActionsKey: FocusedValueKey {
@@ -110,6 +112,14 @@ private struct GleanaryCommands: Commands {
                 .disabled(actions?.enabled != true || actions?.importBookmarks == nil)
             Button("Categorize Unfiled…") { actions?.categorize?() }
                 .disabled(actions?.enabled != true || actions?.categorize == nil)
+        }
+        CommandMenu("Chat") {
+            Button("Send Message") { actions?.sendMessage?() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(actions?.enabled != true || actions?.sendMessage == nil)
+            Button("Clear Conversation…") { actions?.clearConversation?() }
+                .keyboardShortcut("k", modifiers: .command)
+                .disabled(actions?.enabled != true || actions?.clearConversation == nil)
         }
         CommandGroup(after: .textEditing) {
             Button("Focus Input") {

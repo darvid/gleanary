@@ -10,6 +10,7 @@ struct NavigationLocation: Equatable {
     var atlasItem: UUID?
     var automations = false
     var activity = false
+    var kindFilter = LibraryKindFilter.all
 }
 
 /// Back and forward through visited locations, like a browser: visiting after going back drops

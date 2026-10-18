@@ -242,8 +242,9 @@ button radius. Code blocks use a rectangular control surface.
   titles, relationship labels, and revision pointers for both endpoints.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
-- **Preview actions:** Open Original uses `.borderedProminent`;
-  Captured Source and Summarize use `.bordered`. The action group uses
+- **Preview actions:** Captured Source, Open Original, Add to Chat, and
+  Summarize appear in that order with the same quiet `.bordered` style.
+  No action is arbitrarily primary. The action group uses
   `.controlSize(.large)` and 8pt spacing, with category tint inherited
   from the preview. More actions live in a borderless menu. Native styles
   own hover, press, focus, and disabled appearance; no custom button fill,
@@ -266,6 +267,16 @@ button radius. Code blocks use a rectangular control surface.
   view-specific controls (the library's Map/List switcher) sit left of a
   trailing system-glass More menu (plain `ellipsis`) in both. Destructive
   or occasional actions such as Clear Conversation live in that menu.
+  The app's Chat command menu owns Command-K (confirm clearing) and
+  Command-Return (send), so they remain available while typing. Toolbar
+  menu entries invoke the same actions without duplicate key equivalents.
+  Command-K opens its confirmation dialog; it never clears immediately.
+  The sidebar toggle and title share one stable navigation item to avoid
+  native inter-item gaps. Sidebar animation is scoped below the toolbar;
+  the navigation item does not animate. The entire titlebar uses the
+  content area's solid background, with no material seam at the sidebar
+  boundary. Native sidebar translucency and navigation rows stay below
+  the titlebar.
   Settings is the standard Settings window (Gleanary › Settings…, ⌘,) with
   toolbar tabs (AI & accounts, Appearance, Capture, Filing, Writing),
   also linked from each More menu; no gear button in the window toolbar.
@@ -302,23 +313,70 @@ button radius. Code blocks use a rectangular control surface.
   unchanged; existing note titles are not rewritten.
 - **Library agent changes:** with ChatGPT connected, multi-item requests such as retitling an inbox run a bounded tool loop that only proposes. Its reply carries one card (checklist symbol, a count per kind, "Proposed. Nothing changes until you apply.", and Review Changes…). The review sheet lists every change with a checkbox, grouped Titles, Summaries, New categories, Filing, Links, Moved links, Archive and New notes; old titles are struck through, new categories use the green New badge, and a filing into a proposed category selects with it. Applying rejects the unselected rest; the card then shows counts and Undo. The card sits under the task's last agent reply, whichever agent wrote it. A Writer refresh adds a Document revisions group first: the document's title and a line count ("12 lines added, 4 removed") over a line diff that is open by default, removed lines struck through on a red tint with a minus, added lines on a green tint with a plus, link targets hidden so citations read "(2)", and unchanged runs folded to a count.
 - **Writer scope:** while a compose request waits for confirmation, its last agent reply carries a scope card (the same 10pt card surface): "Scope for this document" with "N of M checked" rolling as boxes change and Check All/Uncheck All, then a list of up to 240pt of checkbox rows (title, then filing and why it was gathered, after a comma) with an open-item button; possible strays carry an orange "Possibly off-topic" capsule and start unchecked. Below, a Style picker and an Allow general knowledge checkbox, a one-line limit note when too many are checked, and Cancel and Write Document (prominent). Stage progress under the composer keeps the stage still and rolls its count ("Extracting 12 of 37").
-- **Atlas source cards:** a source and its single-source generated
-  summaries share one map card when filed in the same primary home.
-  Grouping uses persisted provenance, never matching titles or URLs.
-  Captured notes whose primary text is already a summary can anchor the
-  card through their retained original. Their own summary stays in the
-  summary menu; Open Source opens the retained capture, not that summary.
-  The card names its summary count; selection offers Open Source and
-  Open Summary (a menu when there are several). VoiceOver exposes named
-  summary actions. Search, document counts, and navigation include the
-  grouped summaries. Multi-source research, independently filed summaries,
-  ambiguous source matches, and notes stay separate. Documents and filing
-  memberships are not changed; Notes-only views still expose summaries.
+- **Library types:** a native All / Notes / Sources segmented picker
+  appears above the map and list. One remembered selection follows the
+  person across presentations and categories. Sources and Notes sidebar
+  rows are shortcuts to that same filter. Filtering combines with the
+  current category and search; empty results keep the controls and offer
+  Show all types. Counts name notes or sources when narrowed. The map
+  keeps the focused category even if filtering leaves it empty; the
+  separate toggle explicitly names empty categories, not hidden items.
+- **Atlas item cards:** sources, summaries, research notes, comparisons,
+  and other authored items keep independent cards in All and Notes.
+  Labels and symbols identify the saved item itself; summaries no longer
+  disappear into source cards. Provenance and filing are unchanged.
+- **Reader Mode:** an expand control at the reading section's upper right
+  fills the content area without hiding the sidebar. Shift-Command-R
+  enters; Exit Reader Mode or Escape restores the prior pane. Reader text
+  uses the configured family at least 18pt, or 2pt above its normal size,
+  capped at 32pt. This never changes saved appearance preferences. Reader
+  Mode displays only the title and body, without metadata, actions, hero
+  images, related items, or rounded paper containers. Notes reuse the
+  notebook-dot texture across the reading surface; sources stay plain.
+  Increased contrast hides the dots, as it does in normal notes. Entering
+  and leaving crossfades over 200ms, with no spatial motion; Reduce Motion
+  switches immediately. Essential capture warnings remain plain text.
+  The reading measure stays bounded and centered, with left-aligned text;
+  the sole surrounding control exits Reader Mode.
+  Retained-source sheets offer the same reader for immutable extracted
+  text. Normal detail panes also center their title, metadata, and paper
+  together as one bounded column.
+- **Category navigation:** keep the current cached rows mounted during a
+  reload, then publish replacement rows and counts together. Do not clear
+  the list or briefly substitute a loading layout between categories.
+- **Automation history:** five completed runs per page, newest first,
+  with a visible range and Newer/Older controls. Older pages load from the
+  database, not a truncated recent-run cache. Paging preserves each
+  automation's position and does not change its latest-run status, review,
+  or undo behavior. History is not deleted to enforce the display limit.
+- **Filing actions:** Change and Suggest share an explicit text baseline
+  and stay together when wrapping after category chips.
 - **Atlas thumbnails:** item tiles at least 88 × 54pt on screen show their page or video still as a duotone in the category colour, fading to the tile fill under the title. Stills load lazily for visible tiles only.
 - **Automations:** a sidebar destination directly under Chat, above Library, since it's the agents' scheduled work rather than content (with a count of proposals waiting). The window title names the page, so the list opens with a one-line intro rather than a second heading. Laid out like the library: a list of automations, each with a coloured symbol tile, title, an on/off switch, a one-line status (schedule, last run or failure) and marks for running, a failed last run, and a count of proposals to review (the sidebar row repeats them), beside the selected one's detail: what it does and which agent runs it, a review button for its proposals, Schedule (plain text when there's only one choice, as for the weekly digest), Recheck items (for the link checker, cross-linker and unfiled filer), Last run with Run Now/Stop (while running, what it is doing, such as "Fetching 2 of 5: example.com", with the count rolling; the sidebar row repeats it), Next run, Due now (items waiting and about how many runs at the batch each run will take; new items always come first), Allowed to (phrased as what it does; whether you review first), then Options (items per run, with a line saying when a run is taking more to keep within the recheck interval; for the link checker, Dead links: Ask first or Archive automatically; for the weekly digest, a Write it up with the Writer switch, which also shows Allow ChatGPT and model calls per day) and History cards that are always open. Each run in History is one line that leads with what the run itself did, then what it found ("Proposed 2 changes for review, 2 unreachable", "Wrote 4 summaries", "Fetched 5 pages", "Saved 1 capture, 1 checking again", "Wrote a digest of 12 items", "Archived 2 dead links, 3 unreachable", "Nothing to change, 1 checking again") and opens, the latest open by default, to its items grouped by outcome (changed, proposed, moved, unreachable, need a login, checking again, skipped), each title opening the item (struck through and not a link once the item is gone, as after Undo), with Review or Undo beside its group (Undone in its place once undone) and a count of items that needed nothing.
 - **Separators:** status lines and counts read as plain English: commas between clauses and counts ("Daily, ran 2 hours ago"; "2 titles and 1 filing"), a colon before a detail ("Saved full text without a summary: …"). The middle dot is kept for short metadata pairs such as a site and a kind or a name and a date, never to join clauses.
-- **Archive:** a Library sidebar scope listing archived items. Archive/Unarchive sit in the item's More menu; an archived item's info card leads with an Archived row (date, reason, Unarchive). Archived items are left out of other scopes, the Atlas, search and Chat. A Linked card above From the Same Sources lists linked items with the reason for each link.
-- **Handoff:** pinned below list pagination; selected count, Clear, and Use in Chat. More than four selections disables handoff. Returning to conversation prepares evidence without automatically submitting a request; no second composer is introduced.
+- **Archive:** a Library sidebar scope listing archived items.
+  Archive/Unarchive sit in the item's More menu; an archived item's info
+  card leads with an Archived row (date, reason, Unarchive). Archived items
+  are left out of other scopes, the Atlas, search and Chat. A Linked card
+  above Other notes from these sources lists linked items with the reason
+  for each link.
+- **Handoff:** pinned below list pagination; selected count, Clear, and Use
+  in Chat. More than four selections disables handoff. Detail panes and
+  retained-source sheets offer Add to Chat. It appends a removable Note
+  or Source attachment, opens the existing conversation, and focuses the
+  composer without replacing a draft or sending. Repeated additions do
+  not duplicate context; a fifth attachment asks the person to remove
+  one first. Source actions resolve the captured source's own saved item,
+  not a generated note that cites it. Accepted messages move the submitted
+  attachments out of the composer into clickable context chips inside
+  the sent bubble. Failed submissions keep the draft and attachments;
+  retries preserve a new draft. Sent context survives reopening, and
+  deleted items show a neutral unavailable label. No second composer is
+  introduced.
+- **Note provenance:** Source or Sources links sit directly below the
+  title and open the saved source in Library. They remain available for
+  archived sources but omit deleted items. Other notes from these sources
+  appear separately below the text; source items do not repeat there.
 - **Recovery and mutation:** Captures lists what you saved yourself plus anything that failed; successful background bookmark fetches aren't listed, and the toolbar is its only heading. When summaries fail because of the AI provider itself (a model or plan no longer available, sign-in, usage limit), one window notice says so with Open Settings…, rather than the same error on every item; it clears when the provider or model changes. A failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Captures, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Each home chip in the info card shows a small remove button (xmark.circle.fill) at its corner on hover and has a right-click menu (Make Primary Home, Remove from …); removing the primary home promotes the lowest-coded one left, and the change is confirmed inline with Undo. Filing an item anywhere but Inbox takes it out of Inbox, whether from Change…, File Here, the library agent or a chat proposal; Undo puts it back. Beside Change… in the info card, a Suggest link (sparkles) asks the Librarian: "Asking the Librarian…" while it works, then an inline card with the suggested home as a chip (green New badge for a category it would create), its one-line reason, an "Also fits" list of other homes as outlined chips (each with Also File Here, which adds a secondary home and turns into Added with Undo, or "Already here"), File Here (or Create and File Here) and Dismiss; filing shows "Filed in …" with Undo. Nothing changes until File Here. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, Markdown styled as it's typed by MarkdownEngine but saved character for character, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
 
 The sidecar's HTML/CSS samples are portable illustrations, not shipping

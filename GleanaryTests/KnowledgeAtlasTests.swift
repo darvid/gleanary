@@ -84,7 +84,7 @@ private func expectSiblingsTileWithoutOverlap(_ layout: AtlasLayout) {
 }
 
 struct KnowledgeAtlasProjectionTests {
-    @Test @MainActor func groupsSingleSourceSummariesWithoutLosingDocumentsOrSearch() throws {
+    @Test @MainActor func allAndNotesShowSourcesAndSummariesAsIndependentCards() throws {
         let home = category("15", "Tools & software", id: 1)
         var source = item(1, in: [home])
         source.sourceIDs = [fixtureID(50)]
@@ -97,17 +97,17 @@ struct KnowledgeAtlasProjectionTests {
         atlas.setViewport(CGSize(width: 640, height: 480))
         let region = try #require(atlas.layout.tile(.category(home.id)))
         #expect(atlas.root.itemCount == 3)
-        #expect(region.childCount == 1)
+        #expect(region.childCount == 3)
         let card = try #require(atlas.layout.tile(.item(source.id)))
-        #expect(card.node.item?.summaries.map(\.id) == [second.id, first.id])
-        #expect(card.node.itemCount == 3)
-        #expect(card.node.lastActivity == second.updatedAt)
-        #expect(atlas.layout.tile(.item(first.id))?.id == card.id)
+        #expect(card.node.item?.summaries.isEmpty == true)
+        #expect(card.node.itemCount == 1)
+        #expect(card.node.lastActivity == source.updatedAt)
+        #expect(atlas.layout.tile(.item(first.id))?.id == .item(first.id))
         atlas.setMatches([first.id, second.id])
         #expect(atlas.matchCounts[0] == 2)
-        #expect(try atlas.matchCounts[#require(atlas.layout.index[card.id])] == 2)
+        #expect(try atlas.matchCounts[#require(atlas.layout.index[card.id])] == 0)
         #expect(atlas.activate(.item(first.id)) == .open(first.id))
-        #expect(atlas.selectedID == .item(source.id))
+        #expect(atlas.selectedID == .item(first.id))
         #expect(atlas.activate(.item(source.id)) == .open(source.id))
         let regrouping = KnowledgeAtlasModel(snapshot: AtlasSnapshot(
             categories: [home],
@@ -115,7 +115,7 @@ struct KnowledgeAtlasProjectionTests {
         ))
         regrouping.selectedID = .item(first.id)
         regrouping.apply(snapshot)
-        #expect(regrouping.selectedID == .item(source.id))
+        #expect(regrouping.selectedID == .item(first.id))
         atlas.kindFilter = .notes
         #expect(atlas.root.itemCount == 2)
         #expect(atlas.layout.tile(.item(first.id))?.id == .item(first.id))
@@ -123,7 +123,33 @@ struct KnowledgeAtlasProjectionTests {
         #expect(atlas.root.itemCount == 1)
     }
 
-    @Test @MainActor func groupedCaptureOpensItsRetainedOriginalAndKeepsBothSummaries() throws {
+    @Test @MainActor func filteringKeepsTheCurrentCategoryEvenWhenItBecomesEmpty() {
+        let home = category("23", "Infrastructure", id: 1)
+        let empty = category("24", "Empty", id: 2)
+        let atlas = KnowledgeAtlasModel(snapshot: AtlasSnapshot(
+            categories: [home, empty],
+            items: [item(1, in: [home])]
+        ))
+        atlas.setViewport(CGSize(width: 680, height: 600))
+        atlas.hidesEmptyCategories = true
+        atlas.focus(.category(home.id), animated: false)
+        atlas.kindFilter = .notes
+        #expect(atlas.focusID == .category(home.id))
+        #expect(atlas.focusTile?.node.itemCount == 0)
+        #expect(atlas.layout.tile(.category(home.id)) != nil)
+        #expect(atlas.emptyCategoryCount == 1)
+        #expect(!atlas.emptyCategoryIDs.contains(home.id))
+        atlas.focus(.category(empty.id), animated: false)
+        #expect(atlas.focusID == .category(empty.id))
+        atlas.kindFilter = .all
+        #expect(atlas.focusID == .category(empty.id))
+        atlas.focus(.category(home.id), animated: false)
+        #expect(atlas.focusTile?.node.itemCount == 1)
+        #expect(LibraryKindFilter.notes.countLabel(2) == "2 notes")
+        #expect(LibraryKindFilter.sources.countLabel(1) == "1 source")
+    }
+
+    @Test @MainActor func capturedSummaryKeepsItsOwnTypeAndDoesNotAbsorbOtherNotes() throws {
         var captured = item(1, kind: "summary")
         captured.captureID = fixtureID(51)
         captured.sourceIDs = [fixtureID(50)]
@@ -134,11 +160,11 @@ struct KnowledgeAtlasProjectionTests {
             items: [captured, research]
         ))
         let card = try #require(atlas.layout.tile(.item(captured.id))?.node.item)
-        #expect(card.isSourceCard)
-        #expect(card.summaryLabel == "2 summaries")
-        #expect(Set(card.summaryDocuments.map(\.id)) == [captured.id, research.id])
-        #expect(card.summaries.map(\.id) == [research.id])
-        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 1)
+        #expect(!card.isSourceCard)
+        #expect(card.cardKindLabel == "Summary")
+        #expect(card.summaryDocuments.isEmpty)
+        #expect(card.summaries.isEmpty)
+        #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
         var openedNote: UUID?
         var openedCapture: UUID?
         let view = KnowledgeAtlasView(
@@ -146,8 +172,8 @@ struct KnowledgeAtlasProjectionTests {
             openCapturedSource: { openedCapture = $0 }
         )
         view.openSource(for: card)
-        #expect(openedCapture == captured.captureID)
-        #expect(openedNote == nil)
+        #expect(openedCapture == nil)
+        #expect(openedNote == captured.id)
         #expect(atlas.activate(.item(research.id)) == .open(research.id))
         #expect(atlas.activate(.item(captured.id)) == .open(captured.id))
         // With no peer, a captured summary must not group itself away.
@@ -196,7 +222,7 @@ struct KnowledgeAtlasProjectionTests {
     }
 
     @Test(arguments: [false, true]) @MainActor
-    func groupedCardRendersWithSeparateOpenActions(summarizedCapture: Bool) async throws {
+    func independentCardsRenderWithTheirOwnTypes(summarizedCapture: Bool) async throws {
         let home = category("15", "Tools & software", id: 1)
         let source = AtlasItem(
             id: fixtureID(1), title: "A saved source about testing",
@@ -241,7 +267,7 @@ struct KnowledgeAtlasProjectionTests {
             host.needsDisplay = true
             host.display()
             try await Task.sleep(for: .milliseconds(100))
-            #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 2)
+            #expect(atlas.layout.tiles.filter { $0.node.kind == .item }.count == 3)
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             let png = try #require(bitmap.representation(using: .png, properties: [:]))
@@ -711,21 +737,19 @@ struct NavigationHistoryTests {
         let technology = try #require(snapshot.categories.first { $0.code == "50" })
         let ai = try #require(snapshot.categories.first { $0.code == "50.02" })
         for dark in [false, true] {
-            for stage in ["overview", "category", "contents", "zoomed", "dense"] {
-                var source = snapshot
-                if stage == "dense" {
-                    // About 9,000 items, so most item tiles start below the drawable size.
-                    source.items = (0 ..< 12).flatMap { copy in
-                        snapshot.items.map { item in
-                            AtlasItem(
-                                id: UUID(), title: item.title, kind: item.kind, host: item.host,
-                                updatedAt: item.updatedAt.addingTimeInterval(Double(copy)),
-                                categoryIDs: item.categoryIDs
-                            )
-                        }
-                    }
-                }
+            for stage in [
+                "overview",
+                "category",
+                "contents",
+                "zoomed",
+                "dense",
+                "notes",
+                "sources",
+                "empty",
+            ] {
+                let source = Self.screenshotSnapshot(snapshot, stage: stage)
                 let atlas = KnowledgeAtlasModel(snapshot: source)
+                atlas.kindFilter = Self.screenshotKind(stage)
                 atlas.reduceMotion = true
                 if stage == "zoomed" || stage == "contents" {
                     // Every other source gets a synthetic page still.
@@ -734,11 +758,20 @@ struct NavigationHistoryTests {
                             .filter { $0.kind == "source" }.enumerated()
                             .filter { $0.offset.isMultiple(of: 2) }.map { ($0.element.id, still) }))
                 }
+                let suite = "gleanary-atlas-controls-" + UUID().uuidString
+                let defaults = try #require(UserDefaults(suiteName: suite))
+                defaults.set(stage == "empty", forKey: "atlasHidesEmptyCategories")
+                defer { defaults.removePersistentDomain(forName: suite) }
                 let host = NSHostingView(rootView: KnowledgeAtlasView(
                     atlas: atlas, store: nil, openItem: { _ in }
-                ).background(Color(nsColor: .windowBackgroundColor)))
+                ).background(Color(nsColor: .windowBackgroundColor)).defaultAppStorage(defaults))
                 let window = NSWindow(
-                    contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+                    contentRect: NSRect(
+                        x: 0,
+                        y: 0,
+                        width: ["notes", "empty"].contains(stage) ? 680 : 980,
+                        height: 680
+                    ),
                     styleMask: [.borderless], backing: .buffered, defer: false
                 )
                 window.isReleasedWhenClosed = false
@@ -752,7 +785,7 @@ struct NavigationHistoryTests {
                 case "category":
                     atlas.focus(.category(technology.id), animated: false)
                     atlas.selectedID = .category(ai.id)
-                case "contents":
+                case "contents", "notes", "sources", "empty":
                     atlas.focus(.category(technology.id), animated: false)
                     atlas.focus(.category(ai.id), animated: false)
                 case "zoomed":
@@ -772,6 +805,39 @@ struct NavigationHistoryTests {
                 ))
             }
         }
+    }
+
+    private static func screenshotKind(_ stage: String) -> LibraryKindFilter {
+        switch stage {
+        case "notes", "empty": .notes
+        case "sources": .sources
+        default: .all
+        }
+    }
+
+    private static func screenshotSnapshot(
+        _ snapshot: AtlasSnapshot,
+        stage: String
+    ) -> AtlasSnapshot {
+        var source = snapshot
+        if stage == "dense" {
+            // About 9,000 items, so most item tiles start below the drawable size.
+            source.items = (0 ..< 12).flatMap { copy in
+                snapshot.items.map { item in
+                    AtlasItem(
+                        id: UUID(),
+                        title: item.title,
+                        kind: item.kind,
+                        host: item.host,
+                        updatedAt: item.updatedAt.addingTimeInterval(Double(copy)),
+                        categoryIDs: item.categoryIDs
+                    )
+                }
+            }
+        } else if stage == "empty" {
+            source.items.removeAll { $0.kind != "source" }
+        }
+        return source
     }
 
     /// A page-like still: a dark masthead band over a lighter body with a block of "text".
