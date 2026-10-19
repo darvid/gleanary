@@ -17,8 +17,11 @@ struct ConversationView: View {
     @State private var followLatest = true
     @State private var userScrolling = false
     @State private var feedPosition = ScrollPosition(edge: .bottom)
+    @State private var scrollEdges = ScrollEdges()
     @FocusState private var composing: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     init(
         model: ConversationModel,
@@ -328,6 +331,18 @@ struct ConversationView: View {
                 feedPosition.scrollTo(edge: .bottom)
             }
         }
+        .onScrollGeometryChange(for: ScrollEdges.self) { geometry in
+            ScrollEdges(
+                contentHeight: geometry.contentSize.height,
+                visibleTop: geometry.visibleRect.minY,
+                visibleBottom: geometry.visibleRect.maxY,
+                topInset: geometry.contentInsets.top,
+                bottomInset: geometry.contentInsets.bottom
+            )
+        } action: { _, edges in
+            scrollEdges = edges
+        }
+        .overlay { scrollEdgeFades }
         .onChange(of: model.messages.isEmpty) {
             if model.messages.isEmpty {
                 followLatest = true
@@ -351,6 +366,53 @@ struct ConversationView: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: followLatest)
+    }
+
+    private var scrollEdgeFades: some View {
+        VStack(spacing: 0) {
+            edgeFade(from: .top, to: .bottom).opacity(scrollEdges.top)
+            Spacer(minLength: 0)
+            edgeFade(from: .bottom, to: .top).opacity(scrollEdges.bottom)
+        }
+        .opacity(model.messages.isEmpty || contrast == .increased || reduceTransparency ? 0 : 1)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        // Follow the actual scroll position, not the Latest messages button's animation.
+        .transaction { $0.animation = nil }
+    }
+
+    private func edgeFade(from start: UnitPoint, to end: UnitPoint) -> some View {
+        LinearGradient(
+            colors: [Color(nsColor: .windowBackgroundColor), .clear],
+            startPoint: start,
+            endPoint: end
+        )
+        .frame(height: ScrollEdges.depth)
+    }
+
+    struct ScrollEdges: Equatable {
+        static let depth: CGFloat = 22
+        let top: CGFloat
+        let bottom: CGFloat
+
+        init(
+            contentHeight: CGFloat = 0,
+            visibleTop: CGFloat = 0,
+            visibleBottom: CGFloat = 0,
+            topInset: CGFloat = 0,
+            bottomInset: CGFloat = 0
+        ) {
+            let viewportHeight = visibleBottom - visibleTop
+            guard viewportHeight > 0,
+                  contentHeight + topInset + bottomInset > viewportHeight + 0.5
+            else {
+                top = 0
+                bottom = 0
+                return
+            }
+            top = min(1, max(0, (visibleTop + topInset) / Self.depth))
+            bottom = min(1, max(0, (contentHeight + bottomInset - visibleBottom) / Self.depth))
+        }
     }
 
     struct FeedGeometry: Equatable {
@@ -713,8 +775,7 @@ struct ConversationView: View {
             }
             if let task = model.activeTask {
                 HStack(spacing: 8) {
-                    // The mini spinner's glyph sits ~0.5pt above the caption's lowercase centre.
-                    ProgressView().controlSize(.mini).offset(y: 0.5)
+                    ChatWorkingIndicator(color: .secondary)
                     StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
                         .font(.caption).foregroundStyle(.secondary)
                 }

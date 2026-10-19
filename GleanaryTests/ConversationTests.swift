@@ -1027,6 +1027,137 @@ private struct NoTranscriptProvider: YouTubeProviding {
         ))
     }
 
+    @Test @MainActor func chatEdgeFadesTrackHiddenContentWithoutUsingTheFollowThreshold() {
+        let cases: [(height: CGFloat, top: CGFloat, bottom: CGFloat, fades: [CGFloat])] = [
+            (0, 0, 600, [0, 0]),
+            (200, -400, 200, [0, 0]),
+            (600, 0, 600, [0, 0]),
+            (600.25, 0, 600, [0, 0]),
+            (1800, 0, 600, [0, 1]),
+            (1800, 11, 611, [0.5, 1]),
+            (1800, 500, 1100, [1, 1]),
+            (1800, 1189, 1789, [1, 0.5]),
+            (1800, 1200, 1800, [1, 0]),
+            (1800, -40, 560, [0, 1]),
+            (1800, 1240, 1840, [1, 0]),
+            (1800, 0, 1850, [0, 0]),
+        ]
+        for sample in cases {
+            let edges = ConversationView.ScrollEdges(
+                contentHeight: sample.height,
+                visibleTop: sample.top,
+                visibleBottom: sample.bottom
+            )
+            #expect([edges.top, edges.bottom] == sample.fades)
+        }
+        #expect(ConversationView.ScrollEdges() == .init(contentHeight: 0))
+        let insetTop = ConversationView.ScrollEdges(
+            contentHeight: 1800, visibleTop: -24, visibleBottom: 576,
+            topInset: 24, bottomInset: 24
+        )
+        #expect(insetTop.top == 0 && insetTop.bottom == 1)
+        let insetBottom = ConversationView.ScrollEdges(
+            contentHeight: 1800, visibleTop: 1224, visibleBottom: 1824,
+            topInset: 24, bottomInset: 24
+        )
+        #expect(insetBottom.top == 1 && insetBottom.bottom == 0)
+        // No per-pixel view updates once both edges are fully faded.
+        #expect(ConversationView.ScrollEdges(
+            contentHeight: 1800,
+            visibleTop: 100,
+            visibleBottom: 700
+        )
+            == ConversationView.ScrollEdges(
+                contentHeight: 1800,
+                visibleTop: 200,
+                visibleBottom: 800
+            ))
+    }
+
+    @Test(
+        .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_CHAT_EDGE_SCREENSHOTS"] == "1"),
+        arguments: [false, true]
+    )
+    @MainActor func chatScrollEdgeAndWorkingDotLayouts(dark: Bool) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suite = "gleanary-chat-edges-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(
+            store: store, inference: ConversationFixtureInference(wait: true)
+        ))
+        await model.load()
+        model.messages = (0 ..< 24).map { index in
+            ConversationMessage(
+                sequence: Int64(index), id: UUID(), author: "assistant",
+                text: "Synthetic message \(index).\n\nSaved evidence supports the explanation. Scroll to read earlier discussion or return to the latest reply.",
+                references: [], taskID: nil, createdAt: Date(timeIntervalSince1970: 1000)
+            )
+        }
+        let host = NSHostingView(rootView: ConversationView(
+            model: model, library: LibraryModel(store: store)
+        )
+        .defaultAppStorage(defaults)
+        .preferredColorScheme(dark ? .dark : .light)
+        .environment(\.scenePhase, .inactive)
+        .frame(width: 680, height: 600))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 600),
+            styleMask: [],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        host.appearance = window.appearance
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(250))
+        host.layoutSubtreeIfNeeded()
+        let scroll = try #require(Self.chatScroll(in: host))
+        let document = try #require(scroll.documentView)
+        for (name, offset) in [
+            ("bottom", document.frame.height - scroll.contentView.bounds.height),
+            ("middle", (document.frame.height - scroll.contentView.bounds.height) / 2),
+            ("top", 0.0),
+        ] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try await Task.sleep(for: .milliseconds(150))
+            try captureChatEdges(host, name: name, dark: dark)
+        }
+        model.messages = Array(model.messages.prefix(1))
+        try await Task.sleep(for: .milliseconds(150))
+        try captureChatEdges(host, name: "short", dark: dark)
+        model.composer = "Synthetic working-status request"
+        await model.send()
+        #expect(model.running)
+        do {
+            try await Task.sleep(for: .milliseconds(150))
+            #expect(model.activeTask != nil)
+            try captureChatEdges(host, name: "working", dark: dark)
+        } catch {
+            await model.cancel()
+            throw error
+        }
+        await model.cancel()
+        #expect(!model.running)
+    }
+
+    @MainActor private func captureChatEdges(_ host: NSView, name: String, dark: Bool) throws {
+        host.layoutSubtreeIfNeeded()
+        host.display()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png
+            .write(
+                to: URL(filePath: "/tmp/gleanary-chat-edges-\(name)-\(dark ? "dark" : "light").png")
+            )
+    }
+
     @Test @MainActor func chatFollowsRenderedGrowthButPreservesScrolledUpPosition() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }

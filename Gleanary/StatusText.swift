@@ -17,7 +17,7 @@ extension View {
     }
 }
 
-/// Sidebar feedback stays attached to Chat even when another destination is selected.
+/// Shared working feedback for the Chat sidebar and composer, steady with Reduce Motion.
 struct ChatWorkingIndicator: View {
     var color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
