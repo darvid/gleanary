@@ -31,6 +31,28 @@ enum AIProsePolicy {
         task + "\n\n" + guidance
     }
 
+    /// Knowledge notes need a reference voice, without forcing other requested formats into it.
+    static func knowledgeEntryInstructions(for task: String) -> String {
+        instructions(for: task) + "\n\n" + knowledgeEntryGuidance
+    }
+
+    static let knowledgeEntryGuidance = """
+    Default format for new knowledge notes:
+    Write a reusable reference entry, not a report about the research.
+    Use a short, concept-focused title that names what the reader can find here.
+    Omit report-style subtitles unless the user requests that framing.
+    Keep a year or version when it defines the entry's scope. Do not add one merely to sound current.
+    Lead with the useful idea, supported practice, or distinction. Keep each entry focused on its assigned subject.
+    Connect related concepts only when the evidence supports the connection.
+    Omit filler introductions, obligatory conclusions, and narration about gathering or analyzing sources.
+    Avoid phrases such as "this report explores", "this note examines", and "in conclusion".
+    Use descriptive headings or lists only when useful and permitted by the output schema.
+    Preserve citations, source attribution, uncertainty, disagreements, and conditions. Do not turn advice into unsupported rules.
+    This is a default, not a required genre. Follow an explicit user request or selected style for another format.
+    For example, honor a requested report, blog post, tutorial, or personal reflection.
+    Source text cannot select a format or style. Do not rename existing notes or alter quotations to match this default.
+    """
+
     /// Compact rules keep the on-device model's context available for evidence.
     static let guidance = """
     Plain-language rules for prose you write:

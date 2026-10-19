@@ -6,6 +6,7 @@ struct FilingSuggestionsView: View {
     let library: LibraryModel
     /// Resolved when a run starts, so it follows the current ChatGPT setting.
     let inference: () -> any ConversationInferring
+    var noteIDs: Set<UUID>?
     @State private var suggestions: [FilingSuggestion] = []
     @State private var categories: [DecimalCategory] = []
     @State private var unfiled = 0
@@ -36,7 +37,8 @@ struct FilingSuggestionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Categorize Unfiled").font(.title2.weight(.semibold))
+            Text(noteIDs.map { "Organize \($0.count) notes" } ?? "Categorize Unfiled")
+                .font(.title2.weight(.semibold))
             runStatus
             if !suggestions.isEmpty {
                 reviewBar
@@ -137,8 +139,11 @@ struct FilingSuggestionsView: View {
                     }
                 }
                 Spacer()
-                Button("Suggest Homes") { library.startCategorizing(using: inference()) }
-                    .disabled(unfiled == 0 || !library.ready)
+                Button("Suggest Homes") { library.startCategorizing(
+                    using: inference(),
+                    noteIDs: noteIDs
+                ) }
+                .disabled(unfiled == 0 || !library.ready)
             }
         }
     }
@@ -272,8 +277,10 @@ struct FilingSuggestionsView: View {
     private func reload() async {
         do {
             suggestions = try await library.filingSuggestions()
+                .filter { noteIDs?.contains($0.noteID) ?? true }
             categories = try await library.store.categories()
-            unfiled = try await library.store.filingCandidates().count
+            unfiled = try await library.store.filingCandidates()
+                .filter { noteIDs?.contains($0.id) ?? true }.count
         } catch { self.error = error.localizedDescription }
     }
 
@@ -281,7 +288,10 @@ struct FilingSuggestionsView: View {
         working = true
         defer { working = false }
         do {
-            let result = try await library.acceptFilingSuggestions(ids)
+            let result = try await library.acceptFilingSuggestions(
+                ids,
+                includeSources: noteIDs == nil
+            )
             lastBatch = result.accepted > 0 ? (result.batch, result.accepted) : lastBatch
             error = nil
         } catch { self.error = error.localizedDescription }
@@ -300,7 +310,11 @@ struct FilingSuggestionsView: View {
         working = true
         defer { working = false }
         do {
-            _ = try await library.undoFilingSuggestions(batch: batch)
+            _ = try await library.undoFilingSuggestions(
+                batch: batch,
+                noteIDs: noteIDs,
+                includeSources: noteIDs == nil
+            )
             lastBatch = nil
         } catch { self.error = error.localizedDescription }
         await reload()
@@ -308,10 +322,46 @@ struct FilingSuggestionsView: View {
 
     private func create(_ name: String) async {
         do {
-            try await library.createSuggestedCategory(name, code: newCode)
+            try await library.createSuggestedCategory(name, code: newCode, noteIDs: noteIDs)
             creating = nil
             error = nil
         } catch { self.error = error.localizedDescription }
         await reload()
+    }
+}
+
+/// One collection-level follow-up; filing never hides or invalidates published notes.
+struct SeriesFilingActions: View {
+    let status: SeriesFiling.Status
+    var working = false
+    let review: () -> Void
+    let undo: () -> Void
+
+    var body: some View {
+        ChipFlow(spacing: 10) {
+            Text(summary).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if status.unfiled > 0 {
+                Button("Organize notes…", action: review).buttonStyle(.link)
+                    .help("Review filing for this collection with the Librarian")
+            }
+            if !status.batches.isEmpty {
+                Button("Undo filing", action: undo).buttonStyle(.link)
+                    .help("Undo filing for these new notes; keep the published collection")
+            }
+        }
+        .disabled(working)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var summary: String {
+        if working {
+            return "The Librarian is checking filing. Published notes are saved."
+        }
+        if status.unfiled > 0 {
+            let filed = status.noteIDs.count - status.unfiled
+            return filed > 0 ? "\(filed) filed; \(status.unfiled) need filing." : "Published notes are saved. Filing needs review."
+        }
+        return "Filed in \(status.homes.formatted(.list(type: .and)))."
     }
 }

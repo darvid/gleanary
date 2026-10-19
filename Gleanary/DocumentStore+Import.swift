@@ -212,11 +212,17 @@ extension DocumentStore {
         return note.id
     }
 
-    static func fileImported(_ noteID: UUID, categoryID: UUID, in db: Database) throws {
+    static func fileImported(
+        _ noteID: UUID,
+        categoryID: UUID,
+        includeSources: Bool = true,
+        in db: Database
+    ) throws {
         try db.execute(
             sql: "INSERT OR IGNORE INTO note_categories VALUES (?, ?, 1)",
             arguments: [noteID.uuidString, categoryID.uuidString]
         )
+        guard includeSources else { return }
         for source in try String.fetchAll(
             db,
             sql: "SELECT sourceID FROM note_sources WHERE noteID = ?",

@@ -131,7 +131,10 @@ extension DocumentStore {
 
     /// Files each still-unfiled note in its suggested home, as one undoable batch. A note
     /// someone filed in the meantime keeps its home and the suggestion is dropped.
-    func acceptFilingSuggestions(_ noteIDs: [UUID]) throws -> (accepted: Int, batch: UUID) {
+    func acceptFilingSuggestions(
+        _ noteIDs: [UUID],
+        includeSources: Bool = true
+    ) throws -> (accepted: Int, batch: UUID) {
         let batch = UUID()
         let accepted = try readyDatabase().write { db in
             var accepted = 0
@@ -153,7 +156,12 @@ extension DocumentStore {
                     )
                     continue
                 }
-                try Self.fileImported(id, categoryID: Self.uuid(categoryID), in: db)
+                try Self.fileImported(
+                    id,
+                    categoryID: Self.uuid(categoryID),
+                    includeSources: includeSources,
+                    in: db
+                )
                 try db.execute(
                     sql: "UPDATE filing_suggestions SET status = 'accepted', batch = ? WHERE noteID = ?",
                     arguments: [batch.uuidString, id.uuidString]
@@ -178,7 +186,11 @@ extension DocumentStore {
 
     /// Returns a batch's notes to unfiled and their suggestions to review. Notes moved since
     /// keep their newer home.
-    func undoFilingSuggestions(batch: UUID) throws -> Int {
+    func undoFilingSuggestions(
+        batch: UUID,
+        noteIDs: Set<UUID>? = nil,
+        includeSources: Bool = true
+    ) throws -> Int {
         try readyDatabase().write { db in
             var restored = 0
             for row in try Row.fetchAll(
@@ -187,19 +199,24 @@ extension DocumentStore {
                 arguments: [batch.uuidString]
             ) {
                 let noteID: String = row["noteID"], categoryID: String = row["categoryID"]
+                if let noteIDs, try !noteIDs.contains(Self.uuid(noteID)) {
+                    continue
+                }
                 try db.execute(
                     sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ? AND isPrimary = 1",
                     arguments: [noteID, categoryID]
                 )
                 guard db.changesCount > 0 else { continue }
-                try db.execute(sql: """
-                DELETE FROM source_categories WHERE categoryID = ?1 AND sourceID IN (
-                    SELECT sourceID FROM note_sources WHERE noteID = ?2
-                ) AND NOT EXISTS (
-                    SELECT 1 FROM note_sources other JOIN note_categories nc ON nc.noteID = other.noteID
-                    WHERE other.sourceID = source_categories.sourceID AND nc.categoryID = ?1
-                )
-                """, arguments: [categoryID, noteID])
+                if includeSources {
+                    try db.execute(sql: """
+                    DELETE FROM source_categories WHERE categoryID = ?1 AND sourceID IN (
+                        SELECT sourceID FROM note_sources WHERE noteID = ?2
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM note_sources other JOIN note_categories nc ON nc.noteID = other.noteID
+                        WHERE other.sourceID = source_categories.sourceID AND nc.categoryID = ?1
+                    )
+                    """, arguments: [categoryID, noteID])
+                }
                 try db.execute(
                     sql: "UPDATE filing_suggestions SET status = 'pending', batch = NULL WHERE noteID = ?",
                     arguments: [noteID]
@@ -211,15 +228,25 @@ extension DocumentStore {
     }
 
     /// Creates a category a model proposed and points its pending suggestions at it.
-    func createSuggestedCategory(_ name: String, code: String) throws -> UUID {
+    func createSuggestedCategory(
+        _ name: String,
+        code: String,
+        noteIDs: Set<UUID>? = nil
+    ) throws -> UUID {
         try DecimalCategory.validate(code: code, name: name)
+        let scope = try noteIDs.map { try String(
+            decoding: JSONEncoder().encode($0.map(\.uuidString)),
+            as: UTF8.self
+        ) }
         let id = UUID()
         try saveCategory(id: id, code: code, name: name)
         try readyDatabase().write { db in
             try db.execute(sql: """
             UPDATE filing_suggestions SET categoryID = ?, newCategory = NULL
             WHERE status = 'pending' AND categoryID IS NULL AND newCategory = ?
-            """, arguments: [id.uuidString, name])
+              AND (? IS NULL OR noteID IN (SELECT value FROM json_each(?)))
+            """, arguments: [id.uuidString, name,
+                             scope, scope])
         }
         return id
     }

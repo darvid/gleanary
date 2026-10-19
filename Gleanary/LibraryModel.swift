@@ -478,7 +478,7 @@ final class LibraryModel {
     }
 
     /// Runs in the background; suggestions are saved as each batch finishes.
-    func startCategorizing(using inference: any ConversationInferring) {
+    func startCategorizing(using inference: any ConversationInferring, noteIDs: Set<UUID>? = nil) {
         guard ready, categorizationTask == nil else { return }
         categorizationError = nil
         categorizationStopped = false
@@ -487,7 +487,7 @@ final class LibraryModel {
         let categorizer = BookmarkCategorizer(store: store, inference: inference)
         categorizationTask = Task { [weak self] in
             do {
-                let result = try await categorizer.run { progress in
+                let result = try await categorizer.run(noteIDs: noteIDs) { progress in
                     await MainActor.run { self?.categorization = progress }
                 }
                 self?.categorization = result
@@ -512,8 +512,11 @@ final class LibraryModel {
         try await store.pendingFilingSuggestions()
     }
 
-    func acceptFilingSuggestions(_ ids: [UUID]) async throws -> (accepted: Int, batch: UUID) {
-        let result = try await store.acceptFilingSuggestions(ids)
+    func acceptFilingSuggestions(
+        _ ids: [UUID],
+        includeSources: Bool = true
+    ) async throws -> (accepted: Int, batch: UUID) {
+        let result = try await store.acceptFilingSuggestions(ids, includeSources: includeSources)
         try await refreshAfterMutation()
         return result
     }
@@ -522,14 +525,26 @@ final class LibraryModel {
         try await store.rejectFilingSuggestions(ids)
     }
 
-    func undoFilingSuggestions(batch: UUID) async throws -> Int {
-        let restored = try await store.undoFilingSuggestions(batch: batch)
+    func undoFilingSuggestions(
+        batch: UUID,
+        noteIDs: Set<UUID>? = nil,
+        includeSources: Bool = true
+    ) async throws -> Int {
+        let restored = try await store.undoFilingSuggestions(
+            batch: batch,
+            noteIDs: noteIDs,
+            includeSources: includeSources
+        )
         try await refreshAfterMutation()
         return restored
     }
 
-    func createSuggestedCategory(_ name: String, code: String) async throws {
-        _ = try await store.createSuggestedCategory(name, code: code)
+    func createSuggestedCategory(
+        _ name: String,
+        code: String,
+        noteIDs: Set<UUID>? = nil
+    ) async throws {
+        _ = try await store.createSuggestedCategory(name, code: code, noteIDs: noteIDs)
     }
 
     func importFiles(_ urls: [URL]) async {

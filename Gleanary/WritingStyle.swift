@@ -38,11 +38,11 @@ struct WritingStyle: Codable, Sendable, Equatable, Hashable, Identifiable {
         name: "Plain",
         tone: "Neutral and direct",
         readingLevel: "Plain language (ISO 24495-1): common words, short sentences",
-        structure: "Summary first, then short sections with descriptive headings",
+        structure: "Main idea first; focused sections only when useful, without a required introduction or conclusion",
         conventions: "US spelling; units, prices and dates as the sources give them",
-        avoid: "Unexplained jargon, marketing tone, emoji, filler introductions",
+        avoid: "Unrequested report framing, research-process narration, filler introductions, unexplained jargon, marketing tone, emoji",
         citations: .numbered,
-        instructions: "Explain a technical term the first time it appears. Say when sources disagree."
+        instructions: "Write reusable knowledge entries by default. Honor requests for another format. Explain a technical term the first time it appears. Say when sources disagree."
     )
 
     static let referenceGuide = WritingStyle(

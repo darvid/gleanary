@@ -15,7 +15,8 @@ enum SeriesRenderer {
         outline: NoteSeries.Outline,
         dossier: NoteSeries.Dossier,
         drafts: [UUID: NoteSeries.Draft],
-        curation: NoteSeries.Curation
+        curation: NoteSeries.Curation,
+        minimumParagraphs: Int = 2
     ) throws -> Output {
         var titles = Dictionary(uniqueKeysWithValues: dossier.sources.compactMap { source in
             source.noteID.map { ($0, source.title) }
@@ -40,7 +41,7 @@ enum SeriesRenderer {
                 reason: "A member of this note series."
             ))
             guard let draft = drafts[entry.id] else { continue }
-            try draft.validate(entry: entry, dossier: dossier)
+            try draft.validate(entry: entry, dossier: dossier, minimumParagraphs: minimumParagraphs)
             for paragraph in draft.paragraphs {
                 guard paragraphs.insert(paragraph.text.lowercased()).inserted
                 else { throw NoteSeries.Failure.invalidDraft }

@@ -8,8 +8,10 @@ struct ConversationView: View {
     @State private var showingPreview = false
     @State private var source: SourceCitation?
     @State private var reviewingChanges: ReviewedChangeset?
+    @State private var reviewingFiling: SeriesFiling.Status?
     @State private var importing = false
     @State private var confirmingClear = false
+    @State private var startingNewChat = false
     @State private var starterCategories = false
     @AppStorage("starterCategoriesOffered") private var starterCategoriesOffered = false
     @State private var followLatest = true
@@ -95,6 +97,13 @@ struct ConversationView: View {
                 composing = true
             }
         }
+        .sheet(item: $reviewingFiling, onDismiss: {
+            Task { await model.refresh(); await model.didMutate?() }
+        }) { status in
+            FilingSuggestionsView(library: library, inference: {
+                (try? model.chatGPT.filingInference()) ?? AppleConversationInference()
+            }, noteIDs: Set(status.noteIDs))
+        }
         .sheet(item: $reviewingChanges) { target in
             let changes = model.agentChanges[target.id] ?? []
             AgentChangesReview(
@@ -111,17 +120,30 @@ struct ConversationView: View {
             }
         }
         .confirmationDialog(
-            "Clear conversation?",
+            startingNewChat ? "Start a new chat?" : "Clear conversation?",
             isPresented: $confirmingClear,
             titleVisibility: .visible
         ) {
-            Button("Clear conversation", role: .destructive) {
-                Task { await model.clearConversation() }
+            Button(startingNewChat ? "Start New Chat" : "Clear conversation", role: .destructive) {
+                let discardDraft = startingNewChat
+                Task {
+                    guard await model.clearConversation(discardDraft: discardDraft) else { return }
+                    if discardDraft {
+                        showingPreview = false
+                        preview.selectedID = nil
+                        followLatest = true
+                        userScrolling = false
+                        feedPosition = ScrollPosition(edge: .bottom)
+                    }
+                    composing = true
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                "Messages and recent chat context will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain."
+                startingNewChat
+                    ? "Messages, recent chat context, attachments and your unsent draft will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain."
+                    : "Messages and recent chat context will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain."
             )
         }
         .onChange(of: scenePhase) {
@@ -145,13 +167,14 @@ struct ConversationView: View {
 
     private var sceneActions: GleanaryActions {
         var actions = GleanaryActions(
-            enabled: model.ready,
-            newNote: { model.composer = "@librarian save: "; composing = true },
+            enabled: model.ready && !model.clearingConversation,
+            newItem: { requestClear(startNewChat: true) },
             attach: { importing = true },
-            focus: { composing = true }
+            focus: { composing = true },
+            newItemTitle: "New Chat"
         )
         if canClearConversation {
-            actions.clearConversation = { confirmingClear = true }
+            actions.clearConversation = { requestClear() }
         }
         if model.ready, !draftIsEmpty {
             actions.sendMessage = send
@@ -223,6 +246,11 @@ struct ConversationView: View {
         )
     }
 
+    private func requestClear(startNewChat: Bool = false) {
+        startingNewChat = startNewChat
+        confirmingClear = true
+    }
+
     private var canClearConversation: Bool {
         model.ready && !model.messages.isEmpty && !model.clearingConversation
     }
@@ -241,7 +269,7 @@ struct ConversationView: View {
                 SettingsLink { Label("Settings…", systemImage: "gearshape") }
                 Divider()
                 Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
-                    confirmingClear = true
+                    requestClear()
                 }
                 .disabled(!canClearConversation)
             }
@@ -397,6 +425,14 @@ struct ConversationView: View {
                     proposalCard(proposal)
                 }
             if let taskID = message.taskID, isLastReply(message) {
+                if let filing = model.seriesFiling[taskID] {
+                    SeriesFilingActions(
+                        status: filing,
+                        working: model.isWorking(on: taskID),
+                        review: { reviewingFiling = filing },
+                        undo: { Task { await model.undoSeriesFiling(filing) } }
+                    )
+                }
                 if let changes = model.agentChanges[taskID], !changes.isEmpty {
                     AgentChangesCard(
                         changes: changes,

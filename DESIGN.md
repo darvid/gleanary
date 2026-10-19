@@ -271,6 +271,11 @@ button radius. Code blocks use a rectangular control surface.
   Command-Return (send), so they remain available while typing. Toolbar
   menu entries invoke the same actions without duplicate key equivalents.
   Command-K opens its confirmation dialog; it never clears immediately.
+  Command-N is New Chat in Chat and New Note in Library. New Chat confirms
+  before resetting the single conversation, cancelling its work, and
+  discarding its unsent draft and attachments. Saved library items remain.
+  It returns to a blank, focused composer; Clear Conversation continues to
+  preserve the unsent draft. Neither shortcut inserts an agent command.
   The sidebar toggle and title share one stable navigation item to avoid
   native inter-item gaps. Sidebar animation is scoped below the toolbar;
   the navigation item does not animate. The entire titlebar uses the
@@ -290,6 +295,22 @@ button radius. Code blocks use a rectangular control surface.
   controls when the worker finishes.
 - **Bookmark import:** File › Import Bookmarks… opens a native sheet: choose a browser/Raindrop HTML or Raindrop CSV export, review each folder's destination (existing category, a proposed new Johnny Decimal category, or unfiled) in an inset list with subfolders indented 16pt, then import with determinate progress. Imports read only export metadata; a page is fetched after its note stays open for one second.
 - **Categorize Unfiled:** a sheet that runs suggestions in the background and groups them by category in collapsed disclosure rows with Accept All/Reject All, per-item accept/reject icons, an "Accept N Likely" bulk action with undo, and model-proposed new categories that must be created explicitly. The engine line states whether data leaves the Mac.
+- **Research-series filing:** publication commits before the Librarian
+  checks the new notes and index against the existing filing scheme.
+  Confident existing homes are applied as an undoable batch. Ambiguous
+  placements and proposed new categories wait for review in one Organize
+  notes sheet, scoped to this collection. Reused notes and cited sources
+  keep their filing. The configured filing model sees all new members in
+  one bounded classification call within the remaining series budget.
+  A durable claim prevents automatic repeat calls. Cancellation, missing
+  taxonomy, or inference failure cannot invalidate published notes or
+  repeat research. Existing publications also expose the scoped follow-up.
+- **Chat work indicator:** a 6pt foreground dot at the trailing edge of
+  the Chat sidebar row appears only while its worker is running, including
+  while browsing Library or other destinations. A slow native pulse stays
+  inside a fixed 14pt footprint; the row and label do not move. Reduce
+  Motion and inactive windows keep the dot steady. The row's accessible
+  value says Working, without making the dot another navigation target.
 - **Chat reading position:** follow the bottom while within 40pt of the
   latest content. New messages, streamed text in an existing message, and
   late layout growth stay visible. User scrolling upward suspends
@@ -304,6 +325,116 @@ button radius. Code blocks use a rectangular control surface.
   bibliography stays in the saved document but is replaced by these
   controls in chat; inline citations remain clickable. Other references
   retain the existing generic document presentation.
+- **Evidence-first research series:** new requests extract explicit user
+  requirements and source policy before research. A provisional subject
+  map guides evidence collection; it does not commit to note boundaries.
+  Read saved notes first and prefer sufficient existing coverage. Gather
+  public primary documentation for current research or remaining gaps.
+  Retain pages and check exact quotations before allocating note purposes.
+  Planning and feasibility review see quotation records and source
+  metadata, not uncitable page continuations or generated fact summaries.
+  Retrieval dates use ISO 8601 and do not imply publication dates.
+  An independently reviewed plan assigns core evidence to one note,
+  permits shared prerequisite context, and names neighboring exclusions.
+  All writers and the series editor receive that same coverage contract.
+  Notes can contain one to eight supported paragraphs without padding.
+  Explicit requirements cannot be deferred; optional omissions appear in
+  the index. A broad request is not an exhaustive vendor-release survey.
+  One typed, versioned working state records phases, active plans, draft
+  attempts, paragraph verdicts, editorial findings, and next actions.
+  Immutable snapshots retain history; Retry does not reset counters or
+  infer progress from unrelated recovery artifacts. Each note has three
+  total draft attempts and at most two editorial revisions. Newly found
+  problems in other notes do not consume a shared repair allowance.
+  All calls retain the 96-call run budget. Search/download attempts are
+  recorded before external work; unknown interrupted requests are not
+  silently repeated. Library-only requests never browse. Optional
+  model-proposed relationships can change; explicitly required endpoints
+  cannot disappear. The app renders conceptual links rather than asking
+  models to choose exact prose anchors. Publication validates a frozen
+  plan, matching paragraph reviews, final editorial result, and source
+  snapshot before committing the whole series atomically.
+- **Legacy research-series recovery:** existing stopped runs keep their
+  original engine, IDs, drafts, and recovery checkpoints. Their
+  final-review failures name the rejected
+  link rule or overlapping note instead of reporting generic Curator
+  checks. Saved research, drafts, and failed reviews remain available.
+  Each resume allows one repair pass and at most two Curator calls within
+  the existing total call budget. Malformed links receive validation
+  feedback; overlap reports identify only the new drafts to revise and
+  their read-only comparison notes. Revisions must pass the same citation
+  and quotation-support checks as initial drafts. Valid drafts and
+  existing library notes stay unchanged. Original checkpoints remain
+  immutable; verified revisions and the accepted draft/link bundle have
+  their own checkpoints. Retry resumes verified revisions after an
+  interruption. Relationships cannot disappear merely to pass repair.
+  Publication still commits the complete validated series atomically, or
+  nothing. Older Boolean-only overlap verdicts get a diagnostic review
+  before targeted revision; no draft is guessed from a vague rejection.
+  Initial draft failures name the note, the rejected citation or prose
+  rule, and one-based paragraph numbers where available. Incomplete
+  verifier output is not mistaken for an unsupported claim. Each current
+  paragraph review distinguishes quotation support from topic relevance.
+  Rejections include an exact substring of the failed paragraph and a
+  bounded reason; approved paragraphs carry neither. Missing reasons,
+  unanchored claims, wrong paragraph numbers, and contradictory approval
+  cannot pass verification. Reasons remain untrusted critique, not new
+  evidence. The Writer uses them to narrow or remove rejected claims,
+  preserving supported paragraphs unless overlap repair requires changes.
+  Draft feedback checkpoints retain reviews for the next bounded attempt
+  and Retry. Evidence and overlap-comparison context must still match
+  before a failed revision is reused. Retry keeps research and verified
+  drafts; it does not repeat the original web research. Older Boolean-only
+  feedback remains readable without fabricated explanations. Draft
+  verification still allows at most two attempts per resume under the same
+  total call budget; explanations require no additional inference calls.
+- **Legacy targeted evidence recovery:** before rewriting an overlapping
+  note, assess whether saved quotations can fulfill both its title and purpose
+  with a distinct contribution. Relevant records may come from another
+  extraction field; selecting them changes only this note's evidence
+  scope. If insufficient, allow one targeted search per affected note for
+  the entire run, reading at most two pages and extracting at most eight
+  verified facts per page. Only a derived public keyword query reaches
+  search, never the draft, PKMS excerpts, or reviewer prose. Library-only
+  requests never search the web. Reassess the retrieved quotations; search
+  summaries are not evidence. All assessment, search, extraction, drafting,
+  and review calls share the original 96-call budget.
+  Checkpoint search and download attempts before external work, so Retry
+  cannot repeat an interrupted targeted request indefinitely. Keep pending
+  research separate from approved evidence scopes. Restore an interrupted
+  revision from its saved comparison and evidence. Existing sources,
+  facts, verified drafts, and links stay intact; supplements have explicit
+  per-topic source and record caps. Freeze the exact expanded evidence in
+  the accepted publication bundle, including citation provenance and search
+  counts. An exhausted search, unsupported revision, or repeated overlap
+  after targeted research stops with an insufficient-evidence explanation;
+  Retry does not restart that topic's search. Nothing is published
+  partially.
+- **Legacy evidence-driven scope adjustment:** if an automatically planned
+  note still exceeds its saved evidence, propose one narrower supported scope
+  and independently review it against the original user request. Never
+  defer explicit requested coverage, modalities, exhaustive requirements,
+  or relationships. Both checks share the original call budget. Keep
+  IDs, fields, other verified drafts, source policies, and required links
+  intact. Record removed optional coverage in the index's Remaining
+  coverage section; reverify the affected draft against its revised title
+  and purpose. Checkpoint proposals, refusals, approvals, scoped evidence,
+  and verified revisions. Retry can restore an approved scope even from
+  an older exhausted checkpoint, without repeating research. Freeze and
+  validate the revised outline and disclosures in the accepted atomic
+  publication bundle. A refused scope remains stopped.
+- **Knowledge-entry voice:** new Writer documents and research-series
+  notes default to reusable reference entries, not reports about the
+  research. Use concise concept-focused titles, lead with the useful idea,
+  and omit filler openings, obligatory conclusions, and research-process
+  narration. Keep dates or versions when they define the subject's scope.
+  Preserve citations, uncertainty, disagreements, and evidence limits.
+  Both series outlining and prose receive the selected writing style;
+  prose also receives the original request so explicit report, blog, or
+  other format requests can override the default. Plain reflects this
+  reference voice; other presets and saved custom styles stay intact.
+  Existing notes are not rewritten, and captured-source summaries keep
+  their separate summarization instructions.
 - **Research note titles:** new Researcher summaries and comparisons get
   concise, topic-focused titles generated from the verified result, not a
   copied source headline. Three to eight words is guidance; 12 words and
@@ -369,7 +500,10 @@ button radius. Code blocks use a rectangular control surface.
   one first. Source actions resolve the captured source's own saved item,
   not a generated note that cites it. Accepted messages move the submitted
   attachments out of the composer into clickable context chips inside
-  the sent bubble. Failed submissions keep the draft and attachments;
+  the sent bubble. New messages never silently reattach references from
+  earlier replies when the composer has no attachments. Conversation
+  history remains available; retries retain their original attachments.
+  Failed submissions keep the draft and attachments;
   retries preserve a new draft. Sent context survives reopening, and
   deleted items show a neutral unavailable label. No second composer is
   introduced.

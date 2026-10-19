@@ -128,7 +128,7 @@ struct ContentView: View {
             \.gleanaryActions,
             chatting && readerTarget == nil ? nil : GleanaryActions(
                 enabled: library.ready && !library.busy,
-                newNote: {
+                newItem: {
                     // Activity and Captures have no editing pane.
                     showingActivity = false
                     readerTarget = nil
@@ -756,10 +756,19 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: sidebarSelection) {
-            if conversation != nil {
-                Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
-                    .tag(SidebarItem.conversation)
+            if let conversation {
+                HStack {
+                    Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
+                    Spacer()
+                    if conversation.running {
+                        ChatWorkingIndicator(color: sidebarColor(nil))
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityValue(conversation.running ? "Working" : "")
+                .help(conversation.running ? "Chat is working" : "Chat")
+                .tag(SidebarItem.conversation)
             }
             // The agents' scheduled work sits with Chat, above the library's content.
             HStack {

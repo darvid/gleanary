@@ -71,9 +71,10 @@ struct GleanaryApp: App {
 
 struct GleanaryActions {
     let enabled: Bool
-    let newNote: () -> Void
+    let newItem: () -> Void
     let attach: () -> Void
     let focus: () -> Void
+    var newItemTitle = "New Note"
     /// Nil where the Library isn't showing, such as the conversation.
     var importBookmarks: (() -> Void)?
     var categorize: (() -> Void)?
@@ -104,7 +105,7 @@ private struct GleanaryCommands: Commands {
                 .disabled(navigation?.canGoForward != true)
         }
         CommandGroup(replacing: .newItem) {
-            Button("New Note") { actions?.newNote() }.keyboardShortcut("n")
+            Button(actions?.newItemTitle ?? "New Note") { actions?.newItem() }.keyboardShortcut("n")
                 .disabled(actions?.enabled != true)
             Button("Attach Documents…") { actions?.attach() }.keyboardShortcut("o")
                 .disabled(actions?.enabled != true)
