@@ -1,8 +1,10 @@
 import SwiftUI
 
-struct KnowledgeGraphView: View {
-    @Bindable var graph: KnowledgeGraphModel
+struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
+    @Bindable var graph: Graph
     let openNote: (UUID) -> Void
+    var compact = false
+    var camera: Binding<GraphCamera?>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
@@ -18,7 +20,7 @@ struct KnowledgeGraphView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                Color.black
+                Color(nsColor: .windowBackgroundColor)
                 Canvas { context, size in
                     drawEdges(in: &context, size: size)
                     drawNodes(in: &context, size: size)
@@ -82,17 +84,19 @@ struct KnowledgeGraphView: View {
                 }
             }
             .background {
-                MouseWheelZoom { delta, location in
-                    zoom(by: delta, around: location, size: geometry.size)
+                if !compact {
+                    MouseWheelZoom { delta, location in
+                        zoom(by: delta, around: location, size: geometry.size)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .overlay(alignment: .topLeading) {
-                if graph.hasScopedView {
+                if let overview = graph.overviewAction {
                     Button(
                         graph.scopeLabel,
                         systemImage: "arrow.left"
-                    ) { graph.overview() }
+                    ) { overview() }
                         .lineLimit(1).frame(maxWidth: 400, alignment: .leading).padding(18)
                 }
             }
@@ -101,6 +105,18 @@ struct KnowledgeGraphView: View {
                     controls(size: geometry.size).padding(18)
                 }
             }
+            .onAppear {
+                if let saved = camera?.wrappedValue {
+                    scale = saved.scale
+                    pan = saved.pan
+                    hasFitted = true
+                } else if !graph.positions.isEmpty, !graph.layingOut {
+                    fit(size: geometry.size)
+                    hasFitted = true
+                }
+            }
+            .onChange(of: scale) { saveCamera() }
+            .onChange(of: pan) { saveCamera() }
             .onChange(of: graph.cameraReset) { hasFitted = false; fit(size: geometry.size) }
             .onChange(of: graph.layingOut) { _, running in
                 if !running, !hasFitted,
@@ -119,6 +135,10 @@ struct KnowledgeGraphView: View {
         }
     }
 
+    private func saveCamera() {
+        camera?.wrappedValue = GraphCamera(scale: scale, pan: pan)
+    }
+
     private func point(_ id: String, size: CGSize) -> CGPoint? {
         guard let position = graph.positions[id] else { return nil }
         return CGPoint(
@@ -135,7 +155,8 @@ struct KnowledgeGraphView: View {
             ) else { continue }
             let highlighted = edge.id == graph.selectedEdgeID || edge.source == keyboardNode || edge
                 .target == keyboardNode
-            let inferred = edge.predicate != .linksTo && edge.predicate != .authoredBy
+            let inferred = ![GraphPredicate.linksTo, .authoredBy, .relatedTo, .derivedFrom]
+                .contains(edge.predicate)
             var path = Path(); path.move(to: start); path.addLine(to: end)
             context.stroke(
                 path,
@@ -143,7 +164,7 @@ struct KnowledgeGraphView: View {
                     .opacity(contrast == .increased ? 0.9 : 0.5)),
                 style: StrokeStyle(lineWidth: highlighted ? 2 : 1, dash: inferred ? [4, 4] : [])
             )
-            if highlighted {
+            if highlighted, edge.predicate != .relatedTo {
                 let angle = atan2(end.y - start.y, end.x - start.x)
                 let tip = CGPoint(x: end.x - cos(angle) * 15, y: end.y - sin(angle) * 15)
                 var arrow = Path(); arrow.move(to: CGPoint(
@@ -211,7 +232,7 @@ struct KnowledgeGraphView: View {
             )) }) {
                 context.fill(
                     Path(roundedRect: labelRect.insetBy(dx: -3, dy: -1), cornerRadius: 3),
-                    with: .color(.black)
+                    with: .color(Color(nsColor: .windowBackgroundColor))
                 )
                 context.draw(text, at: CGPoint(x: center.x, y: center.y + 16), anchor: .top)
                 labelRects.append(labelRect)
@@ -353,8 +374,7 @@ struct KnowledgeGraphView: View {
     }
 
     private func zoom(by delta: CGFloat, around location: CGPoint, size: CGSize) {
-        guard CGRect(origin: .zero, size: size).contains(location),
-              graph.selection == nil || location.x < size.width - 380 else { return }
+        guard CGRect(origin: .zero, size: size).contains(location) else { return }
         let oldScale = scale
         let boundedDelta = min(12, max(-12, Double(delta)))
         let newScale = min(3, max(0.15, oldScale * exp(boundedDelta * 0.018)))
@@ -378,8 +398,8 @@ struct KnowledgeGraphView: View {
             max(
                 0.15,
                 min(
-                    (size.width - 220) / max(1, maxX - minX),
-                    (size.height - 150) / max(1, maxY - minY)
+                    max(40, size.width - (compact ? 100 : 220)) / max(1, maxX - minX),
+                    max(40, size.height - (compact ? 100 : 150)) / max(1, maxY - minY)
                 )
             )
         )
@@ -395,9 +415,13 @@ struct KnowledgeGraphView: View {
                 }
                 Button("Zoom in", systemImage: "plus") { scale = min(3, scale * 1.25) }
             }.labelStyle(.iconOnly).fixedSize()
-            Text("\(graph.snapshot.nodes.count) of \(graph.snapshot.totalNodes) knowledge nodes")
-                .font(.caption).foregroundStyle(.secondary)
-            if graph.snapshot.nodes.count >= graph.visibleLimit, graph.visibleLimit < 500 {
+            if !compact {
+                Text(graph.canvasCountLabel)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !compact, graph.snapshot.nodes.count < graph.snapshot.totalNodes,
+               graph.visibleLimit < 500
+            {
                 Button("Show more") { graph.expand() }.controlSize(.small)
             }
             if graph.snapshot.truncatedEdges {

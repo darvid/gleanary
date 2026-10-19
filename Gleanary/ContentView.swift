@@ -34,9 +34,11 @@ struct ContentView: View {
     /// Area digits folded in the sidebar's Filing section, comma-separated.
     @AppStorage("collapsedFilingAreas") private var collapsedAreas = ""
     @State private var atlas = KnowledgeAtlasModel()
+    @State private var graph = LibraryGraphModel()
+    @State private var graphFocus: UUID?
     /// Shared with the map's Hide empty toggle.
     @AppStorage("atlasHidesEmptyCategories") private var atlasHidesEmpty = false
-    /// The item opened from the Atlas; the Atlas keeps its own state underneath.
+    /// The item opened from the Atlas or Graph; each canvas keeps its state underneath.
     @State private var atlasItem: UUID?
     @State private var history = NavigationHistory<NavigationLocation>()
     /// The history entry being returned to; changes on the way there update it, not add more.
@@ -137,7 +139,13 @@ struct ContentView: View {
                     }
                     editing = MarkdownDocument(name: "Untitled", markdown: "")
                 },
-                attach: { importing = true }, focus: { searchFocused = true },
+                attach: { importing = true }, focus: {
+                    if presentation == .graph {
+                        NotificationCenter.default.post(name: .focusLibraryGraphSearch, object: nil)
+                    } else {
+                        searchFocused = true
+                    }
+                },
                 importBookmarks: { importingBookmarks = true },
                 categorize: { categorizing = true }
             )
@@ -195,7 +203,7 @@ struct ContentView: View {
             showInAtlas(scope ?? .all)
             if let initialSelection {
                 selection = [initialSelection]; preview.selectedID = initialSelection
-                if presentation == .map {
+                if presentation != .list {
                     atlasItem = initialSelection
                 }
             }
@@ -261,17 +269,6 @@ struct ContentView: View {
             }
             Task { await library.documentGrid.reload(); await library.refreshCaptures() }
         }
-        .onChange(of: presentation) {
-            atlasItem = nil
-            if presentation == .list {
-                if case let .category(id) = atlas.focusID {
-                    scope = .category(id)
-                }
-                if let id = selection.first {
-                    preview.selectedID = id
-                }
-            }
-        }
         .onChange(of: selection) { old, new in
             if let id = new.subtracting(old).first ?? new.first {
                 preview.selectedID = id
@@ -282,6 +279,10 @@ struct ContentView: View {
         .onChange(of: library.documentGrid.generation) { page = 0 }
         .onDisappear { library.documentGrid.pause() }
         .onExitCommand { library.documentGrid.query = "" }
+        .environment(\.libraryGraphContext, LibraryGraphContext(
+            store: library.store, refreshToken: library.documentGrid.generation,
+            explore: exploreGraph
+        ))
         .environment(\.addToChat, conversation == nil ? nil : addToChat)
         .environment(\.enterReader) { target in
             source = nil
@@ -378,8 +379,10 @@ struct ContentView: View {
             }
         } else if automating {
             AutomationsView(model: library.automations, open: openSavedItem)
-        } else if presentation == .list || scope == .captures || scope == .archived {
+        } else if scope == .captures || scope == .archived || presentation == .list {
             libraryColumns
+        } else if presentation == .graph {
+            graphPane
         } else {
             atlasPane
         }
@@ -414,12 +417,7 @@ struct ContentView: View {
         }
         if !chatting, !automating, !showingActivity, readerTarget == nil {
             ToolbarItem {
-                Picker("Presentation", selection: $presentation) {
-                    Label("Map", systemImage: "square.grid.2x2").tag(LibraryPresentation.map)
-                    Label("List", systemImage: "list.bullet").tag(LibraryPresentation.list)
-                }
-                .pickerStyle(.segmented).labelStyle(.iconOnly).fixedSize()
-                .help("Browse the library as a map or a list")
+                LibraryPresentationPicker(selection: presentationSelection)
             }
             .sharedBackgroundVisibility(.hidden)
         }
@@ -623,6 +621,62 @@ struct ContentView: View {
         }
     }
 
+    private var presentationSelection: Binding<LibraryPresentation> {
+        Binding(get: { presentation }, set: { newValue in
+            atlasItem = nil
+            presentation = newValue
+            if newValue == .list {
+                if case let .category(id) = atlas.focusID, scope != .captures, scope != .archived {
+                    scope = .category(id)
+                }
+                preview.selectedID = selection.first
+            }
+        })
+    }
+
+    @ViewBuilder private var graphPane: some View {
+        if atlasItem != nil || editing != nil {
+            VStack(spacing: 0) {
+                HStack {
+                    Button("Graph", systemImage: "chevron.left") { atlasItem = nil }
+                        .buttonStyle(.borderless).disabled(editing != nil)
+                    Spacer()
+                }.padding(.horizontal, 20).padding(.vertical, 10)
+                Divider()
+                detail(openDocument: openFromGraph)
+            }
+        } else {
+            LibraryGraphView(
+                graph: graph, store: library.store,
+                refreshToken: library.documentGrid.generation, scope: scope ?? .all,
+                kind: $kindFilter,
+                query: Binding(
+                    get: { library.documentGrid.query },
+                    set: { library.documentGrid.query = $0 }
+                ),
+                focus: $graphFocus, openNote: openFromGraph, openSource: { source = $0 }
+            )
+        }
+    }
+
+    private func openFromGraph(_ id: UUID) {
+        preview.selectedID = id
+        atlasItem = id
+    }
+
+    private func exploreGraph(_ id: UUID) {
+        readerTarget = nil
+        chatting = false
+        automating = false
+        showingActivity = false
+        graphFocus = id
+        atlasItem = nil
+        library.documentGrid.query = ""
+        kindFilter = .all
+        scope = .all
+        presentation = .graph
+    }
+
     /// Shows a saved item from anywhere, such as the Captures list. Switching to All items
     /// clears the selection, so the item is selected after that, not before.
     private func openSavedItem(_ id: UUID) {
@@ -645,6 +699,8 @@ struct ContentView: View {
         preview.selectedID = id
         if presentation == .map {
             openFromAtlas(id)
+        } else if presentation == .graph {
+            openFromGraph(id)
         }
     }
 
@@ -670,7 +726,8 @@ struct ContentView: View {
     private var location: NavigationLocation {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
-            automations: automating, activity: showingActivity, kindFilter: kindFilter
+            automations: automating, activity: showingActivity, kindFilter: kindFilter,
+            presentation: presentation, graphFocus: graphFocus
         )
     }
 
@@ -714,6 +771,8 @@ struct ContentView: View {
         chatting = target.chatting
         automating = target.automations
         showingActivity = target.activity
+        presentation = target.presentation
+        graphFocus = target.graphFocus
         if scope != target.scope {
             // The scope change resets the Atlas, so its region and item follow it.
             pendingRestore = target
@@ -735,7 +794,11 @@ struct ContentView: View {
             atlas.focus(target.atlasFocus)
         }
         if let id = target.atlasItem {
-            openFromAtlas(id)
+            if target.presentation == .graph {
+                openFromGraph(id)
+            } else {
+                openFromAtlas(id)
+            }
         } else {
             atlasItem = nil
         }
@@ -931,6 +994,7 @@ struct ContentView: View {
             case .automations: chatting = false; automating = true; showingActivity = false
             case .activity: chatting = false; automating = false; showingActivity = true
             case let .library(scope):
+                graphFocus = nil
                 chatting = false
                 automating = false
                 showingActivity = false
@@ -1443,7 +1507,7 @@ struct ContentView: View {
 }
 
 enum LibraryPresentation: String {
-    case map, list
+    case map, list, graph
 }
 
 private struct LibraryDocumentRow: View {

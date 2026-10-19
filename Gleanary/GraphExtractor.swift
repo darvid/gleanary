@@ -51,7 +51,7 @@ enum ExtractedPredicate: String, Codable, Sendable {
         case .improvesOn: self = .improvesOn
         case .supports: self = .supports
         case .limits: self = .limits
-        case .mentions, .linksTo, .authoredBy: return nil
+        case .mentions, .linksTo, .authoredBy, .relatedTo, .derivedFrom: return nil
         }
     }
 }

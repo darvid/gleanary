@@ -160,6 +160,7 @@ struct DocumentPreview: View {
     @Environment(\.addToChat) private var addToChat
     @Environment(\.isReaderMode) private var readerMode
     @Environment(\.enterReader) private var enterReader
+    @Environment(\.libraryGraphContext) private var graphContext
     private var appearance = ReadingAppearance()
 
     private var readingKind: ReadingKind {
@@ -252,7 +253,18 @@ struct DocumentPreview: View {
                             )
                             .accessibilityElement(children: .contain)
                             .accessibilityLabel("Document content")
-                            if showsLibraryDetails, !model.links.isEmpty {
+                            if let graphContext, model.details.archived == nil {
+                                NoteConnectionsView(
+                                    noteID: document.id, store: graphContext.store,
+                                    refreshToken: graphContext.refreshToken,
+                                    explore: graphContext.explore, openNote: openDocument,
+                                    openSource: openSource
+                                )
+                            }
+                            if showsLibraryDetails,
+                               graphContext == nil || model.details.archived != nil,
+                               !model.links.isEmpty
+                            {
                                 itemList(
                                     "Linked",
                                     items: model.links.map { ($0.document, $0.rationale) }

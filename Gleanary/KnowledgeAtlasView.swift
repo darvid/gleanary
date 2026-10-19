@@ -460,8 +460,7 @@ struct KnowledgeAtlasView: View {
     private var accessibilityTiles: some View {
         let camera = atlas.camera
         return ZStack {
-            ForEach(atlas.accessibleTiles, id: \.self) { position in
-                let tile = atlas.layout.tiles[position]
+            ForEach(atlas.accessibleTiles, id: \.id) { tile in
                 let rect = camera.screen(tile.rect)
                 Color.clear
                     .frame(width: max(1, rect.width), height: max(1, rect.height))

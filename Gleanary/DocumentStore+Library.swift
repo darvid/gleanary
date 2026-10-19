@@ -213,13 +213,13 @@ extension DocumentStore {
         AND json_extract(artifact.value, '$.hash') = n.contentHash)
     """
 
-    private static let libraryKindSQL = """
+    static let libraryKindSQL = """
     coalesce((SELECT kind FROM authored_artifacts WHERE noteID = n.id),
         CASE WHEN \(legacySummarySQL) THEN 'summary'
         WHEN EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) THEN 'source' ELSE 'note' END)
     """
 
-    private static func libraryFilter(_ query: String, scope: LibraryScope)
+    static func libraryFilter(_ query: String, scope: LibraryScope)
         -> (sql: String, arguments: StatementArguments)
     {
         let text = String(query.prefix(1000)).trimmingCharacters(in: .whitespacesAndNewlines)
