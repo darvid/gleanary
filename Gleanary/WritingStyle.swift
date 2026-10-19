@@ -71,6 +71,20 @@ struct WritingStyle: Codable, Sendable, Equatable, Hashable, Identifiable {
 
     static let presets = [plain, referenceGuide, blog]
 
+    /// Short descriptions for choosing a style; the full prompt rules stay separate.
+    var settingsSummary: String {
+        switch id {
+        case Self.plain.id:
+            "Direct, readable knowledge entries. Leads with the useful idea and explains technical terms."
+        case Self.referenceGuide.id:
+            "Precise reference material for expert readers. Puts comparisons and tables before commentary."
+        case Self.blog.id:
+            "Conversational writing with a short opening, prose sections, and a closing takeaway."
+        default:
+            "Your own writing preferences. Edit the rules below; changes are saved automatically."
+        }
+    }
+
     /// The one editable style; it starts as a copy of Plain.
     static var starterCustom: WritingStyle {
         var style = plain
@@ -134,6 +148,16 @@ struct WritingStyleChoice: Sendable, Equatable {
         if let data = try? JSONEncoder().encode(custom) {
             defaults.set(data, forKey: Self.customKey)
         }
+    }
+
+    /// Copying a preset is also a selection, not a separate inspection state.
+    mutating func customizeDefaultStyle() {
+        guard defaultStyle.isPreset else { return }
+        var copy = defaultStyle
+        copy.id = WritingStyle.customID
+        copy.name = "Custom"
+        custom = copy
+        defaultID = WritingStyle.customID
     }
 
     /// "… in Plain style" or "using the Blog style" picks a style by name; otherwise the
