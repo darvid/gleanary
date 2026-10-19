@@ -287,9 +287,13 @@ button radius. Code blocks use a rectangular control surface.
   also linked from each More menu; no gear button in the window toolbar.
   Capture is a grouped form with two toggles, both on by default: summarize saved
   links, and save page previews (off fetches no screenshots, share images
-  or video stills). Writing is a grouped form: Default style, a Details
-  for picker, the preset's fields read-only with Copy to Custom, or the
-  custom style's fields to edit. The settings window is 680 × 560pt with
+  or video stills). Writing has one Writing style picker: its selection
+  is the default and owns the description and rules below. A short,
+  left-aligned description precedes expandable Style rules. Preset rules
+  use stacked labels and readable, leading-aligned values; custom rules
+  use multiline editors. Customize copies and selects the preset, asking
+  before replacing a saved custom style. Switching presets preserves that
+  custom style. The settings window is 680 × 560pt with
   24pt content padding. AI controls are disabled during chat work; Stop
   Task remains available above them. The observable running state unlocks
   controls when the worker finishes.
