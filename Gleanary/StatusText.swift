@@ -17,6 +17,27 @@ extension View {
     }
 }
 
+/// Sidebar feedback stays attached to Chat even when another destination is selected.
+struct ChatWorkingIndicator: View {
+    var color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Image(systemName: "circle.fill")
+            .font(.system(size: 6))
+            .foregroundStyle(color.opacity(0.85))
+            .symbolEffect(
+                .pulse,
+                options: .repeating.speed(0.6),
+                isActive: !reduceMotion && scenePhase == .active
+            )
+            .frame(width: 14, height: 14)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
 /// A task's progress line. A stage with a count ("Extracting 12 of 37", or "Fetching 2 of 5:
 /// example.com") keeps its wording still and rolls the count; the detail after it, and any other
 /// change of wording, cross-fades.

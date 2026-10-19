@@ -75,9 +75,9 @@ actor BookmarkCategorizer {
         let key: String
     }
 
-    func taxonomy() async throws -> Taxonomy {
+    func taxonomy(allowEmpty: Bool = false) async throws -> Taxonomy {
         let categories = try await store.categories()
-        guard !BookmarkClassification.choices(categories).isEmpty else {
+        guard allowEmpty || !BookmarkClassification.choices(categories).isEmpty else {
             throw CategorizationError.noCategories
         }
         let engine = inference.capabilities.identifier
@@ -90,10 +90,12 @@ actor BookmarkCategorizer {
     }
 
     func run(
+        noteIDs: Set<UUID>? = nil,
         progress: @escaping @Sendable (CategorizationProgress) async -> Void = { _ in }
     ) async throws -> CategorizationProgress {
         let candidates = try await store.filingCandidates()
-        let taxonomy = try await taxonomy()
+            .filter { noteIDs?.contains($0.id) ?? true }
+        let taxonomy = try await taxonomy(allowEmpty: noteIDs != nil)
         var state = CategorizationProgress(total: candidates.count)
         await progress(state)
         let size = inference.classificationBatchSize

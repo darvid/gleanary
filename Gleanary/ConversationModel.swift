@@ -15,6 +15,7 @@ final class ConversationModel {
     /// Writer scopes waiting for confirmation, by task.
     var writerScopes: [UUID: WriterRequest] = [:]
     var categories: [DecimalCategory] = []
+    var seriesFiling: [UUID: SeriesFiling.Status] = [:]
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
     var referenceDetails: [UUID: ConversationReference] = [:]
@@ -52,13 +53,20 @@ final class ConversationModel {
         tasks.first { $0.id == activeID && $0.active }
     }
 
+    func isWorking(on taskID: UUID) -> Bool {
+        running && activeID == taskID
+    }
+
     private var connectionReady: Bool {
         customCoordinator || (!chatGPT.busy && !chatGPT.signingIn)
     }
 
     private func configureInference() async throws {
         if !customCoordinator {
-            try await coordinator.setInference(chatGPT.requestInference())
+            try await coordinator.setInference(
+                chatGPT.requestInference(),
+                filing: chatGPT.filingInference()
+            )
         }
     }
 
@@ -88,6 +96,7 @@ final class ConversationModel {
             let updatedProposals = try await store.proposals()
             let updatedChanges = try await Dictionary(grouping: store.agentChanges(), by: \.taskID)
             let updatedCategories = try await store.categories()
+            let updatedFiling = try await store.publishedSeriesFiling()
             let updatedScopes = try await Dictionary(
                 store.awaitingWriterRequests().map { ($0.taskID, $0) },
                 uniquingKeysWith: { first, _ in first }
@@ -110,9 +119,24 @@ final class ConversationModel {
             proposals = updatedProposals
             agentChanges = updatedChanges
             categories = updatedCategories
+            seriesFiling = updatedFiling
             writerScopes = updatedScopes
             titles = updatedTitles
             referenceDetails = updatedReferences
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func undoSeriesFiling(_ status: SeriesFiling.Status) async {
+        do {
+            for batch in status.batches {
+                _ = try await store.undoFilingSuggestions(
+                    batch: batch,
+                    noteIDs: Set(status.noteIDs),
+                    includeSources: false
+                )
+            }
+            await refresh()
+            await didMutate?()
         } catch { self.error = error.localizedDescription }
     }
 
@@ -168,14 +192,9 @@ final class ConversationModel {
                 return
             }
             let route = try ConversationRoute(request)
-            let last = messages.last(where: { $0.author != "user" && !$0.references.isEmpty })
-            let lastSources = last?
-                .author == "researcher" ? Array(last?.references.dropFirst() ?? []) : last?
-                .references ?? []
             let capturing = route.url != nil || captureID != nil || retry?.captureID != nil
-            let context = capturing ? [] : sources ?? retry?
-                .sources ??
-                (selectedSources.isEmpty ? Array(lastSources.prefix(4)) : selectedSources)
+            // History remains conversational context, not invisible draft attachments.
+            let context = capturing ? [] : sources ?? retry?.sources ?? selectedSources
             let userSelected = !capturing && retry == nil
                 && (sources != nil || !selectedSources.isEmpty)
             let id = try await store.beginConversation(
@@ -372,8 +391,9 @@ final class ConversationModel {
         await refresh()
     }
 
-    func clearConversation() async {
-        guard ready, !submitting else { return }
+    @discardableResult
+    func clearConversation(discardDraft: Bool = false) async -> Bool {
+        guard ready, !submitting else { return false }
         submitting = true
         clearingConversation = true
         conversationEpoch = UUID()
@@ -385,13 +405,21 @@ final class ConversationModel {
             messages = []
             tasks = []
             selectedSources = []
+            if discardDraft {
+                composer = ""
+            }
             titles = [:]
             referenceDetails = [:]
             hasOlderMessages = true
             error = nil
             clearingConversation = false
             await refresh()
-        } catch { self.error = error.localizedDescription }
+            composerFocusRequest = UUID()
+            return true
+        } catch {
+            self.error = error.localizedDescription
+            return false
+        }
     }
 
     func select(_ id: UUID) {

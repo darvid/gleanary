@@ -42,7 +42,7 @@ struct WriterAgent {
                 of: "If write_document returns an error, fix the draft and call it again. Once it is accepted,\nreply with one short sentence and stop.",
                 with: "Return only the document."
             )
-        return AIProsePolicy.instructions(for: base + "\n" + (generalKnowledge
+        return AIProsePolicy.knowledgeEntryInstructions(for: base + "\n" + (generalKnowledge
                 ? "General knowledge is allowed for context: set general to true on every block that uses it, and the document marks those blocks."
                 :
                 "General knowledge is not allowed: every block cites records, and general is always false.")

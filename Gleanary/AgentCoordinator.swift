@@ -4,6 +4,7 @@ actor AgentCoordinator {
     let store: DocumentStore
     let ingestion: IngestionEngine
     private(set) var inference: any ConversationInferring
+    private(set) var filingInference: (any ConversationInferring)?
     let search: SearchEngine
     let researchFetcher: any SourceFetching
     let writingStyles: @Sendable () -> WritingStyleChoice
@@ -137,9 +138,13 @@ actor AgentCoordinator {
         try await ingestion.cancel(id)
     }
 
-    func setInference(_ inference: any ConversationInferring) async throws {
+    func setInference(
+        _ inference: any ConversationInferring,
+        filing: (any ConversationInferring)? = nil
+    ) async throws {
         guard !executing else { throw ConversationError.busy }
         self.inference = inference
+        filingInference = filing
         // Captures made from Chat summarize with the same provider.
         await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
     }

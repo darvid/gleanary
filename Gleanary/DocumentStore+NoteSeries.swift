@@ -158,6 +158,60 @@ extension DocumentStore {
         }
     }
 
+    /// Revisions and failed reviews remain immutable. Retry resumes the newest checkpoint.
+    func latestSeriesArtifact<Value: Codable & Sendable>(
+        _ run: NoteSeries.Run,
+        kind: NoteSeries.ArtifactKind,
+        slotPrefix: String = "",
+        as type: Value.Type
+    ) throws -> NoteSeries.Artifact<Value>? {
+        let slot = try readyDatabase().read { db in
+            try String.fetchOne(db, sql: """
+            SELECT slot FROM note_series_artifacts
+            WHERE runID = ? AND kind = ? AND substr(slot, 1, length(?)) = ?
+            ORDER BY createdAt DESC, rowid DESC LIMIT 1
+            """, arguments: [run.id.uuidString, kind.rawValue, slotPrefix, slotPrefix])
+        }
+        guard let slot else { return nil }
+        return try seriesArtifact(run, kind: kind, slot: slot, as: type)
+    }
+
+    /// Workflow snapshots are an append-only sequence, independent of wall-clock changes.
+    func researchSeriesState(_ run: NoteSeries.Run) throws -> NoteSeries
+        .Artifact<ResearchSeries.State>?
+    {
+        let slot = try readyDatabase().read { db in
+            try String.fetchOne(
+                db,
+                sql: "SELECT slot FROM note_series_artifacts WHERE runID = ? AND kind = 'workflow' ORDER BY rowid DESC LIMIT 1",
+                arguments: [run.id.uuidString]
+            )
+        }
+        guard let slot else { return nil }
+        return try seriesArtifact(run, kind: .workflow, slot: slot, as: ResearchSeries.State.self)
+    }
+
+    func seriesArtifactIncludesParents(
+        _ run: NoteSeries.Run,
+        artifactID: UUID,
+        parents: [UUID]
+    ) throws -> Bool {
+        try readyDatabase().read { db in
+            guard let data = try Data
+                .fetchOne(
+                    db,
+                    sql: "SELECT parents FROM note_series_artifacts WHERE runID = ? AND id = ?",
+                    arguments: [run.id.uuidString,
+                                artifactID.uuidString]
+                )
+            else {
+                throw NoteSeries.Failure.invalidArtifact
+            }
+            let recorded = try JSONDecoder().decode([UUID].self, from: data)
+            return Set(parents).isSubset(of: Set(recorded))
+        }
+    }
+
     @discardableResult
     func checkpointSeries<Value: Codable & Sendable>(
         _ run: NoteSeries.Run,
@@ -216,43 +270,41 @@ extension DocumentStore {
     /// All member notes, their index, links, provenance and the success message commit together.
     /// Re-entering after a completed commit returns the same IDs; it never rewrites the notes.
     func publishNoteSeries(_ run: NoteSeries.Run) throws -> NoteSeries.Publication {
-        let outline = try requiredSeriesArtifact(run, kind: .outline, as: NoteSeries.Outline.self)
-        let dossier = try requiredSeriesArtifact(run, kind: .dossier, as: NoteSeries.Dossier.self)
-        let curation = try requiredSeriesArtifact(
+        let originalOutline = try requiredSeriesArtifact(
             run,
-            kind: .curation,
-            as: NoteSeries.Curation.self
+            kind: .outline,
+            as: NoteSeries.Outline.self
         )
-        var drafts: [UUID: NoteSeries.Draft] = [:]
-        for entry in outline.entries where entry.existingNoteID == nil {
-            drafts[entry.id] = try requiredSeriesArtifact(
-                run,
-                kind: .draft,
-                slot: entry.id.uuidString,
-                as: NoteSeries.Draft.self
-            )
-        }
+        let original = try requiredSeriesArtifact(run, kind: .dossier, as: NoteSeries.Dossier.self)
+        let reviewed = try publicationSeries(run, outline: originalOutline)
+        let outline = reviewed.scope?.outline ?? originalOutline
+        let dossier = reviewed.evidence ?? original
+        let curation = reviewed.curation, drafts = reviewed.drafts
         let web = try seriesArtifact(run, kind: .webSearch, as: WebResearchResult.self)?.value
         try dossier.validate()
-        try curation.validate(outline: outline, drafts: drafts, library: dossier.sources)
+        if let workflow = reviewed.workflow,
+           workflow.request != run.request
+        {
+            throw NoteSeries.Failure.invalidArtifact
+        }
+        try reviewed.validate(outline: originalOutline, dossier: original)
         let rendered = try SeriesRenderer.render(
             run: run,
             outline: outline,
             dossier: dossier,
             drafts: drafts,
-            curation: curation
+            curation: curation,
+            minimumParagraphs: reviewed.workflow == nil ? 2 : 1
         )
         var evidence: [UUID: WebResearchResult] = [:]
-        if let web {
-            for note in [rendered.index] + rendered.notes {
-                let paragraphs = note.id == run.indexID ? drafts.values
-                    .flatMap(\.paragraphs) : drafts[note.id]?.paragraphs ?? []
-                evidence[note.id] = try SeriesRenderer.externalEvidence(
-                    records: Set(paragraphs.flatMap(\.records)),
-                    dossier: dossier,
-                    searchCount: web.searchCount
-                )
-            }
+        for note in [rendered.index] + rendered.notes {
+            let paragraphs = note.id == run.indexID ? drafts.values
+                .flatMap(\.paragraphs) : drafts[note.id]?.paragraphs ?? []
+            evidence[note.id] = try SeriesRenderer.externalEvidence(
+                records: Set(paragraphs.flatMap(\.records)),
+                dossier: dossier,
+                searchCount: (web?.searchCount ?? 0) + (dossier.recoverySearchCount ?? 0)
+            )
         }
         try Task.checkCancellation()
         return try activityWrite(
@@ -357,6 +409,35 @@ extension DocumentStore {
                 reused: reused
             )
         }
+    }
+
+    private func publicationSeries(
+        _ run: NoteSeries.Run,
+        outline: NoteSeries.Outline
+    ) throws -> NoteSeries.ReviewedSeries {
+        if let reviewed = try seriesArtifact(
+            run,
+            kind: .reviewedSeries,
+            as: NoteSeries.ReviewedSeries.self
+        ) {
+            return reviewed.value
+        }
+        // Runs reviewed by older versions still use their original checkpoint format.
+        let curation = try requiredSeriesArtifact(
+            run,
+            kind: .curation,
+            as: NoteSeries.Curation.self
+        )
+        var drafts: [UUID: NoteSeries.Draft] = [:]
+        for entry in outline.entries where entry.existingNoteID == nil {
+            drafts[entry.id] = try requiredSeriesArtifact(
+                run,
+                kind: .draft,
+                slot: entry.id.uuidString,
+                as: NoteSeries.Draft.self
+            )
+        }
+        return .init(drafts: drafts, curation: curation, requirements: curation)
     }
 
     private func requiredSeriesArtifact<Value: Codable & Sendable>(

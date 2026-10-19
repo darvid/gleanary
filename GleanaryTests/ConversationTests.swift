@@ -14,6 +14,8 @@ private struct ChatCommandProbe: View {
 
     var body: some View {
         VStack {
+            Button("Probe new item") { actions?.newItem() }
+                .keyboardShortcut("n").disabled(actions?.enabled != true)
             Button("Probe clear") { actions?.clearConversation?() }
                 .keyboardShortcut("k").disabled(actions?.clearConversation == nil)
             Button("Probe focus") { actions?.focus() }
@@ -25,6 +27,7 @@ private struct ChatCommandProbe: View {
         .hidden().accessibilityHidden(true)
         .onChange(of: actions?.enabled, initial: true) { report(actions) }
         .onChange(of: actions?.clearConversation != nil) { report(actions) }
+        .onChange(of: actions?.newItemTitle) { report(actions) }
     }
 }
 
@@ -1733,6 +1736,62 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(model.titles[note.id] == "Deleted document")
     }
 
+    @Test(arguments: [AgentRole.assistant, .researcher])
+    @MainActor func newMessagesDoNotInheritAttachmentsFromPreviousReplies(
+        author: AgentRole
+    ) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let previous = try await store.save(MarkdownDocument(
+            name: "Earlier research note",
+            markdown: "Earlier evidence."
+        ))
+        let result = try await store.save(MarkdownDocument(
+            name: "Earlier result",
+            markdown: "An interpretation."
+        ))
+        let oldID = try await store.beginConversation(
+            "Use the attached note",
+            owner: author,
+            sources: [previous.id]
+        )
+        let references = author == .researcher ? [result.id, previous.id] : [previous.id]
+        try await store.postConversation(
+            author: author,
+            text: "Earlier answer.",
+            references: references,
+            taskID: oldID
+        )
+        try await store.updateConversationTask(oldID, state: "succeeded", progress: "Done")
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(
+                store: store,
+                inference: ConversationFixtureInference(wait: true)
+            )
+        )
+        await model.load()
+        let oldTask = try #require(model.tasks.first { $0.id == oldID })
+        #expect(model.selectedSources.isEmpty)
+        model.composer = "Research an unrelated topic from official documentation"
+        await model.send()
+        let sent = try #require(model.messages.last { $0.author == "user" })
+        let task = try #require(model.tasks.first { $0.id == sent.taskID })
+        #expect(sent.references.isEmpty)
+        #expect(task.sources.isEmpty)
+        #expect(try await store.conversationMessages().last { $0.id == sent.id }?.references
+            .isEmpty == true)
+        #expect(model.messages.first { $0.taskID == oldID && $0.author == "user" }?
+            .references == [previous.id])
+        await model.cancel()
+        // Retrying an old request is different from sending a fresh, unattached message.
+        model.composer = "Keep this new draft"
+        await model.send(retry: oldTask)
+        #expect(model.messages.last { $0.author == "user" }?.references == [previous.id])
+        #expect(model.composer == "Keep this new draft")
+        await model.cancel()
+    }
+
     @Test @MainActor func rejectedMessageKeepsDraftAndAttachments() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -2077,6 +2136,107 @@ private struct NoTranscriptProvider: YouTubeProviding {
         }
     }
 
+    @Test(
+        .enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_CHAT_STATUS_SCREENSHOTS"] == "1"),
+        arguments: [false, true]
+    )
+    @MainActor func sidebarShowsChatWorkingWhileBrowsingLibrary(dark: Bool) async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Fixture note",
+            markdown: "Saved knowledge."
+        ))
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(
+                store: store,
+                inference: ConversationFixtureInference(wait: true)
+            )
+        )
+        await model.load()
+        let suite = "gleanary-chat-status-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(220.0, forKey: "sidebarWidth")
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        let controller = NSHostingController(rootView:
+            ContentView(
+                library: LibraryModel(store: store),
+                conversation: model,
+                initialSelection: note.id
+            )
+            .defaultAppStorage(defaults).preferredColorScheme(dark ? .dark : .light)
+            .environment(\.scenePhase, .inactive))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 1100, height: 780))
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        defer { window.contentViewController = nil; window.close() }
+        try await Task.sleep(for: .milliseconds(500))
+        let idle = try sidebarStatusScreenshot(controller.view, name: "idle", dark: dark)
+        for iteration in 0 ..< 2 {
+            model.composer = "Fixture request"
+            await model.send()
+            #expect(model.running)
+            try await Task.sleep(for: .milliseconds(100))
+            let working = try sidebarStatusScreenshot(
+                controller.view,
+                name: "working-\(iteration)",
+                dark: dark
+            )
+            #expect(sidebarStatusPixelChanges(idle, working) >= 4)
+            await model.cancel()
+            #expect(!model.running)
+            try await Task.sleep(for: .milliseconds(100))
+            let stopped = try sidebarStatusScreenshot(
+                controller.view,
+                name: "stopped-\(iteration)",
+                dark: dark
+            )
+            #expect(sidebarStatusPixelChanges(working, stopped) >= 4)
+            #expect(sidebarStatusPixelChanges(idle, stopped) < 4)
+        }
+    }
+
+    @MainActor private func sidebarStatusScreenshot(
+        _ view: NSView,
+        name: String,
+        dark: Bool
+    ) throws -> NSBitmapImageRep {
+        view.layoutSubtreeIfNeeded()
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png
+            .write(
+                to: URL(
+                    fileURLWithPath: "/tmp/gleanary-chat-status-\(name)-\(dark ? "dark" : "light").png"
+                )
+            )
+        return bitmap
+    }
+
+    @MainActor private func sidebarStatusPixelChanges(
+        _ before: NSBitmapImageRep,
+        _ after: NSBitmapImageRep
+    ) -> Int {
+        let scale = Double(before.pixelsWide) / 1100
+        var changed = 0
+        for x in Int(170 * scale) ..< Int(215 * scale) {
+            for y in 0 ..< Int(70 * scale) {
+                guard let a = before.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                      let b = after.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+                else { continue }
+                if abs(a.redComponent - b.redComponent) > 0.1 {
+                    changed += 1
+                }
+            }
+        }
+        return changed
+    }
+
     @MainActor private func saveToolbarScreenshot(_ view: NSView, name: String) throws {
         view.layoutSubtreeIfNeeded()
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
@@ -2096,8 +2256,13 @@ private struct NoTranscriptProvider: YouTubeProviding {
         try png.write(to: URL(fileURLWithPath: "/tmp/gleanary-toolbar-\(name).png"))
     }
 
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_CHAT_SHORTCUTS"] == "1"))
-    @MainActor func chatSceneCommandsReachFocusedComposerWithoutClearingImmediately() async throws {
+    @Test(
+        .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_CHAT_SHORTCUTS"] == "1"),
+        arguments: ["k", "n"]
+    )
+    @MainActor func chatSceneCommandsReachFocusedComposerWithoutClearingImmediately(
+        shortcut: String
+    ) async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let task = try await store.beginConversation("Earlier fixture message", owner: .assistant)
@@ -2130,6 +2295,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(commands?.clearConversation != nil)
         #expect(commands?.sendMessage != nil)
         #expect(commands?.importBookmarks == nil)
+        #expect(commands?.newItemTitle == "New Chat")
         let focus = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: "f",
@@ -2157,8 +2323,9 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let visibleWindows = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
         let clear = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
-            windowNumber: window.windowNumber, context: nil, characters: "k",
-            charactersIgnoringModifiers: "k", isARepeat: false, keyCode: 40
+            windowNumber: window.windowNumber, context: nil, characters: shortcut,
+            charactersIgnoringModifiers: shortcut, isARepeat: false,
+            keyCode: shortcut == "k" ? 40 : 45
         ))
         #expect(window.performKeyEquivalent(with: clear))
         try await Task.sleep(for: .milliseconds(300))
@@ -2168,6 +2335,124 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(!model.messages.isEmpty)
         #expect(model.composer == "Keep this unsent draft")
         #expect(try await !store.conversationMessages().isEmpty)
+        if shortcut == "n" {
+            let dialog = try #require(window.attachedSheet ?? NSApp.windows.first {
+                $0.isVisible && !visibleWindows.contains(ObjectIdentifier($0))
+            })
+            let dialogView = try #require(dialog.contentView)
+            let cancel = try #require(nativeDialogButton("Cancel", in: dialogView))
+            #expect(nativeDialogButton("Start New Chat", in: dialogView) != nil)
+            cancel.performClick(nil)
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(!model.messages.isEmpty)
+            #expect(model.composer == "Keep this unsent draft")
+            let saved = try await store.documents().map(\.id)
+            #expect(window.performKeyEquivalent(with: focus))
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(window.firstResponder is NSTextView)
+            let beforeNewChat = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
+            #expect(window.performKeyEquivalent(with: clear))
+            try await Task.sleep(for: .milliseconds(100))
+            let confirmation = try #require(window.attachedSheet ?? NSApp.windows.first {
+                $0.isVisible && !beforeNewChat.contains(ObjectIdentifier($0))
+            })
+            let confirmationView = try #require(confirmation.contentView)
+            let start = try #require(nativeDialogButton("Start New Chat", in: confirmationView))
+            start.performClick(nil)
+            for _ in 0 ..< 80 {
+                if model.messages.isEmpty, model.composer.isEmpty {
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            #expect(model.messages.isEmpty)
+            #expect(model.composer.isEmpty)
+            #expect(model.selectedSources.isEmpty)
+            #expect(try await store.conversationMessages().isEmpty)
+            #expect(try await store.documents().map(\.id) == saved)
+            #expect(window.firstResponder is NSTextView)
+        }
+    }
+
+    @MainActor private func nativeDialogButton(_ title: String, in view: NSView) -> NSButton? {
+        if let button = view as? NSButton, button.title == title {
+            return button
+        }
+        for child in view.subviews {
+            if let button = nativeDialogButton(title, in: child) {
+                return button
+            }
+        }
+        return nil
+    }
+
+    @Test @MainActor func newChatResetsDraftAndContextWithoutDeletingSavedNotes() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Saved fixture note",
+            markdown: "Retained knowledge."
+        ))
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(
+                store: store,
+                inference: ConversationFixtureInference(wait: true)
+            )
+        )
+        await model.load()
+        model.composer = "Earlier conversation"
+        await model.send()
+        let oldTask = try #require(model.tasks.first)
+        model.composer = "Discard this draft"
+        #expect(await model.addToChat(.note(note.id)))
+        let focus = model.composerFocusRequest
+        #expect(await model.clearConversation(discardDraft: true))
+        #expect(!model.running)
+        #expect(model.composer.isEmpty)
+        #expect(model.selectedSources.isEmpty)
+        #expect(model.messages.isEmpty)
+        #expect(model.tasks.isEmpty)
+        #expect(model.composerFocusRequest != focus)
+        #expect(try await store.document(id: note.id) == note)
+        await #expect(throws: (any Error).self) {
+            try await store.postConversation(
+                author: .assistant,
+                text: "Late reply",
+                taskID: oldTask.id
+            )
+        }
+        model.composer = "A fresh conversation"
+        await model.send()
+        let next = try #require(model.tasks.first)
+        #expect(next.id != oldTask.id)
+        #expect(next.sources.isEmpty)
+        #expect(try await ConversationChatContext.history(
+            store.conversationMessages(),
+            before: next.id
+        ).isEmpty)
+        await model.cancel()
+    }
+
+    @Test @MainActor func failedNewChatResetPreservesTheDraftAndHistory() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let task = try await store.beginConversation("Earlier fixture message", owner: .assistant)
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        await model.load()
+        model.composer = "Keep this draft on failure"
+        let before = model.messages
+        let database = try await store.database()
+        try await database.write { db in try db.execute(sql: "DROP TABLE conversation_events") }
+        #expect(await !model.clearConversation(discardDraft: true))
+        #expect(model.composer == "Keep this draft on failure")
+        #expect(model.messages.map(\.id) == before.map(\.id))
+        #expect(try await store.conversationMessages().map(\.id) == before.map(\.id))
+        #expect(model.error != nil)
     }
 
     @Test @MainActor func clearingConversationCancelsWorkAndKeepsUnsentDraft() async throws {
