@@ -74,7 +74,11 @@ facts and this document for the design direction. The sidecar at
 
 **Creative North Star: "Saved evidence, ready for conversation"**
 
-Apple design language with ChatGPT-inspired restraint: familiar controls, compact navigation, and a generous reading pane. This records the finished Library and compatible app controls, not a redesign of conversation, settings, Graph, or Mind Map. Deferred graph surfaces keep their existing code and data.
+Apple design language with ChatGPT-inspired restraint: familiar controls,
+compact navigation, and a generous reading pane. This records the finished
+Library and compatible app controls. Library now includes a note-first
+Graph and embedded note Connections. Mind Map and automatic concept
+extraction retain their code and data but remain deferred.
 
 The product's platform posture is adaptive; the shipping surface is SwiftUI on macOS 26+ only. No web, iOS, or Android implementation is implied. Native system typography and SF Symbols are intentional for navigation and controls. Document typography is adjustable in Appearance settings. The only raster images in the Library are locally captured source previews.
 
@@ -223,7 +227,14 @@ button radius. Code blocks use a rectangular control surface.
 
 ## Components
 
-- **Navigation:** `.sidebar` list with Library/Filing sections, SF Symbols, and category codes. Filing rows carry their Atlas colour: a 7pt dot before the name, or the area row's folder icon tinted with it. Graph and Mind Map are not Library navigation destinations. Go › Back/Forward (⌘[ / ⌘]) and the mouse's back and forward buttons step through visited places: Chat or a scope, the Atlas region, and an opened item. Free zooming updates the current place rather than adding one.
+- **Navigation:** `.sidebar` list with Library/Filing sections, SF Symbols,
+  and category codes. Filing rows carry their Atlas colour: a 7pt dot
+  before the name, or the area row's folder icon tinted with it. Graph is
+  a Library presentation, not a separate sidebar destination; Mind Map
+  navigation remains deferred. Go › Back/Forward (⌘[ / ⌘]) and the mouse's
+  back and forward buttons step through visited places: Chat or a scope,
+  the Atlas region, and an opened item. Free zooming updates the current
+  place rather than adding one.
 - **Empty filing categories:** the map's Hide empty preference also dims
   empty sidebar homes in Chat and Automations. Both load and refresh the
   shared category snapshot without requiring a visit to the map first.
@@ -240,6 +251,34 @@ button radius. Code blocks use a rectangular control surface.
   indexing and proposals do not. Earlier note history is labeled; fuller
   tracking starts at the migration date. Permanent deletion scrubs event
   titles, relationship labels, and revision pointers for both endpoints.
+- **Knowledge graph:** a third Library presentation beside Map and List.
+  Notes are the default nodes. The read-only SQLite projection combines
+  applied links, Writer/research links, captured-source provenance, and
+  saved explicit links. Scope, item type, and search filter both endpoints;
+  archived/deleted items stay hidden. Optional Concepts includes only
+  current, ready, quotation-backed analysis; viewing never starts
+  extraction. Solid edges show links/provenance; extracted edges are
+  dashed. The canvas uses native appearance, keyboard selection, pan,
+  pinch/wheel zoom, fit controls, and a text connection inspector. Opening
+  a note and changing graph focus participate in Back/Forward history.
+  Note previews in Library and Chat show a local Connections canvas and
+  text list, with Explore in Graph and direct/two-hop exploration in the
+  full view. Embedded canvases have independent layout/selection state
+  and no wheel zoom, so reading can still scroll. Empty notes explain
+  that no connections exist; visible nodes, edges, and evidence are
+  bounded with explicit truncation notices. No new model calls or graph
+  database are required. The right inspector separates browsing from
+  inspection: no selection shows a searchable native item list; selecting
+  an item replaces it with grouped related notes, sources, and concepts.
+  Each connection row names only the other endpoint. Selecting a row or
+  canvas edge shows its rationale, with additional evidence collapsed.
+  Directional labels read from the selected item's perspective. Headers
+  stay above scrolling content. All items restores the mounted browser's
+  search and scroll; Open note/source navigates to reading, while Focus in
+  graph explicitly changes the neighborhood. Selection alone never
+  changes scope or camera. The inspector is resizable and hideable;
+  selecting a canvas item or edge reveals it again. Embedded Connections
+  reuse the grouped neighbors and evidence flow without a global browser.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
 - **Preview actions:** Captured Source, Open Original, Add to Chat, and
@@ -264,9 +303,12 @@ button radius. Code blocks use a rectangular control surface.
   Detail previews use a viewport-constrained 170pt hero with 12pt corners,
   a 0.5pt separator border, and 0.9 image opacity in dark appearance.
 - **Toolbar and settings:** chat and library share one toolbar shape:
-  view-specific controls (the library's Map/List switcher) sit left of a
-  trailing system-glass More menu (plain `ellipsis`) in both. Destructive
-  or occasional actions such as Clear Conversation live in that menu.
+  view-specific controls (the library's Map/List/Graph switcher) sit left
+  of a trailing system-glass More menu (plain `ellipsis`) in both. The Library
+  switcher uses three equal-sized native toggle buttons, with no moving
+  segmented-control separators. Choosing the active view keeps it active.
+  Destructive or occasional actions such as Clear Conversation live in
+  that menu.
   The app's Chat command menu owns Command-K (confirm clearing) and
   Command-Return (send), so they remain available while typing. Toolbar
   menu entries invoke the same actions without duplicate key equivalents.

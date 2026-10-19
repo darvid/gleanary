@@ -624,6 +624,79 @@ struct KnowledgeAtlasCameraTests {
         #expect(atlas.root.itemCount == snapshot.items.filter { $0.kind == "source" }.count)
     }
 
+    @Test func accessibleTilesRetainValuesAcrossLayoutReplacement() {
+        let (atlas, fixture) = model()
+        atlas.focus(.category(fixture.thinking.id), animated: false)
+        let retained = atlas.accessibleTiles
+        let ids = retained.map(\.id)
+        let labels = retained.map(\.node.label)
+        let rects = retained.map(\.rect)
+        #expect(retained.count == 6)
+        #expect(Set(ids).count == retained.count)
+
+        atlas.apply(AtlasSnapshot(categories: [], items: []))
+        #expect(atlas.layout.tiles.count == 1)
+        #expect(atlas.accessibleTiles.isEmpty)
+        // Deferred accessibility rows must not read indices from the replacement layout.
+        #expect(retained.map(\.id) == ids)
+        #expect(retained.map(\.node.label) == labels)
+        #expect(retained.map(\.rect) == rects)
+        for tile in retained {
+            #expect(atlas.activate(tile.id) == nil)
+        }
+    }
+
+    @Test func accessibleTilesFollowFiltersResizeAndTheExposureLimit() {
+        let home = category("10", "Home", id: 1)
+        let snapshot = AtlasSnapshot(categories: [home], items: (0 ..< 450).map {
+            item($0, in: [home], kind: $0.isMultiple(of: 2) ? "source" : "summary")
+        })
+        let atlas = KnowledgeAtlasModel(snapshot: snapshot)
+        atlas.reduceMotion = true
+        atlas.setViewport(CGSize(width: 1000, height: 640))
+        atlas.focus(.category(home.id), animated: false)
+        let retained = atlas.accessibleTiles
+        #expect(retained.count == 400)
+        atlas.kindFilter = .notes
+        #expect(atlas.accessibleTiles.count == 225)
+        #expect(atlas.accessibleTiles.allSatisfy { $0.node.item?.kind == "summary" })
+        let ids = atlas.accessibleTiles.map(\.id)
+        atlas.setViewport(CGSize(width: 600, height: 400))
+        #expect(atlas.accessibleTiles.map(\.id) == ids)
+        #expect(retained.count == 400)
+        #expect(retained.contains { $0.node.item?.kind == "source" })
+    }
+
+    @Test func nativeAccessibilityRowsSurviveRepeatedLayoutChanges() throws {
+        let (atlas, fixture) = model()
+        let suite = "gleanary-atlas-rebuild-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let host = NSHostingView(rootView: KnowledgeAtlasView(
+            atlas: atlas, store: nil, openItem: { _ in }
+        ).defaultAppStorage(defaults))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        for iteration in 0 ..< 12 {
+            atlas.apply(fixture.snapshot)
+            atlas.kindFilter = .all
+            atlas.focus(.category(fixture.thinking.id), animated: false)
+            host.layoutSubtreeIfNeeded()
+            _ = host.accessibilityChildren()
+            atlas.kindFilter = iteration.isMultiple(of: 2) ? .notes : .sources
+            atlas.setViewport(CGSize(width: 600 + iteration, height: 400))
+            atlas.apply(AtlasSnapshot(categories: [], items: []))
+            host.layoutSubtreeIfNeeded()
+            _ = host.accessibilityChildren()
+        }
+        #expect(atlas.accessibleTiles.isEmpty)
+    }
+
     @Test func searchMatchesAggregateUpTheHierarchy() throws {
         let (atlas, fixture) = model()
         atlas.setMatches([fixtureID(10009), fixtureID(10006)])

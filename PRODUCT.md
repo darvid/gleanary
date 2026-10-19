@@ -14,7 +14,15 @@ A person building and using a local knowledge library through a persistent Chat 
 
 ## Operating context
 
-Conversation is the primary workspace. Library is its companion for browsing, searching, reading, filing, capture recovery, and selecting evidence to take back to chat. The user approved a sidebar → searchable list → detail pane and asked for Apple design language with ChatGPT-inspired restraint. Graph and Mind Map navigation are deferred; preserve their code and stored data.
+Conversation is the primary workspace. Library is its companion for
+browsing, searching, reading, filing, capture recovery, and selecting
+evidence to take back to chat. The user approved a sidebar → searchable
+list → detail pane and asked for Apple design language with
+ChatGPT-inspired restraint. Library offers Map, List, and a note-first
+Graph. Notes also show a local Connections graph with a handoff to the
+full Graph. Graph reads existing links, source provenance, and optional
+saved concepts without inference. Mind Map navigation and automatic
+concept extraction remain deferred; preserve their code and stored data.
 
 ## Capabilities and constraints
 

@@ -52,12 +52,15 @@ struct MouseWheelZoom: NSViewRepresentable {
                     let windowPoint = event.window == window
                         ? event.locationInWindow
                         : window.convertPoint(fromScreen: NSEvent.mouseLocation)
-                    guard let content = window.contentView,
-                          abs(event.scrollingDeltaY) > 0 else { return event }
-                    let point = content.convert(windowPoint, from: nil)
+                    guard abs(event.scrollingDeltaY) > 0 else { return event }
+                    let point = view.convert(windowPoint, from: nil)
+                    guard view.bounds.contains(point) else { return event }
                     action(
                         event.scrollingDeltaY,
-                        CGPoint(x: point.x, y: content.bounds.height - point.y)
+                        CGPoint(
+                            x: point.x,
+                            y: view.isFlipped ? point.y : view.bounds.height - point.y
+                        )
                     )
                     return event
                 }

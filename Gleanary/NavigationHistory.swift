@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Where the window is showing: Chat or a library scope, the Atlas region, and an item opened
-/// from the Atlas.
+/// Where the window is showing: Chat or a Library presentation/scope, the canvas focus, and
+/// an item opened from a canvas.
 struct NavigationLocation: Equatable {
     var chatting: Bool
     var scope: LibraryScope?
@@ -11,6 +11,8 @@ struct NavigationLocation: Equatable {
     var automations = false
     var activity = false
     var kindFilter = LibraryKindFilter.all
+    var presentation = LibraryPresentation.map
+    var graphFocus: UUID?
 }
 
 /// Back and forward through visited locations, like a browser: visiting after going back drops

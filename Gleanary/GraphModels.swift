@@ -30,6 +30,7 @@ struct GraphNode: Identifiable, Codable, Sendable, Equatable {
 }
 
 enum GraphPredicate: String, Codable, Sendable, CaseIterable {
+    case relatedTo = "related_to", derivedFrom = "derived_from"
     case mentions, linksTo = "links_to", authoredBy = "authored_by", uses, addresses, supports,
          limits
     case partOf = "part_of", comparesWith = "compares_with", evaluatedOn = "evaluated_on"

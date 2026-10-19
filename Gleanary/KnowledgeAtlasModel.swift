@@ -465,9 +465,11 @@ final class KnowledgeAtlasModel {
     }
 
     /// Regions and items exposed to VoiceOver: the children of the current context.
-    var accessibleTiles: [Int] {
+    var accessibleTiles: [AtlasTile] {
         guard let position = layout.index[focusID] else { return [] }
-        return Array(layout.children(of: position).prefix(400))
+        // SwiftUI can evaluate retained rows after a rebuild. Keep each tile's data with its ID,
+        // rather than handing out indices that could address a different layout by then.
+        return layout.children(of: position).prefix(400).map { layout.tiles[$0] }
     }
 }
 

@@ -56,8 +56,8 @@ final class LibraryModel {
     var intelligenceAvailable = false
     private let engine: SearchEngine
     let store: DocumentStore
-    // Graph models and persisted data remain available, but deferred features do not run in
-    // Library.
+    // Legacy concept extraction stays opt-in. Library graphs read saved relationships without
+    // starting this model-backed pipeline.
     var graphFeaturesEnabled = false
     private var indexAgain = false
     private var resultToken = UUID()
