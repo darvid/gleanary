@@ -41,10 +41,14 @@ struct LibraryGraphView: View {
                     Spacer(minLength: 16)
                     HStack(spacing: 12) {
                         GraphArrangementControl(graph: graph)
-                        Toggle(isOn: $inspectorVisible) {
-                            Label("Graph inspector", systemImage: "sidebar.right")
+                        Button {
+                            inspectorVisible.toggle()
+                        } label: {
+                            Image(systemName: inspectorVisible
+                                ? "rectangle.righthalf.inset.filled" : "sidebar.right")
+                                .frame(width: 24, height: 24)
                         }
-                        .labelStyle(.iconOnly).toggleStyle(.button).controlSize(.small)
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
                         .help(inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
                         .accessibilityLabel(inspectorVisible ? "Hide graph inspector" :
                             "Show graph inspector")

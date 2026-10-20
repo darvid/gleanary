@@ -377,6 +377,21 @@ struct LibraryGraphTests {
         #expect(graph.positions == positions)
     }
 
+    @Test @MainActor func selectionUpdatesSynchronouslyWithoutAStore() {
+        let graph = LibraryGraphModel()
+        let camera = GraphCamera(scale: 0.8, pan: CGSize(width: 10, height: -5))
+        graph.camera = camera
+        graph.select("note:fixture", edgeID: "edge:fixture")
+        #expect(graph.selectedID == "note:fixture")
+        #expect(graph.selectedEdgeID == "edge:fixture")
+        #expect(!graph.loading)
+        #expect(graph.error == nil)
+        #expect(graph.camera == camera)
+        graph.deselect()
+        #expect(graph.selectedID == nil)
+        #expect(graph.selectedEdgeID == nil)
+    }
+
     @Test @MainActor func spacingChangesPreserveCameraSelectionScopeAndOtherSurfaces() async throws {
         let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
         let notes = try await fixture.store.open(seed: (0 ..< 5).map {

@@ -39,13 +39,8 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                         }
                     }
                 }
-                .gesture(SpatialTapGesture(count: 2).onEnded { value in
-                    if let node = hitNode(value.location, size: geometry.size),
-                       let id = node.noteID
-                    {
-                        openNote(id)
-                    }
-                }.exclusively(before: SpatialTapGesture().onEnded { value in
+                // Selection must not wait for the system's double-click timeout.
+                .gesture(SpatialTapGesture().onEnded { value in
                     focused = true
                     if let node = hitNode(value.location, size: geometry.size) {
                         keyboardNode = node.id; graph.select(node.id)
@@ -54,7 +49,14 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     } else {
                         keyboardNode = nil; graph.deselect()
                     }
-                }))
+                })
+                .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in
+                    if let node = hitNode(value.location, size: geometry.size),
+                       let id = node.noteID
+                    {
+                        openNote(id)
+                    }
+                })
                 .simultaneousGesture(drag(size: geometry.size))
                 .simultaneousGesture(MagnifyGesture().onChanged { value in
                     if zoomOrigin == nil {

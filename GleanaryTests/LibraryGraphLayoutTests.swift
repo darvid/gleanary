@@ -187,6 +187,12 @@ import Testing
         }
     }
 
+    @Test func inspectorStateSymbolsAreAvailable() {
+        for name in ["rectangle.righthalf.inset.filled", "sidebar.right"] {
+            #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil)
+        }
+    }
+
     @Test func presentationControlsKeepTheirSizeAcrossSelections() async throws {
         let choices: [LibraryPresentation] = [.map, .list, .graph]
         let sizes = choices.map { choice in

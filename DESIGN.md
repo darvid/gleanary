@@ -281,14 +281,18 @@ button radius. Code blocks use a rectangular control surface.
   Directional labels read from the selected item's perspective. Headers
   stay above scrolling content. All items restores the mounted browser's
   search and scroll; Open note/source navigates to reading, while Focus in
-  graph explicitly changes the neighborhood. Selection alone never
-  changes scope or camera. The inspector is resizable and hideable;
-  selecting a canvas item or edge reveals it again. The graph toolbar
+  graph explicitly changes the neighborhood. Single-click selection runs
+  independently of double-click opening; it never waits for a double-click
+  timeout or a store query. Selection alone never changes scope or camera.
+  The inspector is resizable and hideable; selecting a canvas item or edge
+  reveals it again. The graph toolbar
   groups item filters and Concepts on the left, Arrange and the inspector
   toggle on the right, with search on its own second row. The inspector
-  toggle shows its state and names the action in its help and accessible
-  label. A quiet legend sits at the canvas's upper-left edge, outside the
-  toolbar; labels avoid that area. Embedded Connections reuse the grouped
+  control stays monochrome: a filled right-pane symbol means open, an
+  outlined sidebar symbol means closed. It names the action in its help
+  and accessible label; no primary-color button fill marks its state. A
+  quiet legend sits at the canvas's upper-left edge, outside the toolbar;
+  labels avoid that area. Embedded Connections reuse the grouped
   neighbors and evidence flow without a global browser. Connection rows
   have 10pt internal padding on every edge, including inside hover fills;
   group headings align with their inset content.
