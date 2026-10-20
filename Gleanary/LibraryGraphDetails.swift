@@ -202,7 +202,9 @@ struct LibraryGraphDetails: View {
                             Spacer()
                             Text(rows.count.formatted()).font(.caption).monospacedDigit()
                                 .foregroundStyle(.secondary)
-                        }.accessibilityAddTraits(.isHeader)
+                        }
+                        .padding(.horizontal, 10)
+                        .accessibilityAddTraits(.isHeader)
                         ForEach(visible) { neighbor in
                             Button {
                                 graph.select(node.id, edgeID: neighbor.id)
@@ -219,7 +221,7 @@ struct LibraryGraphDetails: View {
                                     Image(systemName: "chevron.right").font(.caption)
                                         .foregroundStyle(.tertiary)
                                 }
-                                .padding(.vertical, 8)
+                                .padding(10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                             }

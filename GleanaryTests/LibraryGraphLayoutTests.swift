@@ -44,6 +44,7 @@ import Testing
                 )
             }
         }
+        let capturedSource = try await addSource(to: notes[0].id, store: store)
         let isolated = try await store.save(MarkdownDocument(
             name: "An isolated note",
             markdown: "No links yet."
@@ -66,8 +67,16 @@ import Testing
                     dark: dark,
                     name: "library-\(Int(width))"
                 )
-                #expect(model.snapshot.nodes.count == 5)
-                #expect(model.positions.count == 5)
+                if width == 980 {
+                    model.select(GraphNode.documentID(capturedSource))
+                    try await capture(
+                        view,
+                        width: width, height: 600, dark: dark, name: "source-selected-contrast",
+                        increasedContrast: true
+                    )
+                }
+                #expect(model.snapshot.nodes.count == 6)
+                #expect(model.positions.count == 6)
                 #expect(model.positions.values.allSatisfy { $0.x.isFinite && $0.y.isFinite })
             }
             let connections = NoteConnectionsView(
@@ -129,29 +138,7 @@ import Testing
                 )
             }
         }
-        let url = try #require(URL(string: "https://example.com/inspector-evidence"))
-        _ = try await store.enqueueCapture(CaptureRequest(
-            url: url, identity: "fixture:inspector-source", label: "Official source"
-        ))
-        let job = try #require(await store.claimCapture())
-        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
-            title: "Official guidance on instruction hierarchy and prompt evaluation",
-            sourceURL: url, coverage: .document,
-            blocks: [ContentBlock(
-                kind: .paragraph,
-                markdown: "Synthetic evidence.",
-                text: "Synthetic evidence."
-            )]
-        ), artifacts: [])
-        let source = try await store.researchSource(noteID: sourceID)
-        try await DatabaseQueue(path: store.url.path).write { db in
-            for id in source.sourceIDs {
-                try db.execute(
-                    sql: "INSERT INTO note_sources VALUES (?, ?)",
-                    arguments: [notes[0].id.uuidString, id.uuidString]
-                )
-            }
-        }
+        _ = try await addSource(to: notes[0].id, store: store)
         let task = try await store.beginConversation("Inspector fixture", owner: .researcher)
         for note in notes.dropFirst() {
             let proposal = try await store.proposeLink(
@@ -185,6 +172,24 @@ import Testing
                     )
                 }
             }
+            graph.select(node)
+            for width in [420.0, 720.0] {
+                try await capture(
+                    ScrollView {
+                        LibraryGraphDetails(
+                            graph: graph, openNote: { _ in }, openSource: { _ in }, compact: true
+                        ).padding(20)
+                    },
+                    width: width, height: 460, dark: dark,
+                    name: "connections-rows-\(Int(width))"
+                )
+            }
+        }
+    }
+
+    @Test func inspectorStateSymbolsAreAvailable() {
+        for name in ["rectangle.righthalf.inset.filled", "sidebar.right"] {
+            #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil)
         }
     }
 
@@ -218,18 +223,120 @@ import Testing
         }
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_LIBRARY_GRAPH_SCREENSHOTS"] == "1"))
+    func spacingLayoutsAndSettingsRenderInBothAppearances() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = DocumentStore(url: directory.appending(path: "library.sqlite"))
+        let names = [
+            "Research practices",
+            "Clear instructions and boundaries",
+            "Context engineering and grounding",
+            "Prompt evaluation and comparisons",
+            "Long-document workflows",
+            "Structured output constraints",
+            "Tool use and error recovery",
+            "Versioned prompts and deployment",
+        ]
+        let notes = try await store.open(seed: names.map { MarkdownDocument(
+            name: $0,
+            markdown: "Synthetic fixture."
+        ) })
+        try await DatabaseQueue(path: store.url.path).write { db in
+            for note in notes.dropFirst() {
+                let ids = [notes[0].id.uuidString, note.id.uuidString].sorted()
+                try db.execute(
+                    sql: "INSERT INTO note_links VALUES (?, ?, ?, 'Synthetic relation.', 0)",
+                    arguments: [ids[0], ids[1], UUID().uuidString]
+                )
+            }
+        }
+        _ = try await addSource(to: notes[0].id, store: store)
+        let graph = LibraryGraphModel()
+        graph.reduceMotion = true
+        await graph.load(from: store, request: LibraryGraphRequest())
+        try await awaitLayout(graph)
+        defer { graph.stop() }
+        graph.select(GraphNode.documentID(notes[0].id))
+        let camera = GraphCamera(scale: 0.8, pan: .zero)
+        graph.camera = camera
+        for dark in [false, true] {
+            for value in [0.0, 1.0] {
+                graph.setSpacing(value)
+                graph.finishSpacingChange()
+                try await awaitLayout(graph)
+                try await capture(
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            GraphDocumentLegend()
+                            Spacer()
+                            GraphArrangementControl(graph: graph)
+                        }.padding(.horizontal, 18)
+                        KnowledgeGraphView(graph: graph, openNote: { _ in }, camera: Binding(
+                            get: { graph.camera }, set: { graph.camera = $0 }
+                        ))
+                    },
+                    width: 680, height: 500, dark: dark,
+                    name: "spacing-\(value == 0 ? "compact" : "spacious")"
+                )
+                #expect(graph.camera == camera)
+            }
+            try await capture(
+                GraphArrangementSettings(graph: graph).padding(16),
+                width: 292, height: 180, dark: dark, name: "spacing-settings"
+            )
+        }
+    }
+
+    private func awaitLayout(_ graph: LibraryGraphModel) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while graph.layingOut, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(!graph.layingOut)
+    }
+
+    private func addSource(to noteID: UUID, store: DocumentStore) async throws -> UUID {
+        let url = try #require(URL(string: "https://example.com/inspector-evidence"))
+        _ = try await store.enqueueCapture(CaptureRequest(
+            url: url, identity: "fixture:inspector-source", label: "Official source"
+        ))
+        let job = try #require(await store.claimCapture())
+        let sourceID = try await store.publishCapture(job, document: CapturedDocument(
+            title: "Official guidance on instruction hierarchy and prompt evaluation",
+            sourceURL: url, coverage: .document,
+            blocks: [ContentBlock(
+                kind: .paragraph, markdown: "Synthetic evidence.", text: "Synthetic evidence."
+            )]
+        ), artifacts: [])
+        let source = try await store.researchSource(noteID: sourceID)
+        try await DatabaseQueue(path: store.url.path).write { db in
+            for id in source.sourceIDs {
+                try db.execute(
+                    sql: "INSERT INTO note_sources VALUES (?, ?)",
+                    arguments: [noteID.uuidString, id.uuidString]
+                )
+            }
+        }
+        return sourceID
+    }
+
     private func capture(
         _ view: some View,
         width: Double,
         height: Double,
         dark: Bool,
-        name: String
+        name: String,
+        increasedContrast: Bool = false
     ) async throws {
         let host = NSHostingView(rootView: view
             .environment(\.colorScheme, dark ? .dark : .light)
             .background(Color(nsColor: .windowBackgroundColor))
             .frame(width: width, height: height))
-        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        host.appearance = NSAppearance(named: increasedContrast
+            ? (dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)
+            : (dark ? .darkAqua : .aqua))
         host.frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(
             contentRect: host.frame,

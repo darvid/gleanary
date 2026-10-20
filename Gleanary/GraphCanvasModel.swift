@@ -15,6 +15,7 @@ import Observation
     var layingOut: Bool { get }
     var visibleLimit: Int { get }
     var canvasCountLabel: String { get }
+    func isSource(_ node: GraphNode) -> Bool
     func select(_ id: String, edgeID: String?)
     func deselect()
     func expand()
@@ -24,6 +25,15 @@ import Observation
 }
 
 extension GraphCanvasModel {
+    func isSource(_: GraphNode) -> Bool {
+        false
+    }
+
+    func kindLabel(for node: GraphNode) -> String {
+        guard node.kind == .document else { return node.kind.rawValue }
+        return GraphDocumentMark(isSource: isSource(node)).label
+    }
+
     func select(_ id: String) {
         select(id, edgeID: nil)
     }

@@ -258,9 +258,15 @@ button radius. Code blocks use a rectangular control surface.
   archived/deleted items stay hidden. Optional Concepts includes only
   current, ready, quotation-backed analysis; viewing never starts
   extraction. Solid edges show links/provenance; extracted edges are
-  dashed. The canvas uses native appearance, keyboard selection, pan,
-  pinch/wheel zoom, fit controls, and a text connection inspector. Opening
-  a note and changing graph focus participate in Back/Forward history.
+  dashed. Notes use filled page icons with three text lines; sources use
+  outlined pages with a folded corner. Both the Library and embedded
+  graph show the same legend. Shape and fill carry the distinction without
+  relying on color; the accent outline remains reserved for selection.
+  Source/note labels also reach the canvas accessibility controls.
+  Concepts and entities retain their existing shapes. The canvas uses native appearance,
+  keyboard selection, pan, pinch/wheel zoom, fit controls, and a text
+  connection inspector. Opening a note and changing graph focus
+  participate in Back/Forward history.
   Note previews in Library and Chat show a local Connections canvas and
   text list, with Explore in Graph and direct/two-hop exploration in the
   full view. Embedded canvases have independent layout/selection state
@@ -275,10 +281,31 @@ button radius. Code blocks use a rectangular control surface.
   Directional labels read from the selected item's perspective. Headers
   stay above scrolling content. All items restores the mounted browser's
   search and scroll; Open note/source navigates to reading, while Focus in
-  graph explicitly changes the neighborhood. Selection alone never
-  changes scope or camera. The inspector is resizable and hideable;
-  selecting a canvas item or edge reveals it again. Embedded Connections
-  reuse the grouped neighbors and evidence flow without a global browser.
+  graph explicitly changes the neighborhood. Single-click selection runs
+  independently of double-click opening; it never waits for a double-click
+  timeout or a store query. Selection alone never changes scope or camera.
+  The inspector is resizable and hideable; selecting a canvas item or edge
+  reveals it again. The graph toolbar
+  groups item filters and Concepts on the left, Arrange and the inspector
+  toggle on the right, with search on its own second row. The inspector
+  control stays monochrome: a filled right-pane symbol means open, an
+  outlined sidebar symbol means closed. It names the action in its help
+  and accessible label; no primary-color button fill marks its state. A
+  quiet legend sits at the canvas's upper-left edge, outside the toolbar;
+  labels avoid that area. Embedded Connections reuse the grouped
+  neighbors and evidence flow without a global browser. Connection rows
+  have 10pt internal padding on every edge, including inside hover fills;
+  group headings align with their inset content.
+  Arrange opens a native popover with a Compact–Spacious spacing slider
+  and Reset. It adjusts link distance, repulsion, and minimum node
+  clearance together, not graph membership or zoom. Previews debounce;
+  releasing the slider settles the arrangement, honoring Reduce Motion.
+  Each graph owns its spacing. Selection, scope, and camera remain intact;
+  a selected node anchors a spacing-only layout. Fit remains explicit.
+  Reset restores balanced spacing only. Labels try below, above, and
+  beside nodes in priority order; labels that cannot fit without covering
+  another label or node stay hidden. Selected labels get first choice.
+  Connection-based grouping and other grouping modes remain deferred.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
 - **Preview actions:** Captured Source, Open Original, Add to Chat, and
