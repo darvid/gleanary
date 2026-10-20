@@ -7,6 +7,8 @@ actor GraphLayout {
         _ snapshot: GraphSnapshot,
         positions: [String: GraphPosition],
         animate: Bool,
+        spacing: GraphSpacing = .standard,
+        anchorID: String? = nil,
         frame: @Sendable ([String: GraphPosition]) async -> Void
     ) async throws {
         guard !snapshot.nodes.isEmpty else { return }
@@ -28,13 +30,13 @@ actor GraphLayout {
             return EdgeID(source: source, target: target)
         }
         let forces = SealedForce2D {
-            Kinetics2D.ManyBodyForce(strength: -180)
+            Kinetics2D.ManyBodyForce(strength: spacing.repulsion)
             Kinetics2D.LinkForce(
                 stiffness: .weightedByDegree(k: { _, _ in 0.35 }),
-                originalLength: .constant(135)
+                originalLength: .constant(spacing.linkLength)
             )
             Kinetics2D.CenterForce(center: .zero, strength: 0.02)
-            Kinetics2D.CollideForce(radius: .constant(44))
+            Kinetics2D.CollideForce(radius: .constant(spacing.collisionRadius))
         }
         let simulation = Simulation(
             nodeCount: ids.count,
@@ -42,7 +44,9 @@ actor GraphLayout {
             forceField: forces,
             alphaDecay: 0.045,
             position: initial,
-            fixation: ids.map { _ in nil }
+            fixation: ids.enumerated().map { index, id in
+                id == anchorID ? initial[index] : nil
+            }
         )
         for iteration in 0 ..< 180 {
             try Task.checkCancellation()

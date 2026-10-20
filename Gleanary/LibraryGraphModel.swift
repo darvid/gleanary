@@ -13,10 +13,13 @@ import Observation
     var camera: GraphCamera?
     private(set) var cameraReset = 0
     private(set) var layingOut = false
+    private(set) var spacing = GraphSpacing.standard
     @ObservationIgnored private var store: DocumentStore?
     @ObservationIgnored private var loadToken = UUID()
     @ObservationIgnored private var layoutToken = UUID()
     @ObservationIgnored private var layoutTask: Task<Void, Never>?
+    @ObservationIgnored private var spacingTask: Task<Void, Never>?
+    @ObservationIgnored private var appliedSpacing: GraphSpacing? = .standard
     private let layout = GraphLayout()
 
     var snapshot: GraphSnapshot {
@@ -95,6 +98,8 @@ import Observation
                 camera = nil
                 cameraReset += 1
                 startLayout()
+            } else if spacing != appliedSpacing {
+                finishSpacingChange()
             }
         } catch is CancellationError {
         } catch {
@@ -105,6 +110,10 @@ import Observation
             stop()
             self.error = "Connections could not be loaded. Try again."
         }
+    }
+
+    func isSource(_ node: GraphNode) -> Bool {
+        node.kind == .document && data.sourceNodeIDs.contains(node.id)
     }
 
     func select(_ id: String, edgeID: String? = nil) {
@@ -124,20 +133,56 @@ import Observation
         Task { await load(from: store, request: expanded) }
     }
 
+    func setSpacing(_ value: Double) {
+        let next = GraphSpacing(value)
+        guard next != spacing else { return }
+        stop()
+        spacing = next
+        spacingTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(120)) }
+            catch { return }
+            guard let self else { return }
+            spacingTask = nil
+            beginLayout(animate: false, anchorID: selectedID)
+        }
+    }
+
+    func finishSpacingChange() {
+        spacingTask?.cancel()
+        spacingTask = nil
+        guard spacing != appliedSpacing else { return }
+        beginLayout(animate: !reduceMotion, anchorID: selectedID)
+    }
+
+    func resetSpacing() {
+        setSpacing(GraphSpacing.standard.value)
+        finishSpacingChange()
+    }
+
     func startLayout() {
+        spacingTask?.cancel()
+        spacingTask = nil
+        beginLayout(animate: !reduceMotion && request.focus == nil)
+    }
+
+    private func beginLayout(animate: Bool, anchorID: String? = nil) {
         layoutTask?.cancel()
         let token = UUID()
         layoutToken = token
         layingOut = !snapshot.nodes.isEmpty
-        let snapshot = snapshot, initial = positions,
-            animate = !reduceMotion && request.focus == nil
+        let snapshot = snapshot, initial = positions, spacing = spacing
+        appliedSpacing = nil
         layoutTask = Task { [weak self, layout] in
             do {
                 try await layout
-                    .settle(snapshot, positions: initial, animate: animate) { [weak self] next in
+                    .settle(
+                        snapshot, positions: initial, animate: animate,
+                        spacing: spacing, anchorID: anchorID
+                    ) { [weak self] next in
                         await self?.acceptLayout(next, token: token)
                     }
                 guard let self, !Task.isCancelled, token == layoutToken else { return }
+                appliedSpacing = spacing
                 layingOut = false
             } catch is CancellationError {
             } catch {
@@ -163,6 +208,8 @@ import Observation
     }
 
     func stop() {
+        spacingTask?.cancel()
+        spacingTask = nil
         layoutTask?.cancel()
         layoutTask = nil
         layoutToken = UUID()

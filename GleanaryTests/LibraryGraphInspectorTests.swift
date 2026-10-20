@@ -77,6 +77,25 @@ struct LibraryGraphInspectorTests {
         }
     }
 
+    @Test func documentMarksDifferByShapeWithoutColor() {
+        let rect = CGRect(x: 0, y: 0, width: 20, height: 20)
+        let note = GraphDocumentMark(isSource: false)
+        let source = GraphDocumentMark(isSource: true)
+        #expect(note.label == "Note")
+        #expect(source.label == "Source")
+        #expect(note.path(in: rect).boundingRect == rect.insetBy(dx: 2, dy: 0))
+        #expect(source.path(in: rect).boundingRect == rect.insetBy(dx: 2, dy: 0))
+        #expect(note.path(in: rect).contains(CGPoint(x: 17, y: 2)))
+        #expect(!source.path(in: rect).contains(CGPoint(x: 17, y: 2)))
+        #expect(note.fold(in: rect).isEmpty)
+        #expect(!source.fold(in: rect).isEmpty)
+        #expect(!note.textLines(in: rect).isEmpty)
+        #expect(source.textLines(in: rect).isEmpty)
+        #expect(note.textLines(in: rect).boundingRect.width < note.path(in: rect).boundingRect
+            .width)
+        #expect(note.path(in: rect).boundingRect.contains(note.textLines(in: rect).boundingRect))
+    }
+
     @Test func emptyAndUnavailableEndpointsDoNotInventConnections() {
         let empty = LibraryGraphInspector(data: LibraryGraphSnapshot())
         #expect(empty.items(matching: "").isEmpty)

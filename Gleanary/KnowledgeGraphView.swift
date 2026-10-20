@@ -4,6 +4,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @Bindable var graph: Graph
     let openNote: (UUID) -> Void
     var compact = false
+    var showsDocumentLegend = false
     var camera: Binding<GraphCamera?>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
@@ -33,7 +34,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 )
                 .accessibilityChildren {
                     ForEach(graph.snapshot.nodes) { node in
-                        Button("\(node.label), \(node.kind.rawValue)") { graph.select(node.id) }
+                        Button("\(node.label), \(graph.kindLabel(for: node))") {
+                            graph.select(node.id)
+                        }
                     }
                 }
                 .gesture(SpatialTapGesture(count: 2).onEnded { value in
@@ -92,7 +95,16 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if let overview = graph.overviewAction {
+                if showsDocumentLegend {
+                    GraphDocumentLegend()
+                        .padding(.horizontal, 8).padding(.vertical, 6)
+                        .background(
+                            Color(nsColor: .windowBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
+                        .padding(10)
+                        .allowsHitTesting(false)
+                } else if let overview = graph.overviewAction {
                     Button(
                         graph.scopeLabel,
                         systemImage: "arrow.left"
@@ -181,7 +193,6 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func drawNodes(in context: inout GraphicsContext, size: CGSize) {
-        var labelRects: [CGRect] = []
         // Important labels reserve their space before peripheral labels.
         let nodes = graph.snapshot.nodes.sorted { priority($0) > priority($1) }
         for node in nodes {
@@ -198,45 +209,77 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             let color = nodeColor(node.kind)
             if matched {
                 context.fill(
-                    nodePath(node.kind, in: rect.insetBy(dx: -7, dy: -7)),
+                    nodePath(node, in: rect.insetBy(dx: -7, dy: -7)),
                     with: .color(color.opacity(0.2))
                 )
             }
-            let shape = nodePath(node.kind, in: rect)
-            context.fill(shape, with: .color(color))
-            if contrast == .increased {
-                context.stroke(shape, with: .color(.primary.opacity(0.8)), lineWidth: 1)
+            if node.kind == .document {
+                GraphDocumentMark(isSource: graph.isSource(node)).draw(
+                    in: &context, rect: rect, increasedContrast: contrast == .increased
+                )
+            } else {
+                let shape = nodePath(node, in: rect)
+                context.fill(shape, with: .color(color))
+                if contrast == .increased {
+                    context.stroke(shape, with: .color(.primary.opacity(0.8)), lineWidth: 1)
+                }
             }
             if selected {
                 context.stroke(
-                    nodePath(node.kind, in: rect.insetBy(dx: -5, dy: -5)),
+                    nodePath(node, in: rect.insetBy(dx: -5, dy: -5)),
                     with: .color(.accentColor),
                     lineWidth: 2
                 )
             }
+        }
+        drawLabels(in: &context, size: size, nodes: nodes)
+    }
+
+    private func drawLabels(
+        in context: inout GraphicsContext, size: CGSize, nodes: [GraphNode]
+    ) {
+        let obstacles = nodes.compactMap { node -> CGRect? in
+            guard let center = point(node.id, size: size) else { return nil }
+            let radius = nodeRadius(node.kind) + 4
+            return CGRect(
+                x: center.x - radius, y: center.y - radius,
+                width: radius * 2, height: radius * 2
+            )
+        }
+        // Leave the fit/zoom controls unobscured and keep labels inside the viewport.
+        var placement = GraphLabelPlacement(
+            bounds: CGRect(
+                x: 8,
+                y: 8,
+                width: max(0, size.width - 16),
+                height: max(0, size.height - 16)
+            ),
+            nodes: obstacles + [CGRect(
+                x: 0, y: max(0, size.height - 60),
+                width: compact ? min(146, size.width) : size.width, height: 60
+            )] + (showsDocumentLegend ? [CGRect(x: 0, y: 0, width: 180, height: 44)] : [])
+        )
+        for node in nodes {
+            guard let center = point(node.id, size: size) else { continue }
+            let selected = node.id == graph.selectedID || node.id == keyboardNode
+            let matched = graph.snapshot.matchingIDs.contains(node.id)
             let label = String(node.label.prefix(38)) + (node.label.count > 38 ? "…" : "")
             let text = context.resolve(Text(label).font(.system(
                 size: selected ? 13 : 12,
                 weight: selected || matched ? .semibold : .regular
             )).foregroundStyle(.primary))
-            let measured = text.measure(in: CGSize(width: 240, height: 40))
-            let labelRect = CGRect(
-                x: center.x - measured.width / 2,
-                y: center.y + 16,
-                width: measured.width,
-                height: measured.height
+            let measured = text.measure(in: CGSize(
+                width: min(240, max(1, size.width - 16)),
+                height: 40
+            ))
+            guard let rect = placement.place(
+                size: measured, near: center, radius: nodeRadius(node.kind)
+            ) else { continue }
+            context.fill(
+                Path(roundedRect: rect.insetBy(dx: -3, dy: -1), cornerRadius: 3),
+                with: .color(Color(nsColor: .windowBackgroundColor))
             )
-            if selected || matched || !labelRects.contains(where: { $0.intersects(labelRect.insetBy(
-                dx: -5,
-                dy: -3
-            )) }) {
-                context.fill(
-                    Path(roundedRect: labelRect.insetBy(dx: -3, dy: -1), cornerRadius: 3),
-                    with: .color(Color(nsColor: .windowBackgroundColor))
-                )
-                context.draw(text, at: CGPoint(x: center.x, y: center.y + 16), anchor: .top)
-                labelRects.append(labelRect)
-            }
+            context.draw(text, at: rect.origin, anchor: .topLeading)
         }
     }
 
@@ -264,8 +307,8 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         }
     }
 
-    private func nodePath(_ kind: GraphNode.Kind, in rect: CGRect) -> Path {
-        switch kind {
+    private func nodePath(_ node: GraphNode, in rect: CGRect) -> Path {
+        switch node.kind {
         case .concept:
             Path(ellipseIn: rect)
         case .person:
@@ -289,7 +332,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 path.closeSubpath()
             }
         case .document:
-            Path(roundedRect: rect, cornerRadius: 3)
+            GraphDocumentMark(isSource: graph.isSource(node)).path(in: rect)
         }
     }
 

@@ -34,17 +34,22 @@ struct LibraryGraphView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
+                HStack(spacing: 16) {
                     LibraryKindPicker(selection: $kind)
-                    Spacer()
                     Toggle("Concepts", isOn: $includesConcepts).toggleStyle(.checkbox)
                         .help("Include saved, evidence-backed concepts. No analysis is started.")
-                    Button("Toggle graph inspector", systemImage: "sidebar.right") {
-                        inspectorVisible.toggle()
+                    Spacer(minLength: 16)
+                    HStack(spacing: 12) {
+                        GraphArrangementControl(graph: graph)
+                        Toggle(isOn: $inspectorVisible) {
+                            Label("Graph inspector", systemImage: "sidebar.right")
+                        }
+                        .labelStyle(.iconOnly).toggleStyle(.button).controlSize(.small)
+                        .help(inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
+                        .accessibilityLabel(inspectorVisible ? "Hide graph inspector" :
+                            "Show graph inspector")
+                        .accessibilityValue(inspectorVisible ? "Shown" : "Hidden")
                     }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    .help(inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
-                    .accessibilityValue(inspectorVisible ? "Shown" : "Hidden")
                 }
                 HStack {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -101,8 +106,11 @@ struct LibraryGraphView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 HSplitView {
-                    KnowledgeGraphView(graph: graph, openNote: openNote, camera: $graph.camera)
-                        .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                    KnowledgeGraphView(
+                        graph: graph, openNote: openNote,
+                        showsDocumentLegend: true, camera: $graph.camera
+                    )
+                    .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
                     if inspectorVisible {
                         LibraryGraphDetails(
                             graph: graph, openNote: openNote, openSource: openSource,
@@ -184,6 +192,11 @@ struct NoteConnectionsView: View {
                     )
                     .frame(height: 300).clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary) }
+                    HStack {
+                        GraphDocumentLegend()
+                        Spacer()
+                        GraphArrangementControl(graph: graph)
+                    }
                 }
                 LibraryGraphDetails(
                     graph: graph,

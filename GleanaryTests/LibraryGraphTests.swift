@@ -147,7 +147,7 @@ struct LibraryGraphTests {
         #expect(try await fixture.store.libraryGraph().graph.edges.isEmpty)
     }
 
-    @Test func sourceProvenanceAppearsWithoutGraphExtraction() async throws {
+    @Test @MainActor func sourceProvenanceAppearsWithoutGraphExtraction() async throws {
         let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open()
         let url = try #require(URL(string: "https://example.com/graph-fixture"))
@@ -181,6 +181,17 @@ struct LibraryGraphTests {
         #expect(edge.source == GraphNode.documentID(summary.id))
         #expect(edge.target == GraphNode.documentID(sourceID))
         #expect(graph.sourceNodeIDs == [GraphNode.documentID(sourceID)])
+        let model = LibraryGraphModel()
+        model.reduceMotion = true
+        defer { model.stop() }
+        await model.load(from: fixture.store, request: LibraryGraphRequest())
+        let canvas: any GraphCanvasModel = model
+        let sourceNode = try #require(model.snapshot.nodes.first { $0.noteID == sourceID })
+        let noteNode = try #require(model.snapshot.nodes.first { $0.noteID == summary.id })
+        #expect(canvas.isSource(sourceNode))
+        #expect(!canvas.isSource(noteNode))
+        #expect(canvas.kindLabel(for: sourceNode) == "Source")
+        #expect(canvas.kindLabel(for: noteNode) == "Note")
         let inspector = LibraryGraphInspector(data: graph)
         #expect(inspector.neighbors(of: edge.source).first?.group == .sources)
         #expect(inspector.neighbors(of: edge.target).first?.group == .notes)
@@ -364,6 +375,96 @@ struct LibraryGraphTests {
         #expect(graph.camera == camera)
         #expect(graph.cameraReset == reset)
         #expect(graph.positions == positions)
+    }
+
+    @Test @MainActor func spacingChangesPreserveCameraSelectionScopeAndOtherSurfaces() async throws {
+        let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
+        let notes = try await fixture.store.open(seed: (0 ..< 5).map {
+            MarkdownDocument(name: "Spacing \($0)", markdown: "Synthetic fixture.")
+        })
+        for note in notes.dropFirst() {
+            try fixture.link(notes[0].id, note.id)
+        }
+        let graph = LibraryGraphModel(), embedded = LibraryGraphModel()
+        graph.reduceMotion = true
+        embedded.reduceMotion = true
+        defer { graph.stop(); embedded.stop() }
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        await embedded.load(from: fixture.store, request: LibraryGraphRequest(focus: notes[0].id))
+        try await waitForLayout(graph)
+        try await waitForLayout(embedded)
+        let nodeID = GraphNode.documentID(notes[0].id)
+        let edge = try #require(graph.snapshot.edges.first)
+        graph.select(nodeID, edgeID: edge.id)
+        let anchor = graph.positions[nodeID]
+        let camera = GraphCamera(scale: 0.7, pan: CGSize(width: 15, height: -20))
+        graph.camera = camera
+        let reset = graph.cameraReset
+        let request = graph.request
+        let snapshot = graph.snapshot
+        let embeddedPositions = embedded.positions
+        let counts = try fixture.counts()
+        for value in [0.1, 0.3, 1] {
+            graph.setSpacing(value)
+        }
+        graph.finishSpacingChange()
+        try await waitForLayout(graph)
+        #expect(graph.spacing.value == 1)
+        #expect(graph.camera == camera)
+        #expect(graph.cameraReset == reset)
+        #expect(graph.request == request)
+        #expect(graph.snapshot == snapshot)
+        #expect(graph.selectedID == nodeID)
+        #expect(graph.selectedEdgeID == edge.id)
+        #expect(graph.positions[nodeID] == anchor)
+        #expect(embedded.spacing == .standard)
+        #expect(embedded.positions == embeddedPositions)
+        #expect(try fixture.counts() == counts)
+        graph.resetSpacing()
+        try await waitForLayout(graph)
+        #expect(graph.spacing == .standard)
+        #expect(graph.camera == camera)
+        #expect(graph.selectedID == nodeID)
+        #expect(graph.request == request)
+    }
+
+    @Test @MainActor func stoppingCancelsPendingSpacingPreviews() async throws {
+        let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [MarkdownDocument(
+            name: "Fixture",
+            markdown: "Fixture."
+        )])
+        let graph = LibraryGraphModel()
+        graph.reduceMotion = true
+        defer { graph.stop() }
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        try await waitForLayout(graph)
+        let positions = graph.positions
+        graph.setSpacing(0.9)
+        graph.stop()
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(graph.positions == positions)
+        #expect(!graph.layingOut)
+        #expect(graph.spacing.value == 0.9)
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        try await waitForLayout(graph)
+        #expect(graph.spacing.value == 0.9)
+        graph.setSpacing(0.1)
+        graph.finishSpacingChange()
+        #expect(graph.layingOut)
+        graph.stop()
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        #expect(graph.layingOut)
+        try await waitForLayout(graph)
+        #expect(graph.spacing.value == 0.1)
+    }
+
+    @MainActor private func waitForLayout(_ graph: LibraryGraphModel) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while graph.layingOut, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(!graph.layingOut)
     }
 
     @Test func denseGraphsDiscloseEdgeAndEvidenceLimits() async throws {
