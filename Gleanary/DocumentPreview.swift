@@ -2,7 +2,27 @@ import Foundation
 import SwiftUI
 
 @MainActor @Observable final class DocumentPreviewModel {
-    var selectedID: UUID?
+    var selectedID: UUID? {
+        didSet {
+            if selectedID != oldValue {
+                showsCapturedSource = false
+            }
+        }
+    }
+
+    var showsCapturedSource = false
+    private(set) var retainedSource: CapturedDocument?
+    private(set) var store: DocumentStore?
+
+    var displayedMarkdown: String? {
+        showsCapturedSource ? retainedSource?.markdown ?? document?.markdown : document?.markdown
+    }
+
+    var canViewCapturedSource: Bool {
+        guard citation != nil, !showsCapturedSource else { return false }
+        return details.kind != "source" || document?.markdown != retainedSource?.markdown
+    }
+
     private(set) var document: MarkdownDocument?
     private(set) var citation: SourceCitation?
     private(set) var generatedSummary = false
@@ -12,6 +32,7 @@ import SwiftUI
     private(set) var categories: [DecimalCategory] = []
     private(set) var related: [DocumentSummary] = []
     private(set) var sources: [DocumentSummary] = []
+    private(set) var summaries: [DocumentSummary] = []
     /// Items linked to this one, each with why.
     private(set) var links: [LinkedItem] = []
     private(set) var coverage: Coverage?
@@ -23,6 +44,7 @@ import SwiftUI
     private var loadToken = UUID()
 
     func load(from store: DocumentStore) async {
+        self.store = store
         guard !Task.isCancelled else { return }
         loadToken = UUID()
         let token = loadToken
@@ -31,9 +53,11 @@ import SwiftUI
         if !retainingPreview {
             document = nil
             citation = nil
+            retainedSource = nil
             generatedSummary = false
             canGenerateSummary = false
-            categories = []; related = []; sources = []; links = []; coverage = nil; warnings = []
+            categories = []; related = []; sources = []; summaries = []
+            links = []; coverage = nil; warnings = []
             authorProvider = nil
             details = LibraryItemDetails()
             composed = false
@@ -54,8 +78,7 @@ import SwiftUI
                     $0.name == "Summary.md" && $0.kind == .markdown &&
                         $0.hash == ContentHash.of(loaded?.markdown ?? "")
                 }
-                eligible = !summary && detail.document.sourceURL != nil && loaded?
-                    .markdown == detail.document.markdown
+                eligible = !summary && loaded?.markdown == detail.document.markdown
                 source = SourceCitation(
                     captureID: captureID, blockOrdinal: 0, page: detail.document.blocks.first?.page,
                     section: nil, url: detail.document.sourceURL
@@ -67,16 +90,21 @@ import SwiftUI
             let itemLinks = try await store.linkedItems(for: id)
             let provider = try await store.libraryAuthorProvider(for: id)
             let itemDetails = try await store.libraryItemDetails(for: id)
+            let summaries = itemDetails.kind == "source" || showsCapturedSource
+                ? try await store.librarySummaries(for: id)
+                .filter { showsCapturedSource || $0.id != id } : []
+            let featuredIDs = Set((provenance + summaries).map(\.id))
             let isComposed = try await store.isComposedDocument(id)
             guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
             citation = source
+            retainedSource = captured
             generatedSummary = summary
-            canGenerateSummary = eligible
+            canGenerateSummary = eligible && summaries.isEmpty
             document = loaded
             categories = filing
             sources = provenance
-            let sourceIDs = Set(provenance.map(\.id))
-            related = linked.filter { !sourceIDs.contains($0.id) }
+            self.summaries = summaries
+            related = linked.filter { !featuredIDs.contains($0.id) }
             links = itemLinks
             coverage = captured?.coverage
             warnings = captured?.warnings ?? []
@@ -136,6 +164,9 @@ struct DocumentPreview: View {
     var summaryEnabled = false
     var generatingSummary = false
     var generateSummary: (MarkdownDocument) -> Void = { _ in }
+    var createAnotherSummary: ((MarkdownDocument) -> Void)?
+    @State private var associatingSummary = false
+    @State private var confirmingAnotherSummary = false
     /// Nil while the summary is written by the bookmark's page fetch, which can't stop here.
     var cancelSummary: (() -> Void)? = {}
     var showsLibraryDetails = false
@@ -161,10 +192,11 @@ struct DocumentPreview: View {
     @Environment(\.isReaderMode) private var readerMode
     @Environment(\.enterReader) private var enterReader
     @Environment(\.libraryGraphContext) private var graphContext
+    @Environment(\.linkedSourceContext) private var linkedSourceContext
     private var appearance = ReadingAppearance()
 
     private var readingKind: ReadingKind {
-        ReadingKind(libraryKind: model.details.kind)
+        model.showsCapturedSource ? .sources : ReadingKind(libraryKind: model.details.kind)
     }
 
     private var readingFont: ReadingFont {
@@ -227,11 +259,17 @@ struct DocumentPreview: View {
                                                 .accessibilityAddTraits(.isHeader)
                                         }
                                         Spacer()
-                                        ReaderModeButton(target: .note(document.id))
+                                        if model.showsCapturedSource,
+                                           let citation = model.citation
+                                        {
+                                            ReaderModeButton(target: .source(citation.captureID))
+                                        } else {
+                                            ReaderModeButton(target: .note(document.id))
+                                        }
                                     }
                                 }
                                 MarkdownPreview(
-                                    markdown: document.markdown,
+                                    markdown: model.displayedMarkdown ?? document.markdown,
                                     readingFont: readingFont
                                 )
                                 .textSelection(.enabled)
@@ -253,13 +291,19 @@ struct DocumentPreview: View {
                             )
                             .accessibilityElement(children: .contain)
                             .accessibilityLabel("Document content")
+                            if readingKind == .notes, let linkedSourceContext {
+                                LinkedSourcesView(
+                                    document: document, context: linkedSourceContext,
+                                    openDocument: openDocument
+                                ).id(document.id).padding(.top, 12)
+                            }
                             if let graphContext, model.details.archived == nil {
                                 NoteConnectionsView(
                                     noteID: document.id, store: graphContext.store,
                                     refreshToken: graphContext.refreshToken,
                                     explore: graphContext.explore, openNote: openDocument,
                                     openSource: openSource
-                                )
+                                ).padding(.top, 12)
                             }
                             if showsLibraryDetails,
                                graphContext == nil || model.details.archived != nil,
@@ -307,6 +351,9 @@ struct DocumentPreview: View {
     }
 
     private var contentTitle: String? {
+        if model.showsCapturedSource {
+            return "Full Text"
+        }
         if model.generatedSummary {
             return "Summary"
         }
@@ -340,14 +387,17 @@ struct DocumentPreview: View {
                 Text(sourceLine).lineLimit(1)
                 Spacer(minLength: 8)
                 if editDocument != nil || fileDocument != nil || archiveDocument != nil
-                    || sourceURL != nil || (refreshDocument != nil && model.composed)
+                    || model
+                    .citation != nil || sourceURL != nil ||
+                    (refreshDocument != nil && model.composed)
                 {
                     moreMenu(document)
                 }
             }
             .font(.subheadline)
             .foregroundStyle(.secondary)
-            Text(document.name)
+            Text(model.showsCapturedSource ? model.retainedSource?.title ?? document.name : document
+                .name)
                 .font(readingFont.scaledFont(22.0 / 14, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -357,7 +407,8 @@ struct DocumentPreview: View {
                     Text(model.sources.count == 1 ? "Source" : "Sources")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(model.sources) { source in
-                        Button { openDocument(source.id) } label: {
+                        Button { (linkedSourceContext?.viewSource ?? openDocument)(source.id)
+                        } label: {
                             Label(source.name, systemImage: "doc.text")
                                 .lineLimit(2).multilineTextAlignment(.leading)
                         }
@@ -391,16 +442,12 @@ struct DocumentPreview: View {
 
     private func actionBar(_ document: MarkdownDocument, compact: Bool) -> some View {
         HStack(spacing: 8) {
-            if let citation = model.citation {
-                Button { openSource(citation) } label: {
-                    actionLabel(
-                        "Captured Source",
-                        systemImage: "doc.text.magnifyingglass",
-                        compact: compact
-                    )
-                }
-                .buttonStyle(.bordered)
-                .help("Read the text Gleanary captured from the page")
+            if model.canViewCapturedSource || !model.summaries.isEmpty {
+                SourceSummaryNavigation(
+                    summaries: model.summaries, compact: compact,
+                    showsSource: model.canViewCapturedSource, openSummary: openSummary,
+                    viewSource: { model.showsCapturedSource = true }
+                ).buttonStyle(.bordered)
             }
             if let url = model.citation?.url ?? sourceURL {
                 Link(destination: url) {
@@ -412,7 +459,7 @@ struct DocumentPreview: View {
             AddToChatButton(target: .note(document.id), compact: compact)
             if generatingSummary {
                 SummarizingButton(compact: compact, cancel: cancelSummary)
-            } else if model.canGenerateSummary, showsSummaryActions {
+            } else if model.canGenerateSummary, model.summaries.isEmpty, showsSummaryActions {
                 Button { generateSummary(document) } label: {
                     actionLabel("Summarize", systemImage: "sparkles", compact: compact)
                 }
@@ -427,11 +474,43 @@ struct DocumentPreview: View {
         .fixedSize(horizontal: !compact, vertical: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Document actions")
+        .sheet(isPresented: $associatingSummary) {
+            if let store = model.store {
+                SummaryAssociationView(store: store, sourceID: document.id) {
+                    await linkedSourceContext?.changed()
+                    await model.load(from: store)
+                }
+            }
+        }
+        .confirmationDialog("Create another summary?", isPresented: $confirmingAnotherSummary) {
+            Button("Create summary") { createAnotherSummary?(document) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "This creates a new note from the retained source using the selected AI provider. Existing notes and source data stay unchanged."
+            )
+        }
+    }
+
+    private func openSummary(_ id: UUID) {
+        model.showsCapturedSource = false
+        openDocument(id)
     }
 
     private func moreMenu(_ document: MarkdownDocument) -> some View {
         Menu {
-            if let editDocument {
+            if model.citation != nil {
+                Button("Use as summary for this source…", systemImage: "note.text.badge.plus") {
+                    associatingSummary = true
+                }
+                if createAnotherSummary != nil, !model.summaries.isEmpty || model.generatedSummary {
+                    Button("Create another summary…", systemImage: "sparkles") {
+                        confirmingAnotherSummary = true
+                    }.disabled(!summaryEnabled || generatingSummary)
+                }
+                Divider()
+            }
+            if let editDocument, !model.showsCapturedSource {
                 Button("Edit…", systemImage: "pencil") { editDocument(document) }
             }
             if let refreshDocument, model.composed {
@@ -545,18 +624,26 @@ struct DocumentPreview: View {
                 )
                 .id(document.id)
             }
-            if model.generatedSummary, let provider = model.authorProvider {
+            if model.generatedSummary, !model.showsCapturedSource,
+               let provider = model.authorProvider
+            {
                 infoRow("Summary") {
                     HStack(spacing: 4) {
                         Label(provider, systemImage: "sparkles")
                         Text("(check the source for details)").foregroundStyle(.secondary)
                     }
                 }
-            } else if let provider = model.authorProvider, provider != "user" {
+            } else if let provider = model.authorProvider, provider != "user",
+                      !model.showsCapturedSource
+            {
                 infoRow("Written by") { Label(provider, systemImage: "sparkles") }
-            } else if model.canGenerateSummary {
+            } else if model.canGenerateSummary, model.summaries.isEmpty {
                 infoRow("Summary") {
-                    Text("None yet. The full text is saved.").foregroundStyle(.secondary)
+                    HStack {
+                        Text("No summary associated.").foregroundStyle(.secondary)
+                        Button("Use existing note…") { associatingSummary = true }
+                            .buttonStyle(.link)
+                    }
                 }
             }
             if let saved = model.details.saved {
@@ -596,7 +683,7 @@ struct DocumentPreview: View {
     /// Related items in a card; a link's reason shows in place of the item's kind.
     private func itemList(_ title: String, items: [(DocumentSummary, String?)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.title3.weight(.semibold))
+            Text(title).font(.headline)
                 .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) {
                 ForEach(Array(items.enumerated()), id: \.element.0.id) { index, entry in
@@ -772,9 +859,13 @@ struct MarkdownPreview: View {
                             ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
                                 HStack(alignment: .top, spacing: 16) {
                                     ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                                        Text(Self.inline(cell))
-                                            .fontWeight(index == 0 ? .semibold : .regular)
-                                            .frame(width: 150, alignment: .leading)
+                                        inlineText(
+                                            cell,
+                                            nativeFont: nativeFont(weight: index == 0 ? .semibold :
+                                                .regular)
+                                        )
+                                        .fontWeight(index == 0 ? .semibold : .regular)
+                                        .frame(width: 150, alignment: .leading)
                                     }
                                 }.padding(.vertical, 8)
                                 if index < rows.count - 1 {
@@ -785,36 +876,40 @@ struct MarkdownPreview: View {
                     }
                 } else if block.hasPrefix("#") {
                     let heading = block.prefix(while: { $0 == "#" }).count
-                    Text(Self
-                        .inline(String(block.dropFirst(heading))
-                            .trimmingCharacters(in: .whitespaces)))
-                        .font(readingFont?.scaledFont(
-                            heading == 1 ? 17.0 / 14 : 1,
-                            weight: .semibold
+                    inlineText(
+                        String(block.dropFirst(heading)).trimmingCharacters(in: .whitespaces),
+                        nativeFont: nativeFont(
+                            scale: readingFont == nil ? 1 : (heading == 1 ? 17.0 / 14 : 1),
+                            style: heading == 1 ? .title2 : .headline, weight: .semibold
                         )
-                            ?? (heading == 1 ? .title2.weight(.semibold) : .headline))
-                        .padding(.top, 8).accessibilityAddTraits(.isHeader)
+                    )
+                    .font(readingFont?.scaledFont(
+                        heading == 1 ? 17.0 / 14 : 1,
+                        weight: .semibold
+                    )
+                        ?? (heading == 1 ? .title2.weight(.semibold) : .headline))
+                    .padding(.top, 8).accessibilityAddTraits(.isHeader)
                 } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
                         Text("•").foregroundStyle(.tint).accessibilityHidden(true)
-                        Text(Self.inline(String(block.dropFirst(2)))).lineSpacing(3)
+                        inlineText(String(block.dropFirst(2)), lineSpacing: 3).lineSpacing(3)
                     }
                 } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
                           let marker = block.firstIndex(of: ".")
                 {
                     HStack(alignment: .top, spacing: 10) {
                         Text(String(block[...marker])).foregroundStyle(.secondary)
-                        Text(Self
-                            .inline(String(block[block.index(after: marker)...])
-                                .trimmingCharacters(in: .whitespaces)))
+                        inlineText(String(block[block.index(after: marker)...])
+                            .trimmingCharacters(in: .whitespaces))
                     }
                 } else if let quote = Self.quoteText(block) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "quote.opening").font(.caption).accessibilityHidden(true)
-                        Text(Self.inline(quote)).lineSpacing(4)
+                        inlineText(quote, lineSpacing: 4, color: .secondaryLabelColor)
+                            .lineSpacing(4)
                     }.foregroundStyle(.secondary).padding(.leading, 12)
                 } else {
-                    Text(Self.inline(block)).lineSpacing(4)
+                    inlineText(block, lineSpacing: 4).lineSpacing(4)
                 }
             }
         }
@@ -928,6 +1023,32 @@ struct MarkdownPreview: View {
         }
     }
 
+    @ViewBuilder private func inlineText(
+        _ source: String, nativeFont: NSFont? = nil, lineSpacing: CGFloat = 0,
+        color: NSColor = .labelColor
+    ) -> some View {
+        let text = Self.inline(source)
+        if text.runs.contains(where: { $0.link != nil }) {
+            MarkdownLinkText(
+                text: text, font: nativeFont ?? self.nativeFont(), color: color,
+                lineSpacing: lineSpacing
+            )
+        } else {
+            Text(text)
+        }
+    }
+
+    private func nativeFont(
+        scale: Double = 1, style: NSFont.TextStyle? = nil, weight: NSFont.Weight = .regular
+    ) -> NSFont {
+        let base = readingFont?.nativeFont
+            ?? NSFont.preferredFont(forTextStyle: style ?? (font == .callout ? .callout : .body))
+        let descriptor = base.fontDescriptor.addingAttributes([
+            .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue],
+        ])
+        return NSFont(descriptor: descriptor, size: base.pointSize * scale) ?? base
+    }
+
     private static func inline(_ text: String) -> AttributedString {
         (try? AttributedString(
             markdown: text,
@@ -967,7 +1088,7 @@ private struct SummarizingButton: View {
     var body: some View {
         Button(action: cancel ?? {}) {
             HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
+                ChatWorkingIndicator(color: .secondary)
                 if !compact {
                     Text("Summarizing…")
                 }

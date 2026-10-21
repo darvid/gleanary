@@ -214,9 +214,10 @@ extension DocumentStore {
     """
 
     static let libraryKindSQL = """
-    coalesce((SELECT kind FROM authored_artifacts WHERE noteID = n.id),
+    CASE WHEN EXISTS (SELECT 1 FROM note_sources WHERE noteID = n.id AND summaryRole = 'summary')
+        THEN 'summary' ELSE coalesce((SELECT kind FROM authored_artifacts WHERE noteID = n.id),
         CASE WHEN \(legacySummarySQL) THEN 'summary'
-        WHEN EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) THEN 'source' ELSE 'note' END)
+        WHEN EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) THEN 'source' ELSE 'note' END) END
     """
 
     static func libraryFilter(_ query: String, scope: LibraryScope)
@@ -229,9 +230,9 @@ extension DocumentStore {
         switch scope {
         case .all, .archived: break
         case .sources:
-            sql += " AND EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) AND NOT EXISTS (SELECT 1 FROM authored_artifacts WHERE noteID = n.id) AND NOT (\(legacySummarySQL))"
+            sql += " AND (\(libraryKindSQL)) = 'source'"
         case .notes:
-            sql += " AND (NOT EXISTS (SELECT 1 FROM captures WHERE noteID = n.id) OR EXISTS (SELECT 1 FROM authored_artifacts WHERE noteID = n.id) OR \(legacySummarySQL))"
+            sql += " AND (\(libraryKindSQL)) != 'source'"
         case .unfiled:
             sql += " AND NOT EXISTS (SELECT 1 FROM note_categories WHERE noteID = n.id)"
         case let .category(id):
@@ -268,6 +269,45 @@ extension DocumentStore {
                     faviconData: nil, faviconChecked: true, kind: row["kind"]
                 )
             }
+        }
+    }
+
+    /// Saved summaries backed by this capture's provenance, including summary-first captures.
+    func librarySummaries(for id: UUID) throws -> [DocumentSummary] {
+        try readyDatabase().read { db in try Self.librarySummaries(for: id, in: db) }
+    }
+
+    func librarySummaries(forCapture id: UUID) throws -> [DocumentSummary] {
+        try readyDatabase().read { db in
+            guard let noteID = try String.fetchOne(
+                db,
+                sql: "SELECT noteID FROM captures WHERE id = ?",
+                arguments: [id.uuidString]
+            )
+            else { return [] }
+            return try Self.librarySummaries(for: Self.uuid(noteID), in: db)
+        }
+    }
+
+    static func librarySummaries(for id: UUID, in db: Database) throws -> [DocumentSummary] {
+        try Row.fetchAll(db, sql: """
+        SELECT n.id, n.name, n.sourceURL, \(libraryKindSQL) AS kind
+        FROM notes n WHERE n.deletedAt IS NULL AND (\(libraryKindSQL)) = 'summary'
+            AND n.id IN (
+                SELECT ns.noteID FROM note_sources ns JOIN captures c ON c.sourceID = ns.sourceID
+                WHERE c.noteID = ? AND (ns.summaryRole = 'summary'
+                    OR (ns.summaryRole IS NULL AND (
+                        EXISTS (SELECT 1 FROM authored_artifacts a WHERE a.noteID = n.id AND a.kind = 'summary')
+                        OR \(legacySummarySQL))))
+            )
+        ORDER BY CASE WHEN n.id = ? THEN 0 ELSE 1 END, n.updatedAt DESC, n.id
+        """, arguments: [id.uuidString, id.uuidString]).map { row in
+            let source: String? = row["sourceURL"]
+            return try DocumentSummary(
+                id: Self.uuid(row["id"]), name: row["name"],
+                sourceURL: source.flatMap(URL.init(string:)),
+                faviconData: nil, faviconChecked: true, kind: row["kind"]
+            )
         }
     }
 
@@ -341,7 +381,9 @@ extension DocumentStore {
                 db,
                 sql: """
                 SELECT coalesce((SELECT provider FROM authored_artifacts WHERE noteID = n.id),
-                    CASE WHEN \(Self.legacySummarySQL) THEN coalesce(n.summaryEngine, 'Apple Intelligence') END)
+                    CASE WHEN \(Self.legacySummarySQL) THEN coalesce(n.summaryEngine, 'Apple Intelligence')
+                    WHEN EXISTS (SELECT 1 FROM note_sources WHERE noteID = n.id AND summaryRole = 'summary')
+                        THEN coalesce(n.summaryEngine, 'user') END)
                 FROM notes n WHERE n.id = ? AND n.deletedAt IS NULL
                 """,
                 arguments: [id.uuidString]

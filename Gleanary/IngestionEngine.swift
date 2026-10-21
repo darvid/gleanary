@@ -65,21 +65,17 @@ actor IngestionEngine {
         _ input: String,
         deduplicate: Bool = true,
         summarizeLink: Bool = true,
-        replacing noteID: UUID? = nil
+        replacing noteID: UUID? = nil,
+        referencing referenceID: UUID? = nil
     ) async throws -> UUID {
         if let url = try CaptureRequest.classify(input) {
-            let media = try MediaTarget.parse(url)
-            let arxiv = SourceIdentity.arxiv(url)
-            let canonical = try CaptureRequest.canonicalURL(media?.url ?? arxiv?.url ?? url)
-            guard let canonicalURL = URL(string: canonical) else { throw CaptureError.unsafeURL }
-            return try await store.enqueueCapture(CaptureRequest(
-                url: canonicalURL,
-                identity: media?.identity ?? arxiv?.identity ?? ("url:" + canonical),
-                label: canonical,
-                summarizeLink: summarizeLink,
-                submittedURL: url,
-                replacingNoteID: noteID
-            ), deduplicate: deduplicate && noteID == nil)
+            var request = try CaptureRequest.webLink(url, referencing: referenceID)
+            request.summarizeLink = summarizeLink
+            request.replacingNoteID = noteID
+            return try await store.enqueueCapture(
+                request,
+                deduplicate: deduplicate && noteID == nil
+            )
         }
         guard input.utf8.count <= CaptureLimits.markdownBytes else { throw CaptureError.tooLarge }
         let artifact = try await artifacts.retain(
@@ -160,6 +156,20 @@ actor IngestionEngine {
         }
     }
 
+    func createSummaryNote(
+        _ document: MarkdownDocument,
+        createAnother: Bool = false
+    ) async throws -> MarkdownDocument {
+        let source = try await store.summaryNoteInput(for: document, createAnother: createAnother)
+        let summarizer = try await chosenSummarizer()
+        let summary = try await summarizer.summarize(source.document)
+        try Task.checkCancellation()
+        return try await store.publishSummaryNote(
+            summary, for: document, captureID: source.id, engine: summarizer.engineName,
+            createAnother: createAnother
+        )
+    }
+
     func summarizeExisting(_ document: MarkdownDocument) async throws -> MarkdownDocument {
         let source = try await store.summarySource(for: document)
         let summarizer = try await chosenSummarizer()
@@ -192,6 +202,8 @@ actor IngestionEngine {
         var document: CapturedDocument
         var faviconURL: URL?
         var shareImageURL: URL?
+        try await store.checkpoint(job, acquired: acquired, progress: "Extracting text")
+        await changed()
         switch primary.kind {
         case .capture:
             document = try await JSONDecoder().decode(
@@ -253,6 +265,8 @@ actor IngestionEngine {
         let (summary, summaryNote) = try await summaryOrNote(
             job, document: document, acquired: &acquired, changed: changed
         )
+        try await store.checkpoint(job, acquired: acquired, progress: "Finishing capture")
+        await changed()
         let favicon = await FaviconLoader(fetcher: fetcher).load(
             source: primary.sourceURL ?? document.sourceURL ?? job.request.url,
             preferred: faviconURL

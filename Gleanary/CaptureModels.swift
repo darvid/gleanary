@@ -33,6 +33,24 @@ struct CaptureRequest: Codable, Sendable {
     var submittedURL: URL? = nil
     /// An imported bookmark note this capture upgrades in place, if it is still unedited.
     var replacingNoteID: UUID? = nil
+    /// Explicit capture requests from notes; retained across retries and shared jobs.
+    var referencingNoteIDs: [UUID]? = nil
+
+    static func webLink(_ url: URL, referencing noteID: UUID? = nil) throws -> CaptureRequest {
+        let media = try MediaTarget.parse(url)
+        let arxiv = SourceIdentity.arxiv(url)
+        let canonical = try canonicalURL(media?.url ?? arxiv?.url ?? url)
+        // Validate the submitted URL too, before specialized normalization can discard credentials.
+        _ = try canonicalURL(url)
+        guard let canonicalURL = URL(string: canonical) else { throw CaptureError.unsafeURL }
+        return CaptureRequest(
+            url: canonicalURL,
+            identity: media?.identity ?? arxiv?.identity ?? ("url:" + canonical),
+            label: canonical,
+            submittedURL: url,
+            referencingNoteIDs: noteID.map { [$0] }
+        )
+    }
 
     static func classify(_ input: String) throws -> URL? {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)

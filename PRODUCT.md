@@ -23,6 +23,10 @@ Graph. Notes also show a local Connections graph with a handoff to the
 full Graph. Graph reads existing links, source provenance, and optional
 saved concepts without inference. Mind Map navigation and automatic
 concept extraction remain deferred; preserve their code and stored data.
+Notes also surface external links that can be captured individually or
+with Add all. Detection is local and read-only; capture requires an
+explicit action and follows the existing Capture settings. Saved sources
+and pending jobs are recognized rather than duplicated.
 
 ## Capabilities and constraints
 

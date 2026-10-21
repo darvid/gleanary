@@ -532,7 +532,9 @@ struct EvidenceSummaryDraft: Codable {
     }
 
     /// IDs are checked by `anchored(in:)`, not enumerated: long sources have hundreds.
-    static func jsonSchema() -> [String: Any] {
+    static func jsonSchema(maximumTakeaways: Int = SummaryPolicy
+        .maximumTakeaways) -> [String: Any]
+    {
         let point: [String: Any] = [
             "type": "object",
             "properties": [
@@ -547,8 +549,7 @@ struct EvidenceSummaryDraft: Codable {
         return [
             "type": "object",
             "properties": ["overview": point, "takeaways": ["type": "array", "items": point,
-                                                            "maxItems": SummaryPolicy
-                                                                .maximumTakeaways]],
+                                                            "maxItems": maximumTakeaways]],
             "required": ["overview", "takeaways"],
             "additionalProperties": false,
         ]
@@ -762,7 +763,8 @@ enum SummaryDiagnostics {
 }
 
 enum LinkSummaryError: LocalizedError {
-    case unavailable, failed, editedCapture, contextLimit, invalidOutput, evidenceMismatch,
+    case unavailable, failed, editedCapture, alreadySummarized, contextLimit, invalidOutput,
+         evidenceMismatch,
          unsupportedSummary, noEvidence, modelRestricted, languageUnsupported, modelBusy
 
     var errorDescription: String? {
@@ -787,6 +789,8 @@ enum LinkSummaryError: LocalizedError {
             "The model's quotations did not match the retained source. No summary was saved."
         case .unsupportedSummary:
             "The summary's main claim failed its evidence check. The source is retained; no summary was saved."
+        case .alreadySummarized:
+            "This source already has a saved summary. Open it, or explicitly choose Create another summary."
         case .editedCapture:
             "This document is not an untouched link capture. Its content was kept; no summary replaced it."
         }

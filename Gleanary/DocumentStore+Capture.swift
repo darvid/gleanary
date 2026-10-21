@@ -6,9 +6,15 @@ extension DocumentStore {
         let id = UUID()
         let now = Date().timeIntervalSince1970
         let acquired = request.artifact.map { [$0] } ?? []
-        try readyDatabase().write { db in
+        return try activityWrite(actor: "app", batchID: id, label: "Queued capture") { db in
             for artifact in acquired {
                 try Self.recordArtifact(artifact, in: db)
+            }
+            if deduplicate, request.replacingNoteID == nil,
+               let current = try Self.activeCapture(identity: request.identity, in: db)
+            {
+                try Self.mergeCaptureReferences(request, into: current, in: db)
+                return current.id
             }
             let existingNoteID: String? = if deduplicate {
                 try String.fetchOne(db, sql: """
@@ -39,8 +45,16 @@ extension DocumentStore {
                     now,
                 ]
             )
+            if let existingNoteID {
+                try Self.attachLinkedSourceReferences(
+                    request,
+                    to: Self.uuid(existingNoteID),
+                    changeID: id,
+                    in: db
+                )
+            }
+            return id
         }
-        return id
     }
 
     func captureJobs(limit: Int = 30) throws -> [CaptureJob] {
@@ -133,6 +147,19 @@ extension DocumentStore {
 
     func retryCapture(_ id: UUID) throws {
         try readyDatabase().write { db in
+            if let row = try Row.fetchOne(
+                db,
+                sql: "SELECT * FROM ingestion_jobs WHERE id = ? AND state IN ('failed','cancelled')",
+                arguments: [id.uuidString]
+            ) {
+                let job = try Self.captureJob(row)
+                if !(job.request.referencingNoteIDs ?? []).isEmpty,
+                   let current = try Self.activeCapture(identity: job.request.identity, in: db)
+                {
+                    try Self.mergeCaptureReferences(job.request, into: current, in: db)
+                    return
+                }
+            }
             try db.execute(
                 // Trying again by hand restarts the automatic retry's wait, not its count.
                 sql: "UPDATE ingestion_jobs SET state = 'queued', token = ?, progress = 'Retry queued', error = NULL, recovery = NULL, retryAt = NULL WHERE id = ? AND state IN ('failed','cancelled')",
@@ -288,12 +315,32 @@ extension DocumentStore {
                 sql: "INSERT OR IGNORE INTO note_sources(noteID, sourceID) VALUES (?, ?)",
                 arguments: [noteID.uuidString, sourceID]
             )
+            if existing == nil, summary != nil {
+                try db.execute(
+                    sql: "UPDATE note_sources SET summaryRole = 'summary' WHERE noteID = ? AND sourceID = ?",
+                    arguments: [noteID.uuidString, sourceID]
+                )
+                try db.execute(
+                    sql: "UPDATE notes SET summaryEngine = coalesce(summaryEngine, 'Apple Intelligence') WHERE id = ?",
+                    arguments: [noteID.uuidString]
+                )
+            }
+            if let data = try Data.fetchOne(
+                db,
+                sql: "SELECT request FROM ingestion_jobs WHERE id = ?",
+                arguments: [job.id.uuidString]
+            ) {
+                let request = try JSONDecoder().decode(CaptureRequest.self, from: data)
+                try Self.attachLinkedSourceReferences(request, to: noteID, changeID: job.id, in: db)
+            }
             return noteID
         }
     }
 
     /// Only untouched link captures can become summary-first notes.
     func summarySource(for document: MarkdownDocument) throws -> CaptureDetail {
+        guard try librarySummaries(for: document.id).isEmpty
+        else { throw LinkSummaryError.alreadySummarized }
         let captureID = try readyDatabase().read { db -> UUID in
             guard let row = try Row.fetchOne(
                 db,
@@ -332,6 +379,8 @@ extension DocumentStore {
         else { throw LinkSummaryError.failed }
         try Task.checkCancellation()
         return try activityWrite(actor: "app", batchID: UUID(), label: "Generated summary") { db in
+            guard try Self.librarySummaries(for: document.id, in: db).isEmpty
+            else { throw LinkSummaryError.alreadySummarized }
             guard let row = try Row.fetchOne(
                 db,
                 sql: "SELECT * FROM notes WHERE id = ?",
@@ -369,6 +418,16 @@ extension DocumentStore {
                 sql: "UPDATE notes SET summaryEngine = ? WHERE id = ?",
                 arguments: [engine.isEmpty ? nil : engine, document.id.uuidString]
             )
+            try db.execute(sql: """
+            UPDATE note_sources SET summaryRole = 'summary' WHERE noteID = ?
+                AND sourceID = (SELECT sourceID FROM captures WHERE id = ?)
+            """, arguments: [document.id.uuidString, captureID.uuidString])
+            if engine.isEmpty {
+                try db.execute(
+                    sql: "UPDATE notes SET summaryEngine = 'Apple Intelligence' WHERE id = ?",
+                    arguments: [document.id.uuidString]
+                )
+            }
             return note
         }
     }

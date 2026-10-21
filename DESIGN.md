@@ -308,8 +308,10 @@ button radius. Code blocks use a rectangular control surface.
   Connection-based grouping and other grouping modes remain deferred.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
 - **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
-- **Preview actions:** Captured Source, Open Original, Add to Chat, and
-  Summarize appear in that order with the same quiet `.bordered` style.
+- **Preview actions:** Open summary appears first when a saved summary
+  exists (a named Summaries menu for multiple notes). View source appears
+  only when the retained text is not already being read. Open Original,
+  Add to Chat, and Summarize follow with the same quiet `.bordered` style.
   No action is arbitrarily primary. The action group uses
   `.controlSize(.large)` and 8pt spacing, with category tint inherited
   from the preview. More actions live in a borderless menu. Native styles
@@ -367,7 +369,18 @@ button radius. Code blocks use a rectangular control surface.
   Task remains available above them. The observable running state unlocks
   controls when the worker finishes.
 - **Bookmark import:** File › Import Bookmarks… opens a native sheet: choose a browser/Raindrop HTML or Raindrop CSV export, review each folder's destination (existing category, a proposed new Johnny Decimal category, or unfiled) in an inset list with subfolders indented 16pt, then import with determinate progress. Imports read only export metadata; a page is fetched after its note stays open for one second.
-- **Categorize Unfiled:** a sheet that runs suggestions in the background and groups them by category in collapsed disclosure rows with Accept All/Reject All, per-item accept/reject icons, an "Accept N Likely" bulk action with undo, and model-proposed new categories that must be created explicitly. The engine line states whether data leaves the Mac.
+- **Bulk filing suggestions:** Unfiled exposes Suggest filing directly in
+  the Library toolbar. It opens the existing review workflow, also
+  available through File/More > Categorize Unfiled. While suggestions run,
+  the toolbar shows the shared working dot and Review filing. Opening the
+  sheet does not start inference. Explicit Suggest Homes runs bounded
+  requests (up to 10 items locally or 40 with ChatGPT), saving suggestions
+  after each batch and allowing Stop/resume with cached answers.
+  The sheet groups suggestions by category in collapsed disclosure rows
+  with Accept All/Reject All, per-item accept/reject icons, an Accept N
+  Likely bulk action with undo, and proposed new categories that must be
+  created explicitly. Nothing is filed until accepted. The engine line
+  states whether data leaves the Mac.
 - **Research-series filing:** publication commits before the Librarian
   checks the new notes and index against the existing filing scheme.
   Confident existing homes are applied as an undoable batch. Ambiguous
@@ -589,10 +602,77 @@ button radius. Code blocks use a rectangular control surface.
   retries preserve a new draft. Sent context survives reopening, and
   deleted items show a neutral unavailable label. No second composer is
   introduced.
+- **Linked sources:** Notes in Library and Chat show a Linked sources
+  section below the body and before Connections, outside Reader Mode.
+  Detection parses saved Markdown locally, including reference links and
+  bare web URLs, and excludes code, images, and internal/non-web links.
+  Network or model work requires Add, Add all, or Summarize. The
+  section shows five rows initially, with an explicit Show all action.
+  Prefer descriptive bibliography titles over inline citation numbers or
+  bare URLs when combining duplicate links; use the URL if no title exists.
+  The remaining count sits beside the heading. A quiet + Add all action
+  includes collapsed rows; its help and accessible label name the count.
+  Borderless plus and retry actions have descriptive tooltips and
+  accessible labels. Live capture progress sits below the host, using
+  persisted phases rather than invented percentages. The shared fading
+  working dot occupies the action slot while queuing or running; it stays
+  steady with Reduce Motion. Saved sources share Open summary and View
+  source controls with the main Library pane. Multiple summaries appear
+  by name in a menu. View source reads retained text without fetching.
+  Space separates rows; there are no rules or footer disclaimer.
+  Capture uses the existing queue, safety checks, and settings.
+  Duplicate active jobs share work atomically; durable request metadata
+  retains each originating note across retries and restarts. Successful
+  captures add ordinary saved references, not fabricated provenance, and
+  never rewrite or refile the originating note. Removed links and deleted
+  notes do not receive stale references. One failed addition does not
+  discard other queued captures. A local job-identity index supports status
+  checks and duplicate detection without repeatedly scanning queue history.
 - **Note provenance:** Source or Sources links sit directly below the
   title and open the saved source in Library. They remain available for
   archived sources but omit deleted items. Other notes from these sources
   appear separately below the text; source items do not repeat there.
+  Existing summaries have explicit Open summary links in linked-source
+  rows, the main Library action bar, and the retained-source viewer.
+  Multiple summaries show their names. Resolve them from canonical source
+  provenance and summary classification, never from a title or URL guess.
+  Include
+  archived summaries but omit deleted notes, avoid self-links in note
+  headers, and do not repeat featured summaries in the related-notes list.
+  Opening a summary only navigates; it never starts generation.
+  Do not add a separate Connected notes header. Ordinary references stay
+  in Connections and do not imply a summary. Use as summary for this
+  source opens a searchable, paged existing-note picker; the explicit
+  association does not rewrite text or filing. A note can summarize more
+  than one source. Explicit summary roles are per source; removing one
+  keeps provenance and other summary associations. Existing authored and
+  legacy summaries remain recognized without automatic reclassification.
+  New manually requested summaries are separate editable notes, leaving
+  captured originals and existing notes unchanged. Once a summary exists,
+  hide the normal Summarize action. Create another summary belongs in the
+  overflow menu and requires confirmation. Backend checks before model
+  work and at publication prevent accidental duplicates. Keep the same
+  relationships available in Connections.
+  Atlas Open Source opens retained text in the main Library pane, not a
+  sheet, including summary-first captures whose summary shares its ID.
+  Open summary switches back to the saved note; showing retained text
+  never rewrites it or exposes it to note editing. The optional Captured
+  Source sheet uses rendered, selectable text by default, with Text and
+  Original tabs, grouped reading/chat actions, and extraction notes below
+  the reading area. Code alone is monospaced; raw Markdown is not the
+  default reading presentation.
+- **Reading hierarchy and links:** Linked sources and Connections use the
+  same section-heading style with space above each section. Connections
+  contains Graph and relationship-list subsections (Related notes,
+  Sources, and other saved groups), with matching subsection headings;
+  Related notes is not a separate peer of Connections. Arrange belongs
+  beside the Graph subheading. Other reading-section headings use the
+  same section style rather than a larger competing title.
+  Rendered Markdown links use the native pointing-hand cursor only over
+  linked characters. Linked paragraphs use selectable AppKit text with
+  the reading font and inline formatting, without a web view; unlinked
+  text keeps the existing renderer. Both web and internal note links use
+  the app's URL action so saved-note navigation stays in the app.
 - **Recovery and mutation:** Captures lists what you saved yourself plus anything that failed; successful background bookmark fetches aren't listed, and the toolbar is its only heading. When summaries fail because of the AI provider itself (a model or plan no longer available, sign-in, usage limit), one window notice says so with Open Settings…, rather than the same error on every item; it clears when the provider or model changes. A failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Captures, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Each home chip in the info card shows a small remove button (xmark.circle.fill) at its corner on hover and has a right-click menu (Make Primary Home, Remove from …); removing the primary home promotes the lowest-coded one left, and the change is confirmed inline with Undo. Filing an item anywhere but Inbox takes it out of Inbox, whether from Change…, File Here, the library agent or a chat proposal; Undo puts it back. Beside Change… in the info card, a Suggest link (sparkles) asks the Librarian: "Asking the Librarian…" while it works, then an inline card with the suggested home as a chip (green New badge for a category it would create), its one-line reason, an "Also fits" list of other homes as outlined chips (each with Also File Here, which adds a secondary home and turns into Added with Undo, or "Already here"), File Here (or Create and File Here) and Dismiss; filing shows "Filed in …" with Undo. Nothing changes until File Here. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, Markdown styled as it's typed by MarkdownEngine but saved character for character, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
 
 The sidecar's HTML/CSS samples are portable illustrations, not shipping

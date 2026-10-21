@@ -1719,12 +1719,16 @@ private struct NoTranscriptProvider: YouTubeProviding {
                     )
                 }
                 try await detailScreenshot(
-                    CaptureSourceView(citation: SourceCitation(
-                        captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: url
-                    ), library: LibraryModel(store: store))
-                        .environment(\.addToChat) { target in
-                            await model.addToChat(target) ? nil : model.error
-                        },
+                    CaptureSourceView(
+                        citation: SourceCitation(
+                            captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: url
+                        ),
+                        library: LibraryModel(store: store),
+                        openDocument: { preview.selectedID = $0 }
+                    )
+                    .environment(\.addToChat) { target in
+                        await model.addToChat(target) ? nil : model.error
+                    },
                     width: 700, dark: dark, name: "source"
                 )
             }
@@ -2039,12 +2043,14 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let job = try #require(await store.claimCapture())
         let sourceID = try await store.publishCapture(job, document: CapturedDocument(
             title: "Engineering notes on source control", sourceURL: url, coverage: .article,
+            warnings: ["Synthetic extraction note: a navigation section was omitted."],
             blocks: [ContentBlock(
                 kind: .paragraph,
                 markdown: String(
                     repeating: "Readable retained evidence about source control and engineering decisions. ",
-                    count: 18
-                ),
+                    count: 6
+                ) +
+                    "\n\nRead the [reference guide](https://example.org/guide).\n\n```swift\nlet retained = \"Original evidence\"\nprint(retained)\n```",
                 text: "Readable retained evidence."
             )]
         ), artifacts: [])
@@ -2096,6 +2102,25 @@ private struct NoTranscriptProvider: YouTubeProviding {
         )
         try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
         let captureID = try #require(await store.captureID(for: sourceID))
+        for dark in [false, true] {
+            try await detailScreenshot(
+                CaptureSourceView(
+                    citation: SourceCitation(
+                        captureID: captureID,
+                        blockOrdinal: 0,
+                        page: nil,
+                        section: nil,
+                        url: url
+                    ),
+                    library: LibraryModel(store: store), openDocument: { preview.selectedID = $0 }
+                )
+                .environment(\.addToChat) { target in
+                    await model.addToChat(target) ? nil : model.error
+                }
+                .environment(\.enterReader) { _ in },
+                width: 700, dark: dark, name: "source-readable"
+            )
+        }
         try await detailScreenshot(
             SourceReaderView(captureID: captureID, store: store),
             width: 960,

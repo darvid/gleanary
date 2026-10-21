@@ -169,7 +169,7 @@ struct NoteConnectionsView: View {
     @State private var retry = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Text("Connections").font(.headline).accessibilityAddTraits(.isHeader)
                 Spacer()
@@ -188,19 +188,25 @@ struct NoteConnectionsView: View {
                 ProgressView("Loading connections…")
             } else {
                 if !graph.snapshot.edges.isEmpty {
-                    KnowledgeGraphView(
-                        graph: graph,
-                        openNote: openNote,
-                        compact: true,
-                        camera: $graph.camera
-                    )
-                    .frame(height: 300).clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary) }
-                    HStack {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("Graph").font(.subheadline.weight(.semibold))
+                                .accessibilityAddTraits(.isHeader)
+                            Spacer()
+                            GraphArrangementControl(graph: graph)
+                        }.padding(.horizontal, 10)
+                        KnowledgeGraphView(
+                            graph: graph,
+                            openNote: openNote,
+                            compact: true,
+                            camera: $graph.camera
+                        )
+                        .frame(height: 300).clipShape(RoundedRectangle(cornerRadius: 12))
+                        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary) }
                         GraphDocumentLegend()
-                        Spacer()
-                        GraphArrangementControl(graph: graph)
                     }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Connection graph")
                 }
                 LibraryGraphDetails(
                     graph: graph,
