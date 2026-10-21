@@ -353,7 +353,7 @@ struct AtlasRenderer {
         label.clip(to: Path(screen))
         label.opacity = titled * (searching && matchCounts[position] == 0 ? 0.4 : 1)
         drawItemLabel(
-            item, title: node.title, ink: ink, screen: screen,
+            item, title: node.title, background: fill, screen: screen,
             large: screen.width >= 200 && screen.height >= 80, in: &label
         )
     }
@@ -402,7 +402,7 @@ struct AtlasRenderer {
     private func drawItemLabel(
         _ item: AtlasItem,
         title: String,
-        ink: Color,
+        background: Color,
         screen: CGRect,
         large: Bool,
         in context: inout GraphicsContext
@@ -410,17 +410,9 @@ struct AtlasRenderer {
         let inset = min(10, max(5, screen.width * 0.06))
         let width = screen.width - inset * 2
         let top = screen.minY + min(inset, screen.height * 0.18)
-        // Symbols are drawn as text so they keep their own proportions and baseline.
         let glyphShown = Self.ramp(screen.width, 96, 108) * Self.ramp(screen.height, 34, 40)
-        let glyph = glyphShown > 0
-            ? context
-            .resolve(Text(Image(systemName: Self
-                    .symbol(for: item.isSourceCard ? "source" : item.kind)))
-                .font(large ? .callout : .caption).foregroundStyle(ink.opacity(0.8)))
-            : nil
-        let glyphWidth = glyph.map {
-            $0.measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity)).width + 4
-        } ?? 0
+        let glyphSize: CGFloat = large ? 16 : 14
+        let glyphWidth = glyphShown > 0 ? glyphSize + 6 : 0
         var y = top
         y += line(
             title,
@@ -434,11 +426,8 @@ struct AtlasRenderer {
         if detailShown > 0 {
             var layer = context
             layer.opacity *= detailShown
-            let detail = [item.cardKindLabel, item.summaryLabel, item.host]
-                .compactMap(\.self).joined(separator: " · ")
-            y += line(
-                detail, style: { $0.font(.caption2).foregroundStyle(.secondary) },
-                x: screen.minX + inset, y: y + 1, width: width, in: &layer
+            y += drawItemMetadata(
+                item, x: screen.minX + inset, y: y + 1, width: width, in: &layer
             )
         }
         if large {
@@ -450,19 +439,48 @@ struct AtlasRenderer {
                 x: screen.minX + inset, y: y + 1, width: width, in: &layer
             )
         }
-        if let glyph {
+        if glyphShown > 0 {
             var layer = context
             layer.opacity *= glyphShown
-            layer.draw(glyph, at: CGPoint(x: screen.maxX - inset, y: top), anchor: .topTrailing)
+            GraphDocumentMark(isSource: item.identity.isSource).draw(
+                in: &layer,
+                rect: CGRect(
+                    x: screen.maxX - inset - glyphSize, y: top,
+                    width: glyphSize, height: glyphSize
+                ),
+                increasedContrast: highContrast, background: background
+            )
         }
     }
 
-    static func symbol(for kind: String) -> String {
-        switch kind {
-        case "source": "doc.text"
-        case "summary", "comparison": "sparkles.rectangle.stack"
-        default: "note.text"
+    private func drawItemMetadata(
+        _ item: AtlasItem, x: CGFloat, y: CGFloat, width: CGFloat,
+        in context: inout GraphicsContext
+    ) -> CGFloat {
+        let fields = [item.identity.label] + [item.identity.subtype, item.summaryLabel, item.host]
+            .compactMap(\.self)
+        var cursor = x
+        var height: CGFloat = 0
+        for (index, field) in fields.enumerated() {
+            let remaining = x + width - cursor
+            guard remaining > 12 else { break }
+            let style: (Text) -> Text = {
+                $0.font(.caption2).fontWeight(index == 0 ? .medium : .regular)
+                    .foregroundStyle(index == 0 ? Color.primary : Color.secondary)
+            }
+            let size = context.resolve(style(Text(field)))
+                .measure(in: CGSize(width: CGFloat.infinity, height: CGFloat.infinity))
+            height = max(height, line(
+                field,
+                style: style,
+                x: cursor,
+                y: y,
+                width: remaining,
+                in: &context
+            ))
+            cursor += min(size.width, remaining) + 12
         }
+        return height
     }
 
     /// Fills small item tiles in a few opacity buckets instead of one path per item.

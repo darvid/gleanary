@@ -482,7 +482,7 @@ struct LibraryGraphTests {
         try #require(!graph.layingOut)
     }
 
-    @Test func denseGraphsDiscloseEdgeAndEvidenceLimits() async throws {
+    @Test func denseGraphsKeepAllEdgesAndPageEvidenceIndependently() async throws {
         let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
         let notes = try await fixture.store.open(seed: (0 ..< 72).map {
             MarkdownDocument(name: "Dense \($0)", markdown: "Synthetic dense fixture.")
@@ -500,11 +500,17 @@ struct LibraryGraphTests {
         }
         let graph = try await fixture.store.libraryGraph()
         #expect(graph.graph.nodes.count == 72)
-        #expect(graph.graph.edges.count == 1200)
-        #expect(graph.graph.truncatedEdges)
+        #expect(graph.graph.edges.count == 72 * 71 / 2)
+        #expect(!graph.graph.truncatedEdges)
         #expect(graph.truncatedReasons)
-        #expect(graph.connections.count == 1200)
-        #expect(graph.connections.allSatisfy { !$0.reasons.isEmpty })
+        #expect(graph.connections.count == graph.graph.edges.count)
+        let missing = try #require(graph.connections.first { $0.reasons.isEmpty })
+        let reasons = try await fixture.store.libraryGraphReasons(
+            for: missing.edge,
+            request: LibraryGraphRequest()
+        )
+        #expect(reasons.count == 1)
+        #expect(reasons.first?.text == "Synthetic connection.")
     }
 
     @Test @MainActor func failedLoadsClearOldNotesAndCanRetry() async throws {

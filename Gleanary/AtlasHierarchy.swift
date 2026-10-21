@@ -31,6 +31,10 @@ struct AtlasItem: Identifiable, Sendable, Equatable {
         kind == "source" || (captureID != nil && !summaries.isEmpty)
     }
 
+    var identity: DocumentIdentity {
+        DocumentIdentity(kind: isSourceCard ? "source" : kind)
+    }
+
     var cardKindLabel: String {
         isSourceCard ? "Source" : kindLabel
     }

@@ -8,14 +8,21 @@ enum KnowledgeCanvasMode: String, CaseIterable {
 
 @MainActor @Observable
 final class KnowledgeGraphModel {
-    var snapshot = GraphSnapshot()
+    var snapshot = GraphSnapshot() {
+        didSet { geometry = GraphGeometry(snapshot: snapshot, positions: positions) }
+    }
+
+    private(set) var geometry = GraphGeometry()
     var mindMap = MindMapSnapshot()
     var mindMaps: [MindMapSummary] = []
     var selectedMindMapNoteID: UUID?
     var canvasMode: KnowledgeCanvasMode = .graph
     var selectedMapNodeID: String?
     var mapEvidence: [MindMapEvidence] = []
-    var positions: [String: GraphPosition] = [:]
+    var positions: [String: GraphPosition] = [:] {
+        didSet { geometry = GraphGeometry(snapshot: snapshot, positions: positions) }
+    }
+
     var jobs: [GraphJob] = []
     var selectedID: String?
     var selectedEdgeID: String?

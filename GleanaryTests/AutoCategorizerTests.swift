@@ -346,6 +346,30 @@ private actor SlowFiler: ConversationInferring {
 }
 
 extension AutoCategorizerTests {
+    @Test @MainActor func newFilingInferenceWaitsForTheCurrentLibraryOperation() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try await library(["Paper about retrieval"])
+        let model = LibraryModel(store: store)
+        model.ready = true
+        let filer = FakeFiler()
+        model.busy = true
+        model.startCategorizing(using: filer)
+        #expect(!model.categorizing)
+        #expect(model.categorizationState == .idle)
+        #expect(await filer.calls.isEmpty)
+        #expect(try await model.filingSuggestions().isEmpty)
+        #expect(await filer.calls.isEmpty)
+        model.busy = false
+        model.startCategorizing(using: filer)
+        let deadline = ContinuousClock.now + .seconds(3)
+        while model.categorizing, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(!model.categorizing)
+        #expect(await filer.calls.count == 1)
+        #expect(try await model.filingSuggestions().count == 1)
+    }
+
     @Test @MainActor func stoppingShowsStoppingThenEndsTheRun() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = try await library((1 ... 400).map { "Paper \($0)" })

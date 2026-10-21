@@ -451,14 +451,11 @@ struct ConversationView: View {
             if message.author == "user" {
                 userBubble(message)
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(message.author.capitalized).font(.headline)
-                    if let role = AgentRole(rawValue: message.author) {
-                        Text(role.responsibility).font(.caption)
-                            .foregroundStyle(Color.primary.opacity(0.72))
-                    }
-                }
-                .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
+                let responsibility = AgentRole(rawValue: message.author)?.responsibility
+                let timestamp = message.createdAt.formatted(date: .abbreviated, time: .shortened)
+                Text(message.author.capitalized).font(.headline)
+                    .help(responsibility.map { "\($0)\n\(timestamp)" } ?? timestamp)
+                    .accessibilityHint(responsibility ?? "")
                 MarkdownPreview(markdown: researchResult(in: message) == nil
                     ? message.text : message.textWithoutResearchBibliography)
                     .textSelection(.enabled)

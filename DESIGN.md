@@ -140,8 +140,10 @@ The frontmatter's title/body roles describe default Sources typography;
 - DocumentPreview prose uses its Notes or Sources preference.
   MarkdownPreview defaults to `.body` in callers that do not override it,
   including chat.
-- The source/coverage line uses `.subheadline`; metadata cards and category
-  chips use `.callout`. Row metadata and quiet hints use `.caption`.
+- The identity/source/coverage line uses `.subheadline`; metadata cards
+  and category chips use `.callout`. Source or Note appears at normal
+  contrast and medium weight, with any subtype and host secondary. Row
+  metadata and quiet hints use `.caption`.
 - Counts use monospaced digits. Fenced code remains monospaced, scaled
   to the reading size in document previews and `.body` in chat.
 - Font pickers list installed families, with a live preview and a reset
@@ -267,13 +269,24 @@ button radius. Code blocks use a rectangular control surface.
   keyboard selection, pan, pinch/wheel zoom, fit controls, and a text
   connection inspector. Opening a note and changing graph focus
   participate in Back/Forward history.
+  Show the Map/List/Graph toolbar picker only while its browsing surface
+  is active. Hide it in full Map/Graph detail and editor views, Reader,
+  Chat, Activity, Automations, and fixed-column Captures/Archived scopes.
+  List keeps it while the list remains beside its detail. Returning from
+  a full detail restores the picker without changing presentation or
+  resetting the canvas.
   Note previews in Library and Chat show a local Connections canvas and
   text list, with Explore in Graph and direct/two-hop exploration in the
   full view. Embedded canvases have independent layout/selection state
   and no wheel zoom, so reading can still scroll. Empty notes explain
-  that no connections exist; visible nodes, edges, and evidence are
-  bounded with explicit truncation notices. No new model calls or graph
-  database are required. The right inspector separates browsing from
+  that no connections exist. The full Library graph loads up to 10,000
+  scoped items and every relationship between the loaded endpoints;
+  visible/total counts expose the item boundary. Embedded graphs retain
+  their small neighborhood limit. Load topology without quotations, then
+  fetch current canonical evidence only for the inspected edge, in pages
+  of 80 supporting entries with an explicit Load more action. Opening,
+  searching, and inspecting never start inference or write graph data.
+  The right inspector separates browsing from
   inspection: no selection shows a searchable native item list; selecting
   an item replaces it with grouped related notes, sources, and concepts.
   Each connection row names only the other endpoint. Selecting a row or
@@ -305,9 +318,36 @@ button radius. Code blocks use a rectangular control surface.
   Reset restores balanced spacing only. Labels try below, above, and
   beside nodes in priority order; labels that cannot fit without covering
   another label or node stay hidden. Selected labels get first choice.
+  Large graphs reduce ordinary labels by zoom and screen-space budget;
+  selected, hovered, and matched items get priority. Reuse resolved text,
+  indexed world-space geometry, viewport culling, and bounded drawing
+  batches instead of redrawing thousands of titles. Filled Note and
+  outlined Source silhouettes remain distinct at low zoom; fine glyph
+  details return as items grow. Fit supports large extents without the
+  former 0.15 zoom floor. Pan/zoom, inspector resize, and same-scope
+  topology refresh do not reset the camera. Layout reuses retained
+  positions; large runs publish a seed and settled frame rather than
+  invalidating the whole UI every six ticks. Reduce Motion skips animated
+  settling. Library and embedded graph cameras and layouts stay separate.
+  The accessibility-only item list exposes at most 80 items per page,
+  with explicit previous/next actions and range announcements. Every item
+  remains reachable without materializing thousands of virtual buttons
+  during pan/zoom. This does not paginate or truncate the rendered graph;
+  the native inspector also retains its searchable item browser.
   Connection-based grouping and other grouping modes remain deferred.
 - **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
-- **Document list:** `.inset` native list with multi-selection; title, kind/host, filing, and applicable coverage. Cache arrivals are observed so loaded rows replace placeholders.
+- **Document identity:** Source uses the graph's outlined folded page;
+  Note uses its filled page with text lines. The reading header, Library
+  list/search rows, map cards, and graph inspector reuse these marks.
+  Summaries remain notes, with Summary as a secondary subtype. Use 12pt
+  gaps between the identity, subtype, and host groups, not middle dots or
+  dividers. Other note subtypes follow the same pattern. Retained-text mode
+  says Source even when its summary shares the saved item's ID. Type never depends on a URL,
+  thumbnail, provider, or filing color. Keep the identity visible before
+  secondary host metadata; do not add a pill, banner, or type palette.
+- **Document list:** `.inset` native list with multi-selection; title,
+  identity/host, filing, and applicable coverage. Cache arrivals are
+  observed so loaded rows replace placeholders.
 - **Preview actions:** Open summary appears first when a saved summary
   exists (a named Summaries menu for multiple notes). View source appears
   only when the retained text is not already being read. Open Original,
@@ -373,7 +413,10 @@ button radius. Code blocks use a rectangular control surface.
   the Library toolbar. It opens the existing review workflow, also
   available through File/More > Categorize Unfiled. While suggestions run,
   the toolbar shows the shared working dot and Review filing. Opening the
-  sheet does not start inference. Explicit Suggest Homes runs bounded
+  sheet does not start inference. Settings and saved filing review remain
+  available during another library operation; disable only conflicting
+  imports and new Suggest Homes requests, not the whole More menu.
+  Explicit Suggest Homes runs bounded
   requests (up to 10 items locally or 40 with ChatGPT), saving suggestions
   after each batch and allowing Stop/resume with cached answers.
   The sheet groups suggestions by category in collapsed disclosure rows

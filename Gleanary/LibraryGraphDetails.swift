@@ -13,7 +13,7 @@ struct LibraryGraphDetails: View {
     @State private var hoveredConnection: String?
 
     private var inspector: LibraryGraphInspector {
-        LibraryGraphInspector(data: graph.data)
+        graph.inspector
     }
 
     private var anchor: GraphNode? {
@@ -87,7 +87,7 @@ struct LibraryGraphDetails: View {
             }.padding(16)
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Find an item", text: $itemQuery).textFieldStyle(.plain)
+                TextField("Find in this graph", text: $itemQuery).textFieldStyle(.plain)
                     .accessibilityLabel("Find an item in the graph list")
                 if !itemQuery.isEmpty {
                     Button("Clear item search", systemImage: "xmark.circle.fill") {
@@ -113,8 +113,7 @@ struct LibraryGraphDetails: View {
                 })) {
                     ForEach(items) { node in
                         HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: inspector.symbol(for: node))
-                                .foregroundStyle(.secondary).frame(width: 16)
+                            itemMark(node)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(node.label).font(.body.weight(.medium))
                                     .lineLimit(2).foregroundStyle(.primary)
@@ -133,6 +132,15 @@ struct LibraryGraphDetails: View {
                     }
                 }.listStyle(.inset)
             }
+        }
+    }
+
+    @ViewBuilder private func itemMark(_ node: GraphNode) -> some View {
+        if node.kind == .document {
+            DocumentIdentityMark(isSource: graph.data.sourceNodeIDs.contains(node.id))
+        } else {
+            Image(systemName: inspector.symbol(for: node))
+                .foregroundStyle(.secondary).frame(width: 18)
         }
     }
 
@@ -210,8 +218,7 @@ struct LibraryGraphDetails: View {
                                 graph.select(node.id, edgeID: neighbor.id)
                             } label: {
                                 HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: inspector.symbol(for: neighbor.node))
-                                        .foregroundStyle(.secondary).frame(width: 16)
+                                    itemMark(neighbor.node)
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(neighbor.node.label).font(.body.weight(.medium))
                                             .foregroundStyle(.primary).lineLimit(2)
@@ -265,26 +272,28 @@ struct LibraryGraphDetails: View {
             Divider()
             Text("Why they’re connected").font(.subheadline.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            if let reason = neighbor.connection.reasons.first {
+            if let reason = graph.evidence.first {
                 reasonRow(reason)
-                if neighbor.connection.reasons.count > 1 {
+                if graph.evidence.count > 1 {
                     DisclosureGroup(
-                        "\(neighbor.connection.reasons.count - 1) more supporting \(neighbor.connection.reasons.count == 2 ? "entry" : "entries")"
+                        "\(graph.evidence.count - 1) more supporting \(graph.evidence.count == 2 ? "entry" : "entries")"
                     ) {
                         VStack(alignment: .leading, spacing: 16) {
-                            ForEach(neighbor.connection.reasons.dropFirst()) { reason in
-                                reasonRow(reason)
-                            }
+                            ForEach(graph.evidence.dropFirst()) { reason in reasonRow(reason) }
                         }.padding(.top, 8)
                     }.font(.callout)
                 }
-            } else {
-                Text("Evidence is outside this view’s limit. Narrow the graph to inspect it.")
+            } else if !graph.evidenceLoading, graph.evidenceError == nil {
+                Text("This connection no longer has available evidence. Refresh the graph.")
                     .font(.callout).foregroundStyle(.secondary)
             }
-            if graph.data.truncatedReasons {
-                Text("Evidence is limited to 2,400 entries. Narrow the graph to inspect more.")
-                    .font(.caption).foregroundStyle(.secondary)
+            if graph.evidenceLoading {
+                ProgressView("Loading evidence…").controlSize(.small)
+            } else if let error = graph.evidenceError {
+                Text(error).font(.callout).foregroundStyle(.secondary)
+                Button("Retry") { graph.loadEvidence() }
+            } else if graph.evidenceHasMore {
+                Button("Load more supporting entries") { graph.loadEvidence() }
             }
         }
     }

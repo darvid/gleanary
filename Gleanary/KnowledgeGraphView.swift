@@ -16,9 +16,15 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @State private var zoomOrigin: Double?
     @State private var keyboardNode: String?
     @State private var hasFitted = false
+    @State private var hoveredNode: String?
+    @State private var labelCache = GraphLabelCache()
     @FocusState private var focused: Bool
 
     var body: some View {
+        let accessibilityPage = GraphAccessibilityPage(
+            nodes: graph.snapshot.nodes,
+            selectedID: graph.selectedID ?? keyboardNode
+        )
         GeometryReader { geometry in
             ZStack {
                 Color(nsColor: .windowBackgroundColor)
@@ -26,17 +32,33 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     drawEdges(in: &context, size: size)
                     drawNodes(in: &context, size: size)
                 }
+                .onContinuousHover { phase in
+                    switch phase {
+                    case let .active(location): hoveredNode = hitNode(
+                            location,
+                            size: geometry.size
+                        )?.id
+                    case .ended: hoveredNode = nil
+                    }
+                }
                 .contentShape(Rectangle())
                 .focusable().focusEffectDisabled().focused($focused)
                 .accessibilityLabel("Knowledge graph")
                 .accessibilityHint(
                     "Use arrow keys to choose a node and Return to inspect it. Drag empty space to pan; pinch or use the mouse wheel to zoom."
                 )
+                .accessibilityValue(accessibilityPage.value)
                 .accessibilityChildren {
-                    ForEach(graph.snapshot.nodes) { node in
+                    ForEach(accessibilityPage.nodes) { node in
                         Button("\(node.label), \(graph.kindLabel(for: node))") {
-                            graph.select(node.id)
+                            selectAccessibleNode(node.id)
                         }
+                    }
+                    if let previousID = accessibilityPage.previousID {
+                        Button("Previous graph items") { selectAccessibleNode(previousID) }
+                    }
+                    if let nextID = accessibilityPage.nextID {
+                        Button("Next graph items") { selectAccessibleNode(nextID) }
                     }
                 }
                 // Selection must not wait for the system's double-click timeout.
@@ -59,10 +81,11 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 })
                 .simultaneousGesture(drag(size: geometry.size))
                 .simultaneousGesture(MagnifyGesture().onChanged { value in
+                    hasFitted = true
                     if zoomOrigin == nil {
                         zoomOrigin = scale
                     }
-                    scale = min(3, max(0.15, (zoomOrigin ?? 1) * value.magnification))
+                    scale = min(3, max(0.0001, (zoomOrigin ?? 1) * value.magnification))
                 }.onEnded { _ in zoomOrigin = nil })
                 .onKeyPress(keys: [
                     .leftArrow,
@@ -132,6 +155,12 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             .onChange(of: scale) { saveCamera() }
             .onChange(of: pan) { saveCamera() }
             .onChange(of: graph.cameraReset) { hasFitted = false; fit(size: geometry.size) }
+            .onChange(of: graph.positions.isEmpty) { _, empty in
+                if !empty, !hasFitted, graph.snapshot.nodes.count > 1000 {
+                    fit(size: geometry.size)
+                    hasFitted = true
+                }
+            }
             .onChange(of: graph.layingOut) { _, running in
                 if !running, !hasFitted,
                    dragOrigin == nil
@@ -139,7 +168,12 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     fit(size: geometry.size); hasFitted = true
                 }
             }
-            .onChange(of: geometry.size) { fit(size: geometry.size) }
+            .onChange(of: geometry.size) {
+                if !hasFitted, !graph.positions.isEmpty {
+                    fit(size: geometry.size)
+                    hasFitted = true
+                }
+            }
             .onChange(of: reduceMotion, initial: true) {
                 graph.reduceMotion = reduceMotion
                 if reduceMotion, graph.layingOut {
@@ -154,52 +188,80 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func point(_ id: String, size: CGSize) -> CGPoint? {
-        guard let position = graph.positions[id] else { return nil }
-        return CGPoint(
-            x: size.width / 2 + position.x * scale + pan.width,
-            y: size.height / 2 + position.y * scale + pan.height
-        )
+        graph.geometry.point(for: id).map { viewport(size).screen($0) }
     }
 
     private func drawEdges(in context: inout GraphicsContext, size: CGSize) {
-        for edge in graph.snapshot.edges {
-            guard let start = point(edge.source, size: size), let end = point(
-                edge.target,
-                size: size
-            ) else { continue }
-            let highlighted = edge.id == graph.selectedEdgeID || edge.source == keyboardNode || edge
-                .target == keyboardNode
-            let inferred = ![GraphPredicate.linksTo, .authoredBy, .relatedTo, .derivedFrom]
+        let viewport = viewport(size)
+        var solid = GraphDrawingBatch(), inferred = GraphDrawingBatch(),
+            highlighted = GraphDrawingBatch()
+        let arrows = CGMutablePath()
+        for index in graph.geometry.visibleEdges(in: viewport.worldBounds()) {
+            let segment = graph.geometry.segments[index], edge = segment.edge
+            let start = viewport.screen(segment.start), end = viewport.screen(segment.end)
+            let selected = edge.id == graph.selectedEdgeID || edge.source == keyboardNode
+                || edge.target == keyboardNode || edge.source == hoveredNode || edge
+                .target == hoveredNode
+            if selected {
+                highlighted.line(from: start, to: end)
+                if edge.predicate != .relatedTo {
+                    let angle = atan2(end.y - start.y, end.x - start.x)
+                    let tip = CGPoint(x: end.x - cos(angle) * 15, y: end.y - sin(angle) * 15)
+                    arrows.move(to: CGPoint(
+                        x: tip.x - cos(angle - 0.5) * 9,
+                        y: tip.y - sin(angle - 0.5) * 9
+                    ))
+                    arrows.addLine(to: tip)
+                    arrows.addLine(to: CGPoint(
+                        x: tip.x - cos(angle + 0.5) * 9,
+                        y: tip.y - sin(angle + 0.5) * 9
+                    ))
+                }
+            } else if [GraphPredicate.linksTo, .authoredBy, .relatedTo, .derivedFrom]
                 .contains(edge.predicate)
-            var path = Path(); path.move(to: start); path.addLine(to: end)
-            context.stroke(
-                path,
-                with: .color(highlighted ? .accentColor : .secondary
-                    .opacity(contrast == .increased ? 0.9 : 0.5)),
-                style: StrokeStyle(lineWidth: highlighted ? 2 : 1, dash: inferred ? [4, 4] : [])
-            )
-            if highlighted, edge.predicate != .relatedTo {
-                let angle = atan2(end.y - start.y, end.x - start.x)
-                let tip = CGPoint(x: end.x - cos(angle) * 15, y: end.y - sin(angle) * 15)
-                var arrow = Path(); arrow.move(to: CGPoint(
-                    x: tip.x - cos(angle - 0.5) * 9,
-                    y: tip.y - sin(angle - 0.5) * 9
-                ))
-                arrow.addLine(to: tip); arrow.addLine(to: CGPoint(
-                    x: tip.x - cos(angle + 0.5) * 9,
-                    y: tip.y - sin(angle + 0.5) * 9
-                ))
-                context.stroke(arrow, with: .color(.accentColor), lineWidth: 2)
+            {
+                solid.line(from: start, to: end)
+            } else {
+                inferred.line(from: start, to: end)
             }
         }
+        let opacity = contrast == .increased ? 0.9 : (scale < 0.3 ? 0.2 : 0.5)
+        for path in solid.paths {
+            context.stroke(
+                Path(path),
+                with: .color(.secondary.opacity(opacity)),
+                lineWidth: 1
+            )
+        }
+        for path in inferred.paths {
+            context.stroke(
+                Path(path),
+                with: .color(.secondary.opacity(opacity)),
+                style: StrokeStyle(lineWidth: 1, dash: [4, 4])
+            )
+        }
+        for path in highlighted.paths {
+            context.stroke(
+                Path(path),
+                with: .color(.accentColor),
+                lineWidth: 2
+            )
+        }
+        context.stroke(Path(arrows), with: .color(.accentColor), lineWidth: 2)
     }
 
     private func drawNodes(in context: inout GraphicsContext, size: CGSize) {
-        // Important labels reserve their space before peripheral labels.
-        let nodes = graph.snapshot.nodes.sorted { priority($0) > priority($1) }
+        let nodes = graph.geometry.visibleNodes(in: viewport(size).worldBounds())
+            .map { graph.geometry.nodes[$0] }
+        if graph.snapshot.nodes.count > 1000 {
+            drawNodeBatches(nodes, in: &context, size: size)
+            drawLabels(in: &context, size: size, nodes: nodes)
+            return
+        }
         for node in nodes {
             guard let center = point(node.id, size: size) else { continue }
-            let selected = node.id == graph.selectedID || node.id == keyboardNode
+            let selected = node.id == graph.selectedID || node.id == keyboardNode || node
+                .id == hoveredNode
             let matched = graph.snapshot.matchingIDs.contains(node.id)
             let radius = nodeRadius(node.kind)
             let rect = CGRect(
@@ -237,9 +299,102 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         drawLabels(in: &context, size: size, nodes: nodes)
     }
 
+    private func drawNodeBatches(
+        _ nodes: [GraphNode],
+        in context: inout GraphicsContext,
+        size: CGSize
+    ) {
+        var shapes: [String: GraphDrawingBatch] = [:]
+        var folds = GraphDrawingBatch(), lines = GraphDrawingBatch()
+        for node in nodes {
+            guard let center = point(node.id, size: size) else { continue }
+            let radius = nodeRadius(node.kind)
+            let rect = CGRect(
+                x: center.x - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+            let key = node.kind == .document ? (graph.isSource(node) ? "source" : "note") : node
+                .kind.rawValue
+            shapes[key, default: GraphDrawingBatch()].append(nodePath(node, in: rect).cgPath)
+            if node.kind == .document, radius >= 6 {
+                let mark = GraphDocumentMark(isSource: graph.isSource(node))
+                folds.append(mark.fold(in: rect).cgPath)
+                lines.append(mark.textLines(in: rect).cgPath)
+            }
+        }
+        for kind in [GraphNode.Kind.concept, .person, .organization, .tool] {
+            for path in shapes[kind.rawValue]?.paths ?? [] {
+                context.fill(Path(path), with: .color(nodeColor(kind)))
+                if contrast == .increased {
+                    context.stroke(
+                        Path(path),
+                        with: .color(.primary.opacity(0.8)),
+                        lineWidth: 1
+                    )
+                }
+            }
+        }
+        let background = Color(nsColor: .windowBackgroundColor)
+        for path in shapes["note"]?.paths ?? [] {
+            context.fill(Path(path), with: .color(.primary))
+        }
+        for path in lines.paths {
+            context.stroke(
+                Path(path),
+                with: .color(background),
+                style: StrokeStyle(lineWidth: max(1, nodeRadius(.document) * 0.13), lineCap: .round)
+            )
+        }
+        for path in shapes["source"]?.paths ?? [] {
+            context.fill(Path(path), with: .color(background))
+            context.fill(Path(path), with: .color(Color.primary.opacity(0.08)))
+            context.stroke(
+                Path(path),
+                with: .color(.primary),
+                lineWidth: contrast == .increased ? 2 : 1.5
+            )
+        }
+        for path in folds.paths {
+            context.stroke(Path(path), with: .color(.primary), lineWidth: 1)
+        }
+        drawNodeHighlights(in: &context, size: size)
+    }
+
+    private func drawNodeHighlights(in context: inout GraphicsContext, size: CGSize) {
+        var highlighted = graph.snapshot.matchingIDs
+        for id in [graph.selectedID, keyboardNode, hoveredNode]
+            .compactMap(\.self)
+        {
+            highlighted.insert(id)
+        }
+        for id in highlighted {
+            guard let node = graph.geometry.node(for: id),
+                  let center = point(id, size: size) else { continue }
+            let radius = nodeRadius(node.kind) + 5
+            let rect = CGRect(
+                x: center.x - radius,
+                y: center.y - radius,
+                width: radius * 2,
+                height: radius * 2
+            )
+            context.stroke(nodePath(node, in: rect), with: .color(.accentColor), lineWidth: 2)
+        }
+    }
+
     private func drawLabels(
         in context: inout GraphicsContext, size: CGSize, nodes: [GraphNode]
     ) {
+        let budget = GraphViewport.labelBudget(
+            count: graph.snapshot.nodes.count,
+            scale: scale,
+            size: size
+        )
+        let important = nodes.filter { priority($0) >= 2 }.sorted { priority($0) > priority($1) }
+        let ordinary = nodes.lazy.filter { priority($0) < 2 }.prefix(budget)
+        let candidates = important + Array(ordinary)
+        guard !candidates.isEmpty else { return }
         let obstacles = nodes.compactMap { node -> CGRect? in
             guard let center = point(node.id, size: size) else { return nil }
             let radius = nodeRadius(node.kind) + 4
@@ -261,37 +416,38 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 width: compact ? min(146, size.width) : size.width, height: 60
             )] + (showsDocumentLegend ? [CGRect(x: 0, y: 0, width: 180, height: 44)] : [])
         )
-        for node in nodes {
+        for node in candidates {
             guard let center = point(node.id, size: size) else { continue }
-            let selected = node.id == graph.selectedID || node.id == keyboardNode
-            let matched = graph.snapshot.matchingIDs.contains(node.id)
-            let label = String(node.label.prefix(38)) + (node.label.count > 38 ? "…" : "")
-            let text = context.resolve(Text(label).font(.system(
-                size: selected ? 13 : 12,
-                weight: selected || matched ? .semibold : .regular
-            )).foregroundStyle(.primary))
-            let measured = text.measure(in: CGSize(
-                width: min(240, max(1, size.width - 16)),
-                height: 40
-            ))
+            let selected = node.id == graph.selectedID || node.id == keyboardNode || node
+                .id == hoveredNode
+            let entry = labelCache.resolve(
+                node.label, selected: selected, emphasized: priority(node) >= 2,
+                width: min(240, max(1, size.width - 16)), dark: colorScheme == .dark,
+                increasedContrast: contrast == .increased, context: context
+            )
             guard let rect = placement.place(
-                size: measured, near: center, radius: nodeRadius(node.kind)
+                size: entry.size, near: center, radius: nodeRadius(node.kind)
             ) else { continue }
             context.fill(
                 Path(roundedRect: rect.insetBy(dx: -3, dy: -1), cornerRadius: 3),
                 with: .color(Color(nsColor: .windowBackgroundColor))
             )
-            context.draw(text, at: rect.origin, anchor: .topLeading)
+            context.draw(entry.text, at: rect.origin, anchor: .topLeading)
         }
     }
 
     private func nodeRadius(_ kind: GraphNode.Kind) -> Double {
-        switch kind {
+        let radius: Double = switch kind {
         case .concept: 7
         case .person: 7.5
         case .organization, .tool: 8
         case .document: 10
         }
+        return max(1.5, radius * min(1, sqrt(scale)))
+    }
+
+    private func viewport(_ size: CGSize) -> GraphViewport {
+        GraphViewport(size: size, scale: scale, pan: pan)
     }
 
     private func nodeColor(_ kind: GraphNode.Kind) -> Color {
@@ -339,7 +495,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func priority(_ node: GraphNode) -> Int {
-        if node.id == graph.selectedID || node.id == keyboardNode {
+        if node.id == graph.selectedID || node.id == keyboardNode || node.id == hoveredNode {
             return 3
         }
         if graph.snapshot.matchingIDs.contains(node.id) {
@@ -349,32 +505,11 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func hitNode(_ location: CGPoint, size: CGSize) -> GraphNode? {
-        graph.snapshot.nodes.min { left, right in
-            distance(location, point(left.id, size: size)) < distance(
-                location,
-                point(right.id, size: size)
-            )
-        }.flatMap { distance(location, point($0.id, size: size)) <= 24 ? $0 : nil }
+        graph.geometry.nearestNode(to: viewport(size).world(location), radius: 24 / scale)
     }
 
     private func hitEdge(_ location: CGPoint, size: CGSize) -> GraphEdge? {
-        graph.snapshot.edges.first { edge in
-            guard let start = point(edge.source, size: size), let end = point(
-                edge.target,
-                size: size
-            ) else { return false }
-            let dx = end.x - start.x, dy = end.y - start.y
-            let length = dx * dx + dy * dy
-            guard length > 0 else { return false }
-            let fraction = min(
-                1,
-                max(0, ((location.x - start.x) * dx + (location.y - start.y) * dy) / length)
-            )
-            return distance(
-                location,
-                CGPoint(x: start.x + fraction * dx, y: start.y + fraction * dy)
-            ) < 6
-        }
+        graph.geometry.nearestEdge(to: viewport(size).world(location), radius: 6 / scale)
     }
 
     private func distance(_ left: CGPoint, _ right: CGPoint?) -> Double {
@@ -384,6 +519,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
 
     private func drag(size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 5).onChanged { value in
+            hasFitted = true
             if dragOrigin == nil {
                 dragOrigin = pan
                 draggedNode = hitNode(value.startLocation, size: size)?.id
@@ -411,6 +547,11 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         }
     }
 
+    private func selectAccessibleNode(_ id: String) {
+        keyboardNode = id
+        graph.select(id)
+    }
+
     private func navigate(_ step: Int) {
         let nodes = graph.snapshot.nodes
         guard !nodes.isEmpty else { return }
@@ -422,8 +563,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         guard CGRect(origin: .zero, size: size).contains(location) else { return }
         let oldScale = scale
         let boundedDelta = min(12, max(-12, Double(delta)))
-        let newScale = min(3, max(0.15, oldScale * exp(boundedDelta * 0.018)))
+        let newScale = min(3, max(0.0001, oldScale * exp(boundedDelta * 0.018)))
         guard newScale != oldScale else { return }
+        hasFitted = true
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let worldX = (location.x - center.x - pan.width) / oldScale
         let worldY = (location.y - center.y - pan.height) / oldScale
@@ -435,37 +577,51 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func fit(size: CGSize) {
-        let points = graph.positions.values
-        guard let minX = points.map(\.x).min(), let maxX = points.map(\.x).max(),
-              let minY = points.map(\.y).min(), let maxY = points.map(\.y).max() else { return }
-        scale = min(
-            1.3,
-            max(
-                0.15,
-                min(
-                    max(40, size.width - (compact ? 100 : 220)) / max(1, maxX - minX),
-                    max(40, size.height - (compact ? 100 : 150)) / max(1, maxY - minY)
-                )
-            )
-        )
-        pan = CGSize(width: -(minX + maxX) / 2 * scale, height: -(minY + maxY) / 2 * scale)
+        guard let camera = GraphViewport.fit(
+            bounds: graph.geometry.bounds,
+            size: size,
+            compact: compact
+        ) else { return }
+        scale = camera.scale
+        pan = camera.pan
+    }
+
+    private func controlImage(_ symbol: String, label: String) -> Image {
+        // macOS segmented controls use the NSImage description, not the Button's AX label.
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: label) {
+            return Image(nsImage: image)
+        }
+        return Image(systemName: symbol)
     }
 
     private func controls(size: CGSize) -> some View {
         HStack(spacing: 12) {
             ControlGroup {
-                Button("Zoom out", systemImage: "minus") { scale = max(0.15, scale / 1.25) }
-                Button("Fit graph", systemImage: "arrow.up.left.and.arrow.down.right") {
+                Button {
+                    hasFitted = true
+                    scale = max(0.0001, scale / 1.25)
+                } label: {
+                    controlImage("minus", label: "Zoom out")
+                }.help("Zoom out")
+                Button {
+                    hasFitted = true
                     fit(size: size)
-                }
-                Button("Zoom in", systemImage: "plus") { scale = min(3, scale * 1.25) }
+                } label: {
+                    controlImage("arrow.up.left.and.arrow.down.right", label: "Fit graph")
+                }.help("Fit graph")
+                Button {
+                    hasFitted = true
+                    scale = min(3, scale * 1.25)
+                } label: {
+                    controlImage("plus", label: "Zoom in")
+                }.help("Zoom in")
             }.labelStyle(.iconOnly).fixedSize()
             if !compact {
                 Text(graph.canvasCountLabel)
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !compact, graph.snapshot.nodes.count < graph.snapshot.totalNodes,
-               graph.visibleLimit < 500
+               graph.visibleLimit < graph.maximumVisibleNodes
             {
                 Button("Show more") { graph.expand() }.controlSize(.small)
             }

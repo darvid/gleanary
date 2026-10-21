@@ -3,7 +3,21 @@ import Observation
 
 @MainActor @Observable final class LibraryGraphModel: GraphCanvasModel {
     private(set) var data = LibraryGraphSnapshot()
-    private(set) var positions: [String: GraphPosition] = [:]
+    private(set) var inspector = LibraryGraphInspector(data: LibraryGraphSnapshot())
+    private(set) var evidence: [LibraryGraphReason] = []
+    private(set) var evidenceLoading = false
+    private(set) var evidenceHasMore = false
+    private(set) var evidenceError: String?
+    @ObservationIgnored private var evidenceTask: Task<Void, Never>?
+    private(set) var geometry = GraphGeometry()
+    private(set) var positions: [String: GraphPosition] = [:] {
+        didSet { geometry = GraphGeometry(snapshot: snapshot, positions: positions) }
+    }
+
+    var maximumVisibleNodes: Int {
+        LibraryGraphRequest.maximumNodes
+    }
+
     private(set) var selectedID: String?
     private(set) var selectedEdgeID: String?
     private(set) var request = LibraryGraphRequest()
@@ -75,16 +89,18 @@ import Observation
             }
         }
         do {
-            let updated = try await store.libraryGraph(request)
+            let updated = try await store.libraryGraph(request, includingReasons: false)
             try Task.checkCancellation()
             guard token == loadToken else { return }
             let topologyChanged = snapshot.nodes != updated.graph.nodes || snapshot.edges != updated
                 .graph.edges
             data = updated
+            inspector = LibraryGraphInspector(data: updated)
             let ids = Set(snapshot.nodes.map(\.id))
             if scopeChanged {
                 deselect()
                 positions = [:]
+                camera = nil
                 cameraReset += 1
             } else if let selectedID, !ids.contains(selectedID) {
                 deselect()
@@ -95,17 +111,18 @@ import Observation
             }
             positions = positions.filter { ids.contains($0.key) }
             if topologyChanged || scopeChanged || positions.count != snapshot.nodes.count {
-                camera = nil
-                cameraReset += 1
                 startLayout()
             } else if spacing != appliedSpacing {
                 finishSpacingChange()
             }
+            loadEvidence(reset: true)
         } catch is CancellationError {
         } catch {
             guard token == loadToken else { return }
             // Do not leave the previous note's graph under a new title after a failed load.
             data = LibraryGraphSnapshot()
+            inspector = LibraryGraphInspector(data: data)
+            positions = [:]
             deselect()
             stop()
             self.error = "Connections could not be loaded. Try again."
@@ -119,17 +136,57 @@ import Observation
     func select(_ id: String, edgeID: String? = nil) {
         selectedID = id
         selectedEdgeID = edgeID
+        loadEvidence(reset: true)
     }
 
     func deselect() {
         selectedID = nil
         selectedEdgeID = nil
+        evidenceTask?.cancel()
+        evidence = []
+        evidenceLoading = false
+        evidenceHasMore = false
+        evidenceError = nil
+    }
+
+    func loadEvidence(reset: Bool = false) {
+        evidenceTask?.cancel()
+        if reset {
+            evidence = []
+            evidenceHasMore = false
+        }
+        evidenceError = nil
+        guard let store, let edge = snapshot.edges.first(where: { $0.id == selectedEdgeID }) else {
+            evidenceLoading = false
+            return
+        }
+        let request = request, token = loadToken, offset = evidence.count
+        evidenceLoading = true
+        evidenceTask = Task { [weak self] in
+            do {
+                let reasons = try await store.libraryGraphReasons(
+                    for: edge,
+                    request: request,
+                    offset: offset
+                )
+                try Task.checkCancellation()
+                guard let self, token == loadToken, selectedEdgeID == edge.id else { return }
+                evidence += reasons.prefix(80)
+                evidenceHasMore = reasons.count > 80
+                evidenceLoading = false
+            } catch is CancellationError {
+            } catch {
+                guard let self, token == loadToken, selectedEdgeID == edge.id else { return }
+                evidenceLoading = false
+                evidenceError = "Evidence could not be loaded. Try again."
+            }
+        }
     }
 
     func expand() {
         guard let store else { return }
         var expanded = request
-        expanded.limit = min(500, request.limit + 100)
+        expanded.limit = min(maximumVisibleNodes, max(1000, request.limit * 2))
         Task { await load(from: store, request: expanded) }
     }
 

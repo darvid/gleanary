@@ -12,7 +12,8 @@ struct LibraryGraphRequest: Equatable, Sendable {
     var focus: UUID?
     var depth = 1
     var includesConcepts = false
-    var limit = 200
+    static let maximumNodes = 10000
+    var limit = maximumNodes
 }
 
 struct LibraryGraphReason: Identifiable, Sendable {

@@ -20,14 +20,49 @@ struct LibraryGraphInspector {
     }
 
     let data: LibraryGraphSnapshot
+    private let nodes: [String: GraphNode]
+    private let degrees: [String: Int]
+    private let connections: [String: [LibraryGraphConnection]]
+    private let sortedItems: [GraphNode]
+
+    init(data: LibraryGraphSnapshot) {
+        self.data = data
+        nodes = Dictionary(uniqueKeysWithValues: data.graph.nodes.map { ($0.id, $0) })
+        var degrees: [String: Int] = [:], connections: [String: [LibraryGraphConnection]] = [:]
+        for connection in data.connections {
+            let edge = connection.edge
+            degrees[edge.source, default: 0] += 1
+            if edge.target != edge.source {
+                degrees[edge.target, default: 0] += 1
+            }
+            connections[edge.source, default: []].append(connection)
+            if edge.target != edge
+                .source
+            {
+                connections[edge.target, default: []].append(connection)
+            }
+        }
+        // Some synthetic/legacy snapshots carry edges without evidence wrappers.
+        if data.connections.isEmpty {
+            for edge in data.graph.edges {
+                degrees[edge.source, default: 0] += 1
+                if edge.target != edge.source {
+                    degrees[edge.target, default: 0] += 1
+                }
+            }
+        }
+        self.degrees = degrees
+        self.connections = connections
+        sortedItems = data.graph.nodes.sorted {
+            let order = $0.label.localizedStandardCompare($1.label)
+            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        }
+    }
 
     func items(matching query: String) -> [GraphNode] {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return data.graph.nodes.filter {
-            query.isEmpty || $0.label.localizedStandardContains(query)
-        }.sorted {
-            let order = $0.label.localizedStandardCompare($1.label)
-            return order == .orderedSame ? $0.id < $1.id : order == .orderedAscending
+        return query.isEmpty ? sortedItems : sortedItems.filter {
+            $0.label.localizedStandardContains(query)
         }
     }
 
@@ -46,12 +81,11 @@ struct LibraryGraphInspector {
     }
 
     func connectionCount(for id: String) -> Int {
-        data.graph.edges.filter { $0.source == id || $0.target == id }.count
+        degrees[id] ?? 0
     }
 
     func neighbors(of id: String) -> [Neighbor] {
-        let nodes = Dictionary(uniqueKeysWithValues: data.graph.nodes.map { ($0.id, $0) })
-        return data.connections.compactMap { connection -> Neighbor? in
+        (connections[id] ?? []).compactMap { connection -> Neighbor? in
             let edge = connection.edge
             guard edge.source == id || edge.target == id,
                   let node = nodes[edge.source == id ? edge.target : edge.source]

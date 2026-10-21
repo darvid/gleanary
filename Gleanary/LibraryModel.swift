@@ -491,7 +491,7 @@ final class LibraryModel {
 
     /// Runs in the background; suggestions are saved as each batch finishes.
     func startCategorizing(using inference: any ConversationInferring, noteIDs: Set<UUID>? = nil) {
-        guard ready, categorizationTask == nil else { return }
+        guard ready, !busy, categorizationTask == nil else { return }
         categorizationError = nil
         categorizationStopped = false
         categorizationState = .running
