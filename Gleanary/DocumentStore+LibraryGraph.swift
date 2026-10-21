@@ -3,11 +3,13 @@ import GRDB
 
 extension DocumentStore {
     /// A read-only projection of canonical links and provenance. Extraction is never started here.
-    func libraryGraph(_ request: LibraryGraphRequest = LibraryGraphRequest()) throws
+    func libraryGraph(
+        _ request: LibraryGraphRequest = LibraryGraphRequest(), includingReasons: Bool = true
+    ) throws
         -> LibraryGraphSnapshot
     {
         try readyDatabase().read { db in
-            let limit = min(500, max(1, request.limit))
+            let limit = min(LibraryGraphRequest.maximumNodes, max(1, request.limit))
             let projection = Self.libraryGraphSQL(request)
             var arguments = projection.arguments
             let focus = request.focus.map(GraphNode.documentID)
@@ -50,27 +52,25 @@ extension DocumentStore {
             let rows = try Row.fetchAll(db, sql: projection.sql + """
              SELECT source, target, predicate FROM connections
              WHERE source IN (\(placeholders)) AND target IN (\(placeholders))
-             GROUP BY source, target, predicate ORDER BY source, target, predicate LIMIT 1201
+             GROUP BY source, target, predicate ORDER BY source, target, predicate
             """, arguments: edgeArguments)
-            let edges = try rows.prefix(1200).map(Self.graphEdge)
+            let edges = try rows.map(Self.graphEdge)
             var reasons: [String: [LibraryGraphReason]] = [:]
             // Bound evidence independently of the canvas, including high-degree shared concepts.
-            let evidenceRows = try Row.fetchAll(db, sql: projection.sql + """
-             SELECT * FROM connections
-             WHERE source IN (\(placeholders)) AND target IN (\(placeholders))
-             ORDER BY source, target, predicate, reasonID LIMIT 2401
-            """, arguments: edgeArguments)
+            let evidenceRows: [Row] = includingReasons ? try Row.fetchAll(
+                db,
+                sql: projection.sql + """
+                 SELECT * FROM connections
+                 WHERE source IN (\(placeholders)) AND target IN (\(placeholders))
+                 ORDER BY source, target, predicate, reasonID LIMIT 2401
+                """,
+                arguments: edgeArguments
+            ) : []
             let edgeIDs = Set(edges.map(\.id))
             for row in evidenceRows.prefix(2400) {
                 let edge = try Self.graphEdge(row)
                 guard edgeIDs.contains(edge.id) else { continue }
-                let data: Data? = row["citation"]
-                let note: String? = row["evidenceNote"]
-                let reason = try LibraryGraphReason(
-                    id: row["reasonID"], label: row["origin"], text: row["rationale"],
-                    noteID: note.map(Self.uuid),
-                    citation: data.map { try JSONDecoder().decode(SourceCitation.self, from: $0) }
-                )
+                let reason = try Self.libraryGraphReason(row)
                 if reasons[edge.id, default: []]
                     .contains(where: { $0.id == reason.id })
                 {
@@ -88,7 +88,7 @@ extension DocumentStore {
                     edges: edges,
                     totalNodes: total,
                     matchingIDs: Set(focus.map { [$0] } ?? []),
-                    truncatedEdges: rows.count > 1200
+                    truncatedEdges: false
                 ),
                 connections: edges.map { LibraryGraphConnection(
                     edge: $0,
@@ -99,6 +99,38 @@ extension DocumentStore {
                 sourceNodeIDs: Set(sourceNodeIDs)
             )
         }
+    }
+
+    /// Reads current canonical evidence for just one inspected relationship.
+    func libraryGraphReasons(
+        for edge: GraphEdge, request: LibraryGraphRequest, offset: Int = 0, limit: Int = 81
+    ) throws -> [LibraryGraphReason] {
+        try readyDatabase().read { db in
+            let projection = Self.libraryGraphSQL(request)
+            var arguments = projection.arguments
+            arguments += [
+                edge.source,
+                edge.target,
+                edge.predicate.rawValue,
+                min(201, max(1, limit)),
+                max(0, offset),
+            ]
+            return try Row.fetchAll(db, sql: projection.sql + """
+             SELECT DISTINCT reasonID, origin, rationale, evidenceNote, citation FROM connections
+             WHERE source = ? AND target = ? AND predicate = ?
+             ORDER BY reasonID LIMIT ? OFFSET ?
+            """, arguments: arguments).map(Self.libraryGraphReason)
+        }
+    }
+
+    private static func libraryGraphReason(_ row: Row) throws -> LibraryGraphReason {
+        let data: Data? = row["citation"]
+        let note: String? = row["evidenceNote"]
+        return try LibraryGraphReason(
+            id: row["reasonID"], label: row["origin"], text: row["rationale"],
+            noteID: note.map(Self.uuid),
+            citation: data.map { try JSONDecoder().decode(SourceCitation.self, from: $0) }
+        )
     }
 
     private static func libraryGraphSQL(_ request: LibraryGraphRequest)
@@ -122,8 +154,8 @@ extension DocumentStore {
         let entityNodes = request.includesConcepts ? """
         UNION
         SELECT g.id, g.kind, g.label, g.noteID FROM graph_nodes g
-        WHERE g.kind != 'document' AND EXISTS (
-            SELECT 1 FROM raw_connections e WHERE g.id IN (e.source, e.target)
+        WHERE g.kind != 'document' AND g.id IN (
+            SELECT source FROM raw_connections UNION SELECT target FROM raw_connections
         )
         """ : ""
         // Materialize the projection once per query. Membership tests below avoid SQLite's

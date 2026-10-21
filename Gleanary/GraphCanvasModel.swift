@@ -4,6 +4,8 @@ import Observation
 @MainActor protocol GraphCanvasModel: AnyObject, Observable {
     var snapshot: GraphSnapshot { get }
     var positions: [String: GraphPosition] { get }
+    var geometry: GraphGeometry { get }
+    var maximumVisibleNodes: Int { get }
     var selectedID: String? { get }
     var selectedEdgeID: String? { get }
     var selection: GraphNode? { get }
@@ -25,6 +27,10 @@ import Observation
 }
 
 extension GraphCanvasModel {
+    var maximumVisibleNodes: Int {
+        500
+    }
+
     func isSource(_: GraphNode) -> Bool {
         false
     }

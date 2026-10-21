@@ -18,6 +18,10 @@ import SwiftUI
         showsCapturedSource ? retainedSource?.markdown ?? document?.markdown : document?.markdown
     }
 
+    var identity: DocumentIdentity {
+        DocumentIdentity(kind: details.kind, showsCapturedSource: showsCapturedSource)
+    }
+
     var canViewCapturedSource: Bool {
         guard citation != nil, !showsCapturedSource else { return false }
         return details.kind != "source" || document?.markdown != retainedSource?.markdown
@@ -382,9 +386,16 @@ struct DocumentPreview: View {
 
     private func header(_ document: MarkdownDocument) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                sourceIcon
-                Text(sourceLine).lineLimit(1)
+            HStack(spacing: 12) {
+                DocumentIdentityLabel(identity: model.identity).layoutPriority(1)
+                if !sourceMetadata.isEmpty {
+                    HStack(spacing: 8) {
+                        sourceIcon
+                        ForEach(Array(sourceMetadata.enumerated()), id: \.offset) { _, value in
+                            Text(value).lineLimit(1)
+                        }
+                    }
+                }
                 Spacer(minLength: 8)
                 if editDocument != nil || fileDocument != nil || archiveDocument != nil
                     || model
@@ -427,15 +438,13 @@ struct DocumentPreview: View {
                 .frame(width: 16, height: 16)
                 .clipShape(RoundedRectangle(cornerRadius: 3))
                 .accessibilityHidden(true)
-        } else {
-            Image(systemName: sourceURL == nil ? "note.text" : "globe").accessibilityHidden(true)
         }
     }
 
-    private var sourceLine: String {
+    private var sourceMetadata: [String] {
         let host = sourceURL?.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
-        let kind = model.coverage?.label ?? (sourceURL == nil ? "Note" : nil)
-        return [host, kind].compactMap(\.self).joined(separator: " · ")
+        let kind = model.identity.isSource ? model.coverage?.label : nil
+        return [host, kind].compactMap(\.self)
     }
 
     // MARK: Actions

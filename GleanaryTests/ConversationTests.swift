@@ -658,14 +658,25 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await store.documents().count == 2)
     }
 
-    @Test func newNotePersistsOnlyPlannedUserContentAndRealCategory() async throws {
+    @Test(arguments: [
+        ("Local replicas need clear conflict rules.", "Local replicas need clear conflict rules."),
+        ("# Technical advancement debt\n\nKeep systems current.", "Technical advancement debt"),
+        ("### **System upkeep** ###\n\nKeep dependencies current.", "System upkeep"),
+        ("\n\n## A saved thought\n\nBody.", "A saved thought"),
+        ("#hashtag is literal\n\nBody.", "#hashtag is literal"),
+        ("C# internals\n\nBody.", "C# internals"),
+    ])
+    func newNotePersistsOnlyPlannedUserContentAndRealCategory(
+        content: String,
+        title: String
+    ) async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let home = try #require(await store.categories().first { $0.code == "31.01" })
         let request = "Keep this idea for me in the systems section: local replicas need clear conflict rules."
         let plan = ConversationPlan(steps: [.init(
             action: .saveNote,
-            argument: "Local replicas need clear conflict rules.",
+            argument: content,
             categoryID: home.id.uuidString
         )])
         let task = try await store.beginConversation(request, owner: .assistant)
@@ -674,9 +685,21 @@ private struct NoTranscriptProvider: YouTubeProviding {
             inference: ConversationFixtureInference(intent: plan)
         ).execute(taskID: task, request: request, selected: [], changed: {})
         let note = try #require(await store.documents().first)
-        #expect(note.markdown == "Local replicas need clear conflict rules.")
+        #expect(note.name == title)
+        #expect(note.markdown == content)
         #expect(try await store.categories(for: note.id).first?.id == home.id)
         #expect(try await store.researchSource(noteID: note.id).sourceIDs.isEmpty)
+    }
+
+    @Test func inferredNoteTitlesAreBoundedAndOnlyRemoveMarkdownSyntax() {
+        #expect(AgentCoordinator.savedNoteTitle(from: "# " + String(repeating: "a", count: 100))
+            .count == 80)
+        #expect(AgentCoordinator.savedNoteTitle(from: "#") == "Thought")
+        #expect(AgentCoordinator.savedNoteTitle(from: "   \n\n") == "Thought")
+        #expect(AgentCoordinator.savedNoteTitle(from: "\\# Literal hash") == "# Literal hash")
+        #expect(AgentCoordinator.savedNoteTitle(from: "##\tTabbed heading") == "Tabbed heading")
+        #expect(AgentCoordinator
+            .savedNoteTitle(from: "[A title](https://example.org)") == "A title")
     }
 
     @Test func invalidPlansFailBeforeAnyCapabilityRuns() async throws {

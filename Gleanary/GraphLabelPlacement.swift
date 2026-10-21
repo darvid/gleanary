@@ -5,6 +5,13 @@ struct GraphLabelPlacement {
     let bounds: CGRect
     let nodes: [CGRect]
     private(set) var occupied: [CGRect] = []
+    private let nodeIndex: GraphSpatialIndex
+
+    init(bounds: CGRect, nodes: [CGRect]) {
+        self.bounds = bounds
+        self.nodes = nodes
+        nodeIndex = GraphSpatialIndex(rectangles: nodes)
+    }
 
     mutating func place(size: CGSize, near center: CGPoint, radius: CGFloat) -> CGRect? {
         guard size.width > 0, size.height > 0,
@@ -22,7 +29,7 @@ struct GraphLabelPlacement {
         guard let rect = candidates.first(where: { candidate in
             let padded = candidate.insetBy(dx: -4, dy: -3)
             return bounds.contains(candidate)
-                && !nodes.contains { $0.intersects(padded) }
+                && !nodeIndex.containsIntersection(padded)
                 && !occupied.contains { $0.intersects(padded) }
         }) else { return nil }
         occupied.append(rect.insetBy(dx: -4, dy: -3))

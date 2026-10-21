@@ -270,8 +270,7 @@ actor AgentCoordinator {
         let text = step.argument
         let note = try await store.saveResearch(
             text,
-            name: String(text.split(whereSeparator: \.isNewline).first?
-                .prefix(80) ?? "Thought"),
+            name: Self.savedNoteTitle(from: text),
             sources: [],
             taskID: taskID,
             provider: "user",
@@ -288,6 +287,15 @@ actor AgentCoordinator {
             references: [note.id],
             taskID: taskID
         )
+    }
+
+    static func savedNoteTitle(from markdown: String) -> String {
+        let firstLine = markdown.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let line = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsed = try? AttributedString(markdown: line)
+        let title = (parsed.map { String($0.characters) } ?? line)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Thought" : String(title.prefix(80))
     }
 
     private func dispatch(

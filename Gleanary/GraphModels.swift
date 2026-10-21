@@ -44,8 +44,24 @@ struct GraphEdge: Identifiable, Codable, Sendable, Equatable {
     let source: String
     let target: String
     let predicate: GraphPredicate
-    var id: String {
-        ContentHash.of([source, predicate.rawValue, target].joined(separator: "\u{0}"))
+    let id: String
+
+    init(source: String, target: String, predicate: GraphPredicate) {
+        self.source = source
+        self.target = target
+        self.predicate = predicate
+        id = ContentHash.of([source, predicate.rawValue, target].joined(separator: "\u{0}"))
+    }
+
+    private enum CodingKeys: String, CodingKey { case source, target, predicate }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            source: values.decode(String.self, forKey: .source),
+            target: values.decode(String.self, forKey: .target),
+            predicate: values.decode(GraphPredicate.self, forKey: .predicate)
+        )
     }
 }
 

@@ -47,6 +47,97 @@ private struct DeletionFixtureEmbedder: EmbeddingProviding {
 
 @Suite(.serialized)
 struct DocumentLibraryTests {
+    @Test func presentationPickerOnlyAppearsWhileItsBrowsingSurfaceIsActive() {
+        let scopes: [LibraryScope?] = [nil, .all, .sources, .notes, .unfiled, .category(UUID())]
+        for presentation in [LibraryPresentation.map, .list, .graph] {
+            for scope in scopes {
+                #expect(presentation.showsPicker(in: scope, hasOpenedItem: false, isEditing: false))
+                for (opened, editing) in [(true, false), (false, true), (true, true)] {
+                    #expect(presentation.showsPicker(
+                        in: scope,
+                        hasOpenedItem: opened,
+                        isEditing: editing
+                    )
+                        == (presentation == .list))
+                }
+                // Returning from a full detail restores controls without changing presentation.
+                #expect(presentation.showsPicker(in: scope, hasOpenedItem: false, isEditing: false))
+            }
+            for scope in [LibraryScope.captures, .archived] {
+                for opened in [false, true] {
+                    #expect(!presentation.showsPicker(
+                        in: scope,
+                        hasOpenedItem: opened,
+                        isEditing: false
+                    ))
+                    #expect(!presentation.showsPicker(
+                        in: scope,
+                        hasOpenedItem: opened,
+                        isEditing: true
+                    ))
+                }
+            }
+        }
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_PRESENTATION_SCREENSHOTS"] == "1"))
+    @MainActor func presentationPickerMatchesTheNativeWindowSurface() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [])
+        let url = try #require(URL(string: "https://fixture.example/presentation"))
+        _ = try await fixture.store.enqueueCapture(CaptureRequest.webLink(url))
+        let job = try #require(await fixture.store.claimCapture())
+        let id = try await fixture.store.publishCapture(job, document: CapturedDocument(
+            title: "Synthetic retained source", sourceURL: url, coverage: .article,
+            blocks: [.init(
+                kind: .paragraph,
+                markdown: "Retained evidence.",
+                text: "Retained evidence."
+            )]
+        ), artifacts: [])
+        for dark in [false, true] {
+            for presentation in [LibraryPresentation.map, .graph, .list] {
+                for opened in [false, true] {
+                    let suite = "gleanary-presentation-" + UUID().uuidString
+                    let defaults = try #require(UserDefaults(suiteName: suite))
+                    defer { defaults.removePersistentDomain(forName: suite) }
+                    defaults.set(presentation.rawValue, forKey: "libraryPresentation")
+                    defaults.set(true, forKey: "starterCategoriesOffered")
+                    let library = LibraryModel(store: fixture.store)
+                    library.ready = true
+                    let controller = NSHostingController(rootView: ContentView(
+                        library: library, initialSelection: opened ? id : nil
+                    )
+                    .defaultAppStorage(defaults)
+                    .preferredColorScheme(dark ? .dark : .light)
+                    .environment(\.scenePhase, .inactive))
+                    let window = NSWindow(contentViewController: controller)
+                    window.titleVisibility = .hidden
+                    window.titlebarAppearsTransparent = true
+                    window.styleMask.insert(.fullSizeContentView)
+                    window.setContentSize(NSSize(width: 1100, height: 780))
+                    window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+                    window.isReleasedWhenClosed = false
+                    window.orderBack(nil)
+                    defer { window.contentViewController = nil; window.close() }
+                    try await Task.sleep(for: .milliseconds(350))
+                    let toolbar = try #require(window.toolbar)
+                    #expect(toolbar.items.contains {
+                        $0.itemIdentifier.rawValue == "library-presentation"
+                    } == (!opened || presentation == .list))
+                    #expect(defaults.string(forKey: "libraryPresentation") == presentation.rawValue)
+                    let frame = try #require(window.contentView?.superview)
+                    try Self.screenshot(
+                        frame,
+                        name:
+                        "presentation-\(presentation.rawValue)-\(opened ? "detail" : "browse")-\(dark ? "dark" : "light")"
+                    )
+                }
+            }
+        }
+    }
+
     @Test @MainActor func chatSidebarDimsEmptyHomesOnColdLaunchAndRefreshesAfterFiling(
     ) async throws {
         let fixture = try LibraryFixture(); defer { fixture.clean() }

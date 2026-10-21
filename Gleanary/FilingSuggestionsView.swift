@@ -147,7 +147,10 @@ struct FilingSuggestionsView: View {
                     using: inference(),
                     noteIDs: noteIDs
                 ) }
-                .disabled(unfiled == 0 || !library.ready)
+                .disabled(unfiled == 0 || !library.ready || library.busy)
+                .help(library.busy
+                    ? "Wait for the current library operation to finish before suggesting homes"
+                    : "Request filing suggestions for the remaining items")
             }
         }
     }

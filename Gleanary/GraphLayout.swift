@@ -12,11 +12,12 @@ actor GraphLayout {
         frame: @Sendable ([String: GraphPosition]) async -> Void
     ) async throws {
         guard !snapshot.nodes.isEmpty else { return }
+        try Task.checkCancellation()
         let ids = snapshot.nodes.map(\.id)
         let indices = Dictionary(uniqueKeysWithValues: ids.enumerated()
             .map { ($0.element, $0.offset) })
         let initial = ids.enumerated().map { index, id -> SIMD2<Double> in
-            if let point = positions[id] {
+            if let point = positions[id], GraphGeometry.isUsable(point) {
                 return SIMD2(point.x, point.y)
             }
             // Deterministic phyllotaxis avoids identical starting positions and random reshuffles.
@@ -48,10 +49,19 @@ actor GraphLayout {
                 id == anchorID ? initial[index] : nil
             }
         )
+        let animated = animate && ids.count <= 1000
+        if ids.count > 1000 {
+            try Task.checkCancellation()
+            let seed = Dictionary(uniqueKeysWithValues: zip(ids, initial).map {
+                ($0.0, GraphPosition(x: $0.1.x, y: $0.1.y))
+            })
+            await frame(seed)
+        }
         for iteration in 0 ..< 180 {
             try Task.checkCancellation()
             simulation.tick()
-            if (animate && iteration % 6 == 0) || iteration == 179 {
+            let settled = simulation.kinetics.alpha < simulation.kinetics.alphaMin
+            if (animated && iteration % 6 == 0) || iteration == 179 || settled {
                 let points = simulation.kinetics.position.asArray()
                 var next: [String: GraphPosition] = [:]
                 for (index, id) in ids.enumerated() {
@@ -64,7 +74,10 @@ actor GraphLayout {
                     }
                 }
                 await frame(next)
-                if animate {
+                if settled {
+                    break
+                }
+                if animated {
                     try await Task.sleep(for: .milliseconds(32))
                 }
             }

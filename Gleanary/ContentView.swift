@@ -458,37 +458,44 @@ struct ContentView: View {
                         Label("Suggest filing…", systemImage: "sparkles")
                     }
                 }
-                .disabled(!library.ready || library.busy)
+                .disabled(!library.ready)
                 .help(
                     "Suggest homes in batches, then review before filing. Saved suggestions can be resumed."
                 )
             }
         }
-        if !chatting, !automating, !showingActivity, readerTarget == nil {
-            ToolbarItem {
+        if !chatting, !automating, !showingActivity, readerTarget == nil,
+           presentation.showsPicker(
+               in: scope,
+               hasOpenedItem: atlasItem != nil,
+               isEditing: editing != nil
+           )
+        {
+            ToolbarItem(id: "library-presentation") {
                 LibraryPresentationPicker(selection: presentationSelection)
             }
             .sharedBackgroundVisibility(.hidden)
         }
         if !chatting {
-            ToolbarItem {
+            ToolbarItem(id: "library-more") {
                 // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
                 // Plain ellipsis: Liquid Glass already draws the circular button.
                 Menu("More", systemImage: "ellipsis") {
                     Button("Attach Documents…", systemImage: "paperclip") { importing = true }
+                        .disabled(!library.ready || library.busy)
                     Button("Import Bookmarks…", systemImage: "square.and.arrow.down") {
                         importingBookmarks = true
-                    }
+                    }.disabled(!library.ready || library.busy)
                     Divider()
                     Button("Categorize Unfiled…", systemImage: "wand.and.sparkles") {
                         categorizing = true
-                    }
+                    }.disabled(!library.ready)
                     Divider()
                     SettingsLink { Label("Settings…", systemImage: "gearshape") }
                 }
                 .menuIndicator(.hidden)
-                .disabled(!library.ready || library.busy)
-                .help("Import and organize")
+                .help("Import, review filing, and open Settings")
+                .accessibilityIdentifier("library-more-menu")
             }
         }
     }
@@ -1575,9 +1582,16 @@ struct ContentView: View {
 
 enum LibraryPresentation: String {
     case map, list, graph
+
+    func showsPicker(in scope: LibraryScope?, hasOpenedItem: Bool, isEditing: Bool) -> Bool {
+        // These scopes always use columns, regardless of the remembered presentation.
+        guard scope != .captures, scope != .archived else { return false }
+        // List keeps browsing beside its detail; Map and Graph replace their canvas.
+        return self == .list || (!hasOpenedItem && !isEditing)
+    }
 }
 
-private struct LibraryDocumentRow: View {
+struct LibraryDocumentRow: View {
     let document: DocumentSummary
     /// Background work on this item, such as fetching a bookmark's page or summarizing it.
     var activity: String?
@@ -1593,13 +1607,17 @@ private struct LibraryDocumentRow: View {
 
     private var details: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: document.kind == "source" ? "doc.text" : "note.text")
-                .foregroundStyle(.secondary).frame(width: 18).padding(.top, 2)
+            DocumentIdentityMark(isSource: document.kind == "source").padding(.top, 2)
             VStack(alignment: .leading, spacing: 5) {
                 Text(document.name).font(.body.weight(.medium)).lineLimit(2)
-                Text([document.kindLabel, document.sourceURL?.host].compactMap(\.self)
-                    .joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 12) {
+                    DocumentIdentityLabel(
+                        identity: DocumentIdentity(kind: document.kind), showsMark: false
+                    )
+                    if let host = document.sourceURL?.host {
+                        Text(host).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }.font(.caption)
                 Text(document.filing ?? "Unfiled").font(.caption).foregroundStyle(.secondary)
                     .lineLimit(1)
                 if let activity {

@@ -379,8 +379,10 @@ struct KnowledgeAtlasLayoutTests {
         expectSiblingsTileWithoutOverlap(first)
         #expect(first.root?.rect == bounds)
 
-        let sample = AtlasHierarchy.project(.sample())
-        expectSiblingsTileWithoutOverlap(AtlasLayout(root: sample, bounds: bounds))
+        #if DEBUG
+            let sample = AtlasHierarchy.project(.sample())
+            expectSiblingsTileWithoutOverlap(AtlasLayout(root: sample, bounds: bounds))
+        #endif
     }
 
     @Test func emptyHierarchyProducesOnlyTheRoot() {
@@ -800,85 +802,90 @@ struct NavigationHistoryTests {
         #expect(atlas.error == nil)
     }
 
-    /// Writes light and dark renders when GLEANARY_ATLAS_SCREENSHOTS names a directory.
-    @Test @MainActor func rendersAtlasScreenshotsOnRequest() async throws {
-        guard let directory = ProcessInfo.processInfo.environment["GLEANARY_ATLAS_SCREENSHOTS"]
-        else { return }
-        let output = URL(fileURLWithPath: directory)
-        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        let snapshot = AtlasSnapshot.sample()
-        let technology = try #require(snapshot.categories.first { $0.code == "50" })
-        let ai = try #require(snapshot.categories.first { $0.code == "50.02" })
-        for dark in [false, true] {
-            for stage in [
-                "overview",
-                "category",
-                "contents",
-                "zoomed",
-                "dense",
-                "notes",
-                "sources",
-                "empty",
-            ] {
-                let source = Self.screenshotSnapshot(snapshot, stage: stage)
-                let atlas = KnowledgeAtlasModel(snapshot: source)
-                atlas.kindFilter = Self.screenshotKind(stage)
-                atlas.reduceMotion = true
-                if stage == "zoomed" || stage == "contents" {
-                    // Every other source gets a synthetic page still.
-                    let still = try #require(Self.syntheticStill())
-                    atlas.useThumbnails(Dictionary(uniqueKeysWithValues: source.items
-                            .filter { $0.kind == "source" }.enumerated()
-                            .filter { $0.offset.isMultiple(of: 2) }.map { ($0.element.id, still) }))
+    #if DEBUG
+        /// Writes light and dark renders when GLEANARY_ATLAS_SCREENSHOTS names a directory.
+        @Test @MainActor func rendersAtlasScreenshotsOnRequest() async throws {
+            guard let directory = ProcessInfo.processInfo.environment["GLEANARY_ATLAS_SCREENSHOTS"]
+            else { return }
+            let output = URL(fileURLWithPath: directory)
+            try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+            let snapshot = AtlasSnapshot.sample()
+            let technology = try #require(snapshot.categories.first { $0.code == "50" })
+            let ai = try #require(snapshot.categories.first { $0.code == "50.02" })
+            for dark in [false, true] {
+                for stage in [
+                    "overview",
+                    "category",
+                    "contents",
+                    "zoomed",
+                    "dense",
+                    "notes",
+                    "sources",
+                    "empty",
+                ] {
+                    let source = Self.screenshotSnapshot(snapshot, stage: stage)
+                    let atlas = KnowledgeAtlasModel(snapshot: source)
+                    atlas.kindFilter = Self.screenshotKind(stage)
+                    atlas.reduceMotion = true
+                    if stage == "zoomed" || stage == "contents" {
+                        // Every other source gets a synthetic page still.
+                        let still = try #require(Self.syntheticStill())
+                        atlas.useThumbnails(Dictionary(uniqueKeysWithValues: source.items
+                                .filter { $0.kind == "source" }.enumerated()
+                                .filter { $0.offset.isMultiple(of: 2) }
+                                .map { ($0.element.id, still) }))
+                    }
+                    let suite = "gleanary-atlas-controls-" + UUID().uuidString
+                    let defaults = try #require(UserDefaults(suiteName: suite))
+                    defaults.set(stage == "empty", forKey: "atlasHidesEmptyCategories")
+                    defer { defaults.removePersistentDomain(forName: suite) }
+                    let host = NSHostingView(rootView: KnowledgeAtlasView(
+                        atlas: atlas, store: nil, openItem: { _ in }
+                    ).background(Color(nsColor: .windowBackgroundColor))
+                        .defaultAppStorage(defaults))
+                    let window = NSWindow(
+                        contentRect: NSRect(
+                            x: 0,
+                            y: 0,
+                            width: ["notes", "empty"].contains(stage) ? 680 : 980,
+                            height: 680
+                        ),
+                        styleMask: [.borderless], backing: .buffered, defer: false
+                    )
+                    window.isReleasedWhenClosed = false
+                    let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    window.appearance = appearance
+                    host.appearance = appearance
+                    window.contentView = host
+                    defer { window.close() }
+                    try await Task.sleep(for: .milliseconds(300))
+                    switch stage {
+                    case "category":
+                        atlas.focus(.category(technology.id), animated: false)
+                        atlas.selectedID = .category(ai.id)
+                    case "contents", "notes", "sources", "empty":
+                        atlas.focus(.category(technology.id), animated: false)
+                        atlas.focus(.category(ai.id), animated: false)
+                    case "zoomed":
+                        atlas.focus(.category(ai.id), animated: false)
+                        atlas.zoom(by: 3, around: CGPoint(x: 120, y: 90))
+                    default:
+                        atlas.selectedID = .category(technology.id)
+                        atlas.hoveredID = .category(ai.id)
+                    }
+                    try await Task.sleep(for: .milliseconds(300))
+                    host.layoutSubtreeIfNeeded()
+                    let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                    try png.write(to: output.appending(
+                        path: "atlas-\(stage)-\(dark ? "dark" : "light").png"
+                    ))
                 }
-                let suite = "gleanary-atlas-controls-" + UUID().uuidString
-                let defaults = try #require(UserDefaults(suiteName: suite))
-                defaults.set(stage == "empty", forKey: "atlasHidesEmptyCategories")
-                defer { defaults.removePersistentDomain(forName: suite) }
-                let host = NSHostingView(rootView: KnowledgeAtlasView(
-                    atlas: atlas, store: nil, openItem: { _ in }
-                ).background(Color(nsColor: .windowBackgroundColor)).defaultAppStorage(defaults))
-                let window = NSWindow(
-                    contentRect: NSRect(
-                        x: 0,
-                        y: 0,
-                        width: ["notes", "empty"].contains(stage) ? 680 : 980,
-                        height: 680
-                    ),
-                    styleMask: [.borderless], backing: .buffered, defer: false
-                )
-                window.isReleasedWhenClosed = false
-                let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-                window.appearance = appearance
-                host.appearance = appearance
-                window.contentView = host
-                defer { window.close() }
-                try await Task.sleep(for: .milliseconds(300))
-                switch stage {
-                case "category":
-                    atlas.focus(.category(technology.id), animated: false)
-                    atlas.selectedID = .category(ai.id)
-                case "contents", "notes", "sources", "empty":
-                    atlas.focus(.category(technology.id), animated: false)
-                    atlas.focus(.category(ai.id), animated: false)
-                case "zoomed":
-                    atlas.focus(.category(ai.id), animated: false)
-                    atlas.zoom(by: 3, around: CGPoint(x: 120, y: 90))
-                default:
-                    atlas.selectedID = .category(technology.id)
-                    atlas.hoveredID = .category(ai.id)
-                }
-                try await Task.sleep(for: .milliseconds(300))
-                host.layoutSubtreeIfNeeded()
-                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
-                let png = try #require(bitmap.representation(using: .png, properties: [:]))
-                try png.write(to: output.appending(
-                    path: "atlas-\(stage)-\(dark ? "dark" : "light").png"
-                ))
             }
         }
-    }
+
+    #endif
 
     private static func screenshotKind(_ stage: String) -> LibraryKindFilter {
         switch stage {

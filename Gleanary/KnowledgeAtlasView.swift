@@ -510,7 +510,7 @@ struct KnowledgeAtlasView: View {
     private func detail(of tile: AtlasTile) -> String {
         if let item = tile.node.item {
             return [
-                item.cardKindLabel,
+                item.identity.text,
                 item.summaryLabel,
                 item.host,
                 item.updatedAt.formatted(date: .abbreviated, time: .omitted),
