@@ -37,7 +37,7 @@ struct FilingSuggestionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(noteIDs.map { "Organize \($0.count) notes" } ?? "Categorize Unfiled")
+            Text(noteIDs.map { "Organize \($0.count) notes" } ?? "Filing suggestions")
                 .font(.title2.weight(.semibold))
             runStatus
             if !suggestions.isEmpty {
@@ -125,6 +125,10 @@ struct FilingSuggestionsView: View {
                         :
                         "Uses \(label). Titles, sites and excerpts are sent to OpenAI; repeated runs reuse earlier answers.")
                         .font(.caption).foregroundStyle(.secondary)
+                    Text(
+                        "Works in batches of up to \(engine.classificationBatchSize) items. Suggestions are saved after each batch; stop and resume any time."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
                     if library.categorizationStopped, let progress = library.categorization {
                         Text(
                             "Stopped after \(progress.checked.formatted()) of \(progress.total.formatted()). Suggestions so far are saved; Suggest Homes picks up where it left off."

@@ -268,8 +268,10 @@ extension AutoCategorizerTests {
         let model = LibraryModel(store: store)
         await model.load()
         for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
-            let host =
-                NSHostingView(rootView: FilingSuggestionsView(library: model) { FakeFiler() })
+            let host = NSHostingView(rootView: FilingSuggestionsView(library: model) { FakeFiler() }
+                .preferredColorScheme(name == "dark" ? .dark : .light)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            host.appearance = NSAppearance(named: appearance)
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 760, height: 680),
                 styleMask: [.borderless], backing: .buffered, defer: false

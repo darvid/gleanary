@@ -28,6 +28,7 @@ final class LibraryModel {
     var selectedMatch: UUID?
     var query = ""
     var captureJobs: [CaptureJob] = []
+    private(set) var captureRevision = 0
     var captureNotice: CaptureNotice?
     /// A capture someone asked for that failed, named in the window's notice. Bookmark page
     /// fetches report on their item instead, since they run unasked in the background.
@@ -305,7 +306,7 @@ final class LibraryModel {
         canGenerateSummaries && noteID.flatMap { bookmarkFetch(for: $0) } == nil
     }
 
-    func generateSummary(for document: MarkdownDocument) {
+    func generateSummary(for document: MarkdownDocument, createAnother: Bool = false) {
         guard canGenerateSummary(for: document.id) else { return }
         busy = true
         error = nil
@@ -313,7 +314,7 @@ final class LibraryModel {
         summaryTask = Task { [weak self] in
             guard let self else { return }
             do {
-                _ = try await ingestion.summarizeExisting(document)
+                _ = try await ingestion.createSummaryNote(document, createAnother: createAnother)
                 try await refreshAfterMutation()
             } catch is CancellationError {
                 // The original remains the primary note until publishing succeeds.
@@ -327,6 +328,17 @@ final class LibraryModel {
             summaryTask = nil
             await cleanDeletedArtifacts()
         }
+    }
+
+    func summaryAssociationsChanged() async {
+        captureRevision += 1
+        do {
+            try await refreshDocumentGrid()
+            try await applyStatistics(store.statistics())
+            if graphFeaturesEnabled {
+                await graph.refresh()
+            }
+        } catch { self.error = error.localizedDescription }
     }
 
     func cancelSummary() {
@@ -590,6 +602,16 @@ final class LibraryModel {
         } catch { self.error = error.localizedDescription }
     }
 
+    func addLinkedSource(_ url: URL, from noteID: UUID, retry jobID: UUID? = nil) async throws {
+        guard ready, !busy else { throw GleanaryError.operationInProgress }
+        if let jobID {
+            try await store.retryCapture(jobID)
+        }
+        _ = try await ingestion.enqueue(url.absoluteString, referencing: noteID)
+        await refreshCaptures()
+        startCaptures()
+    }
+
     func startCaptures() {
         guard ready else { return }
         guard captureTask == nil else { captureAgain = true; return }
@@ -707,6 +729,7 @@ final class LibraryModel {
                 automations.itemsSaved()
             }
             captureJobs = refreshedJobs
+            captureRevision += 1
             if sequence != documentChangeSequence {
                 try await refreshDocumentGrid()
                 try await applyStatistics(store.statistics())

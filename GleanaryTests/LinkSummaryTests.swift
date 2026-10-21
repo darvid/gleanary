@@ -258,7 +258,8 @@ private actor SummaryFetcher: SourceFetching {
         await library.summaryTask?.value
         await library.indexingTask?.value
         #expect(library.error == nil)
-        #expect(try await store.document(id: original.id)?.revision != original.revision)
+        #expect(try await store.document(id: original.id) == original)
+        #expect(try await store.librarySummaries(for: original.id).count == 1)
 
         let other = try await Self.legacyCapture(in: store)
         let waiting = WaitingSummary()
@@ -412,10 +413,13 @@ private actor SummaryFetcher: SourceFetching {
         await preview.load(from: store)
         try await Task.sleep(for: .milliseconds(50))
         host.layoutSubtreeIfNeeded()
-        #expect(preview.generatedSummary)
+        #expect(!preview.generatedSummary)
         #expect(!preview.canGenerateSummary)
+        #expect(preview.summaries.count == 1)
         try Self.screenshot(host, name: "gleanary-generate-summary-after")
-        #expect(try await store.document(id: original.id)?.markdown
+        #expect(try await store.document(id: original.id) == original)
+        let summaryID = try #require(preview.summaries.first?.id)
+        #expect(try await store.document(id: summaryID)?.markdown
             .hasPrefix("A brief synthetic summary.") == true)
     }
 
@@ -538,14 +542,18 @@ private actor SummaryFetcher: SourceFetching {
         view.savedDocumentPreview(for: preview).generateSummary(original)
         await library.summaryTask?.value
         for _ in 0 ..< 100 {
-            if preview.generatedSummary {
+            if !preview.summaries.isEmpty {
                 break
             }
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(preview.generatedSummary)
+        #expect(!preview.generatedSummary)
         #expect(!preview.canGenerateSummary)
-        #expect(preview.document?.markdown.hasPrefix("A brief synthetic summary.") == true)
+        #expect(preview.summaries.count == 1)
+        #expect(preview.document == original)
+        let summaryID = try #require(preview.summaries.first?.id)
+        #expect(try await store.document(id: summaryID)?.markdown
+            .hasPrefix("A brief synthetic summary.") == true)
         #expect(!view.savedDocumentPreview(for: preview).generatingSummary)
         await library.indexingTask?.value
     }

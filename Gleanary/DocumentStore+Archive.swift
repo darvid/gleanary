@@ -45,7 +45,8 @@ extension DocumentStore {
                 FROM knowledge_links k JOIN knowledge_proposals p ON p.id = k.proposalID
                 WHERE ?1 IN (k.leftID, k.rightID)
             )
-            SELECT n.id, n.name, n.sourceURL, min(links.rationale) AS rationale
+            SELECT n.id, n.name, n.sourceURL, \(Self.libraryKindSQL) AS kind,
+                min(links.rationale) AS rationale
             FROM links JOIN notes n ON n.id = links.other
             WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL
             GROUP BY n.id ORDER BY n.name LIMIT 30
@@ -58,7 +59,7 @@ extension DocumentStore {
                         sourceURL: source.flatMap(URL.init(string:)),
                         faviconData: nil,
                         faviconChecked: true,
-                        kind: "source"
+                        kind: row["kind"]
                     ),
                     rationale: row["rationale"]
                 )

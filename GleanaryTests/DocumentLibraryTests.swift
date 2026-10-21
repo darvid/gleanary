@@ -339,8 +339,30 @@ struct DocumentLibraryTests {
         preview.selectedID = id
         await preview.load(from: fixture.store)
         #expect(preview.generatedSummary)
+        #expect(preview.canViewCapturedSource)
         #expect(preview.details.kind == "summary")
+        #expect(preview.summaries.isEmpty) // Do not link a summary back to itself.
+        #expect(try await fixture.store.librarySummaries(for: id).map(\.id) == [id])
         #expect(ReadingKind(libraryKind: preview.details.kind) == .notes)
+        #expect(preview.displayedMarkdown == summary)
+        preview.showsCapturedSource = true
+        await preview.load(from: fixture.store)
+        #expect(preview.summaries.map(\.id) == [id])
+        #expect(preview.displayedMarkdown == captured.markdown)
+        #expect(!preview.canViewCapturedSource)
+        #expect(preview.document?.markdown == summary)
+        #expect(try await fixture.store.document(id: id)?.markdown == summary)
+        let libraryPreview = LibraryModel(store: fixture.store)
+        libraryPreview.ready = true
+        try await Self.renderLibrary(
+            libraryPreview, selected: id, name: "gleanary-library-summary-original",
+            capturedSource: true
+        )
+        preview.showsCapturedSource = false
+        await preview.load(from: fixture.store)
+        #expect(preview.displayedMarkdown == summary)
+        #expect(preview.canViewCapturedSource)
+        #expect(preview.summaries.isEmpty)
         let citation = try #require(preview.citation)
         let detail = try await fixture.store.captureDetail(id: citation.captureID)
         #expect(detail.document.markdown == captured.markdown)
@@ -377,9 +399,117 @@ struct DocumentLibraryTests {
         var edited = try #require(await fixture.store.document(id: id))
         edited.markdown = "My own revised annotation."
         _ = try await fixture.store.save(edited)
-        #expect(try await fixture.store.documentPage().documents.first?.kindLabel == "Source")
-        // A historical summary descriptor does not mislabel unrelated current text.
-        #expect(try await fixture.store.documentPage(scope: .sources).total == 1)
+        #expect(try await fixture.store.documentPage().documents.first?.kindLabel == "Summary")
+        // Summary identity survives editing; metadata is not inferred again from the new prose.
+        #expect(try await fixture.store.documentPage(scope: .sources).total == 0)
+        #expect(try await fixture.store.librarySummaries(for: id).first?.id == id)
+    }
+
+    @Test @MainActor func sourceReferencesRequireExplicitSummaryAssociation() async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        let url = try #require(URL(string: "https://fixture.example/guardrails"))
+        let note = MarkdownDocument(
+            name: "Prompt injection defenses and trusted content",
+            markdown: "A synthetic knowledge note. [Source documentation](\(url.absoluteString))"
+        )
+        _ = try await fixture.store.open(seed: [note])
+        let request = try CaptureRequest.webLink(url, referencing: note.id)
+        _ = try await fixture.store.enqueueCapture(request)
+        let job = try #require(await fixture.store.claimCapture())
+        let captured = CapturedDocument(
+            title: "Synthetic guardrails documentation", sourceURL: url, coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Retained source text.",
+                text: "Retained source text."
+            )]
+        )
+        let sourceID = try await fixture.store.publishCapture(
+            job,
+            document: captured,
+            artifacts: []
+        )
+        #expect(try await fixture.store.librarySummaries(for: sourceID).isEmpty)
+        #expect(try await fixture.store.linkedItems(for: sourceID).first?.document.kind == "note")
+        #expect(try await fixture.store.linkedItems(for: note.id).first?.document.kind == "source")
+        let preview = DocumentPreviewModel()
+        preview.selectedID = sourceID
+        await preview.load(from: fixture.store)
+        #expect(preview.links.map(\.id) == [note.id])
+        #expect(preview.summaries.isEmpty)
+        #expect(preview.canGenerateSummary)
+        try await fixture.store.associateSummary(note.id, with: sourceID)
+        await preview.load(from: fixture.store)
+        #expect(preview.summaries.map(\.id) == [note.id])
+        #expect(!preview.canGenerateSummary)
+        #expect(try await fixture.store.document(id: note.id)?.markdown == note.markdown)
+        let library = LibraryModel(store: fixture.store)
+        library.ready = true
+        await library.documentGrid.reload()
+        try await Self.renderLibrary(
+            library,
+            selected: sourceID,
+            name: "gleanary-library-source-connected-note"
+        )
+        try await fixture.store.archive(note.id, reason: "Synthetic fixture")
+        await preview.load(from: fixture.store)
+        #expect(preview.related.isEmpty)
+        preview.selectedID = nil
+        await preview.load(from: fixture.store)
+        #expect(preview.related.isEmpty)
+    }
+
+    @Test @MainActor func sourceSummariesStayDistinctFromRelatedResearchNotes(
+    ) async throws {
+        let fixture = try LibraryFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open(seed: [])
+        let url = try #require(URL(string: "https://fixture.example/research-source"))
+        _ = try await fixture.store.enqueueCapture(CaptureRequest.webLink(url))
+        let job = try #require(await fixture.store.claimCapture())
+        let sourceID = try await fixture.store.publishCapture(job, document: CapturedDocument(
+            title: "Synthetic research evidence", sourceURL: url, coverage: .article,
+            blocks: [ContentBlock(
+                kind: .paragraph,
+                markdown: "Source evidence.",
+                text: "Source evidence."
+            )]
+        ), artifacts: [])
+        let source = try await fixture.store.researchSource(noteID: sourceID)
+        let task = try await fixture.store.beginConversation(
+            "Synthetic research",
+            owner: .researcher
+        )
+        let research = try await fixture.store.saveResearch(
+            "A synthetic research note.", name: "Research findings", sources: [source],
+            taskID: task, provider: "synthetic-fixture", kind: "series-note"
+        )
+        let summaryTask = try await fixture.store.beginConversation(
+            "Synthetic summary",
+            owner: .researcher
+        )
+        let summary = try await fixture.store.saveResearch(
+            "A synthetic summary.", name: "Evidence summary", sources: [source],
+            taskID: summaryTask, provider: "synthetic-fixture", kind: "summary"
+        )
+        try await DatabaseQueue(path: fixture.store.url.path).write { db in
+            let ids = [sourceID.uuidString, research.id.uuidString].sorted()
+            try db.execute(sql: "INSERT INTO note_links VALUES (?, ?, ?, ?, ?)", arguments: [
+                ids[0], ids[1], UUID().uuidString, "Synthetic saved reference", 0,
+            ])
+        }
+        let preview = DocumentPreviewModel()
+        preview.selectedID = sourceID
+        await preview.load(from: fixture.store)
+        #expect(preview.related.map(\.id) == [research.id])
+        #expect(preview.related.first?.kind == "series-note")
+        #expect(preview.summaries.map(\.id) == [summary.id])
+        try await fixture.store.remove(research)
+        await preview.load(from: fixture.store)
+        #expect(preview.related.isEmpty)
+        #expect(preview.summaries.map(\.id) == [summary.id])
+        preview.selectedID = summary.id
+        await preview.load(from: fixture.store)
+        #expect(preview.related.isEmpty)
     }
 
     @Test @MainActor func libraryScopesCombineSearchFilingAndRealSourceAssociations() async throws {
@@ -450,7 +580,8 @@ struct DocumentLibraryTests {
         #expect(preview.details.kind == "source")
         #expect(ReadingKind(libraryKind: preview.details.kind) == .sources)
         #expect(preview.categories.first?.id == category.id)
-        #expect(preview.related.first?.id == summary.id)
+        #expect(preview.summaries.map(\.id) == [summary.id])
+        #expect(preview.related.isEmpty)
         let cancelledRefresh = Task { await preview.load(from: fixture.store) }
         cancelledRefresh.cancel()
         await cancelledRefresh.value
@@ -1184,12 +1315,14 @@ struct DocumentLibraryTests {
     @MainActor private static func renderLibrary(
         _ library: LibraryModel,
         selected: UUID,
-        name: String
+        name: String,
+        capturedSource: Bool = false
     ) async throws {
         guard ProcessInfo.processInfo.environment["GLEANARY_LIBRARY_SCREENSHOTS"] != nil
         else { return }
         let preview = DocumentPreviewModel()
         preview.selectedID = selected
+        preview.showsCapturedSource = capturedSource
         await preview.load(from: library.store)
         #expect(preview.document?.id == selected)
         let host = NSHostingView(rootView: ContentView(
@@ -1210,6 +1343,13 @@ struct DocumentLibraryTests {
         window.contentView = host
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(650))
+        if capturedSource {
+            // Match choosing Open Source after the Library's initial selection has settled.
+            preview.showsCapturedSource = true
+            await preview.load(from: library.store)
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        #expect(preview.showsCapturedSource == capturedSource)
         host.layoutSubtreeIfNeeded()
         try screenshot(host, name: name)
     }

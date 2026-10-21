@@ -1576,6 +1576,140 @@ extension ChatGPTTests {
         _ = try await session.signOut()
     }
 
+    private func summaryRepairInference(_ outputs: [String]) throws
+        -> (ChatGPTConversationInference, FixtureChatGPTStream)
+    {
+        let account = registration()
+        let transport = try FixtureChatGPTStream(outputs)
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account], activeID: account.id
+            )), transport: transport, hostID: "fixture"
+        )
+        return (ChatGPTConversationInference(session: session, model: "fixture-model"), transport)
+    }
+
+    private func summaryProposal(
+        _ text: String, ids: [String], takeaways: [EvidenceSummaryDraft.Point] = []
+    ) throws -> String {
+        try String(decoding: JSONEncoder().encode(EvidenceSummaryDraft(
+            overview: .init(text: text, evidenceIDs: ids), takeaways: takeaways
+        )), as: UTF8.self)
+    }
+
+    @Test(arguments: [true, false])
+    func chatGPTSummaryRepairsRejectedOverviewOnlyOnce(repairSupported: Bool) async throws {
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        let original = try summaryProposal(
+            "It improves recall for everyone.",
+            ids: [ids[0]],
+            takeaways: [
+                .init(text: "The study ran six weeks with adults.", evidenceIDs: [ids[1]]),
+                .init(text: "It works for children.", evidenceIDs: [ids[2]]),
+            ]
+        )
+        let repaired = try summaryProposal(
+            "Spaced repetition improves long-term recall.",
+            ids: [ids[0]]
+        )
+        let (inference, transport) = try summaryRepairInference([
+            original, #"{"supported":[false,true,false]}"#, repaired,
+            "{\"supported\":[\(repairSupported)]}",
+        ])
+        if repairSupported {
+            let summary = try await inference.summarize(document)
+            #expect(summary == """
+            Spaced repetition improves long-term recall.
+
+            ## Key takeaways
+
+            - The study ran six weeks with adults.
+            """)
+        } else {
+            await #expect(throws: LinkSummaryError.unsupportedSummary) {
+                try await inference.summarize(document)
+            }
+        }
+        let requests = await transport.requests
+        #expect(requests.count == 4)
+        let repairBody = try #require(requests[2].httpBody)
+        let repairJSON = try #require(JSONSerialization
+            .jsonObject(with: repairBody) as? [String: Any])
+        let input = try #require(repairJSON["input"] as? [[String: Any]])
+        let prompt = try #require(input.first?["content"] as? String)
+        #expect(prompt.contains("Rewrite only the overview"))
+        #expect(prompt.contains("It improves recall for everyone."))
+        #expect(prompt.contains(evidence.prompt))
+        let text = try #require(repairJSON["text"] as? [String: Any])
+        let format = try #require(text["format"] as? [String: Any])
+        #expect(format["name"] as? String == "summary_overview_repair")
+        let schema = try #require(format["schema"] as? [String: Any])
+        let properties = try #require(schema["properties"] as? [String: Any])
+        let takeaways = try #require(properties["takeaways"] as? [String: Any])
+        #expect(takeaways["maxItems"] as? Int == 0)
+        let reviewBody = try #require(requests[3].httpBody)
+        let reviewJSON = try #require(JSONSerialization
+            .jsonObject(with: reviewBody) as? [String: Any])
+        let reviewInput = try #require(reviewJSON["input"] as? [[String: Any]])
+        let reviewPrompt = try #require(reviewInput.first?["content"] as? String)
+        #expect(reviewPrompt.contains("Spaced repetition improves long-term recall."))
+        #expect(!reviewPrompt.contains("Point 1:"))
+    }
+
+    @Test func chatGPTSummaryCanRepairOnlyItsCitations() async throws {
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        let claim = "Spaced repetition improves long-term recall."
+        let (inference, transport) = try summaryRepairInference([
+            summaryProposal(claim, ids: [ids[1]]), #"{"supported":[false]}"#,
+            summaryProposal(claim, ids: [ids[0]]), #"{"supported":[true]}"#,
+        ])
+        #expect(try await inference.summarize(document) == claim)
+        #expect(await transport.requests.count == 4)
+    }
+
+    @Test func chatGPTSummaryDoesNotRecheckAnUnchangedRejectedOverview() async throws {
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        let (inference, transport) = try summaryRepairInference([
+            summaryProposal("It works for everyone.", ids: [ids[0], ids[1]]),
+            #"{"supported":[false]}"#,
+            summaryProposal("It works for everyone.", ids: [ids[1], ids[0]]),
+        ])
+        await #expect(throws: LinkSummaryError.unsupportedSummary) {
+            try await inference.summarize(document)
+        }
+        #expect(await transport.requests.count == 3)
+    }
+
+    @Test(arguments: ["unknown evidence", "new takeaways", "invalid JSON", "invalid review"])
+    func chatGPTSummaryRepairFailsClosed(failure: String) async throws {
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        let revised = try summaryProposal(
+            "Spaced repetition improves recall.",
+            ids: failure == "unknown evidence" ? ["E99999"] : [ids[0]],
+            takeaways: failure == "new takeaways" ? [.init(
+                text: "New claim.",
+                evidenceIDs: [ids[1]]
+            )] : []
+        )
+        var outputs = try [
+            summaryProposal("It works for everyone.", ids: [ids[0]]),
+            #"{"supported":[false]}"#,
+            failure == "invalid JSON" ? "not JSON" : revised,
+        ]
+        if failure == "invalid review" {
+            outputs.append(#"{"supported":[]}"#)
+        }
+        let (inference, transport) = try summaryRepairInference(outputs)
+        let expected: LinkSummaryError = failure == "unknown evidence" ? .evidenceMismatch :
+            .invalidOutput
+        await #expect(throws: expected) { try await inference.summarize(document) }
+        #expect(await transport.requests.count == (failure == "invalid review" ? 4 : 3))
+    }
+
     @Test func researchNoteTitlesAreGeneratedAndEvidenceChecked() async throws {
         let account = registration()
         let proposal = EvidenceSummaryDraft(

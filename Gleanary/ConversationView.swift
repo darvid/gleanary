@@ -90,10 +90,14 @@ struct ConversationView: View {
             }
             composing = true
         }
-        .task(id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)") {
+        .task(
+            id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)/\(preview.showsCapturedSource)"
+        ) {
             await preview.load(from: model.store)
         }
-        .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
+        .sheet(item: $source) {
+            CaptureSourceView(citation: $0, library: library, openDocument: open)
+        }
         .onChange(of: model.composerFocusRequest) { composing = true }
         .onChange(of: source?.id) {
             if source == nil {
@@ -193,6 +197,7 @@ struct ConversationView: View {
             generatingSummary: preview.selectedID
                 .map(library.summarizing) ?? false,
             generateSummary: { library.generateSummary(for: $0) },
+            createAnotherSummary: { library.generateSummary(for: $0, createAnother: true) },
             cancelSummary: summaryCancel(for: preview),
             bookmarkFetch: preview.selectedID
                 .flatMap { library.bookmarkFetch(for: $0)?.progress },

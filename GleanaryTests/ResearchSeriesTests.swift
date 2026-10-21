@@ -621,7 +621,7 @@ private let promptEngineeringRequest = "can you research prompt engineering best
                     arguments: [sourceID.uuidString, originalHome.id.uuidString]
                 )
                 try db.execute(
-                    sql: "INSERT INTO note_sources VALUES (?,?)",
+                    sql: "INSERT INTO note_sources(noteID, sourceID) VALUES (?,?)",
                     arguments: [run.indexID.uuidString, sourceID.uuidString]
                 )
             }

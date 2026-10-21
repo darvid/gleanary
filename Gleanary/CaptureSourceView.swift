@@ -81,12 +81,15 @@ struct SourceReaderView: View {
 struct CaptureSourceView: View {
     let citation: SourceCitation
     let library: LibraryModel
+    var openDocument: (UUID) -> Void
+    @State private var summaries: [DocumentSummary] = []
     @State private var detail: CaptureDetail?
     @State private var selectedArtifact: String?
     @State private var original: Data?
     @State private var showOriginal = false
     @State private var error: String?
     @Environment(\.dismiss) private var dismiss
+    private var appearance = ReadingAppearance()
 
     private var artifact: Artifact? {
         detail?.artifacts.first { $0.hash == selectedArtifact }
@@ -95,12 +98,9 @@ struct CaptureSourceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text(detail?.document.title ?? "Capture source").font(.title2).lineLimit(2)
-                Spacer()
-                if detail != nil {
-                    ReaderModeButton(target: .source(citation.captureID), entered: { dismiss() })
-                    AddToChatButton(target: .source(citation.captureID), added: { dismiss() })
-                }
+                Text(detail?.document.title ?? "Captured source")
+                    .font(.title2.weight(.semibold)).lineLimit(2)
+                Spacer(minLength: 16)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let detail {
@@ -112,30 +112,30 @@ struct CaptureSourceView: View {
                     if let url = citation.url ?? detail.document.sourceURL {
                         Link(
                             citation.startTime
-                                .map { "Open at \(MediaTarget.clock($0))" } ?? "Open source",
+                                .map { "Open at \(MediaTarget.clock($0))" } ?? "Open original",
                             destination: url
                         )
                     }
                 }.font(.callout)
+                HStack(alignment: .top, spacing: 16) {
+                    if !summaries.isEmpty {
+                        SourceSummaryLinks(summaries: summaries) { id in
+                            dismiss()
+                            openDocument(id)
+                        }
+                    }
+                    Spacer()
+                    ReaderModeButton(target: .source(citation.captureID), entered: { dismiss() })
+                    AddToChatButton(target: .source(citation.captureID), added: { dismiss() })
+                }
                 if !detail.document.authors.isEmpty {
                     Text(detail.document.authors.joined(separator: ", ")).font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if !detail.document.warnings.isEmpty {
-                    RowDisclosure(title: "Extraction notes (\(detail.document.warnings.count))") {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(detail.document.warnings, id: \.self) {
-                                    Text($0).font(.caption)
-                                }
-                            }.frame(maxWidth: .infinity, alignment: .leading)
-                        }.frame(maxHeight: 100)
-                    }
-                }
-                Picker("View", selection: $showOriginal) {
-                    Text("Extracted Markdown").tag(false)
-                    Text("Retained original").tag(true)
-                }.pickerStyle(.segmented)
+                Picker("Source view", selection: $showOriginal) {
+                    Text("Text").tag(false)
+                    Text("Original").tag(true)
+                }.pickerStyle(.segmented).labelsHidden().fixedSize()
                 if showOriginal {
                     HStack {
                         Picker("Original", selection: $selectedArtifact) {
@@ -160,24 +160,29 @@ struct CaptureSourceView: View {
                                             Text("Page \(page)").font(.caption)
                                                 .foregroundStyle(.secondary)
                                         }
-                                        Text(Self.preview(block.markdown)).font(.system(
-                                            .body,
-                                            design: .monospaced
-                                        ))
-                                        .textSelection(.enabled).frame(
-                                            maxWidth: .infinity,
-                                            alignment: .leading
+                                        MarkdownPreview(
+                                            markdown: Self.preview(block.markdown),
+                                            readingFont: appearance[.sources]
                                         )
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                     }.id(ordinal)
                                 }
                             }.padding(12)
                         }
                         .onAppear { proxy.scrollTo(citation.blockOrdinal, anchor: .top) }
                     }
-                    Text(
-                        "Immutable capture, not your editable note. Edits never change this source."
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
+                }
+                if !detail.document.warnings.isEmpty {
+                    RowDisclosure(title: "Extraction notes (\(detail.document.warnings.count))") {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(detail.document.warnings, id: \.self) {
+                                    Text($0).font(.caption)
+                                }
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.frame(maxHeight: 100)
+                    }
                 }
             } else if error == nil {
                 ProgressView("Loading retained source…")
@@ -190,7 +195,11 @@ struct CaptureSourceView: View {
         .task {
             do {
                 let loaded = try await library.captureDetail(citation.captureID)
+                let summaries = try await library.store
+                    .librarySummaries(forCapture: citation.captureID)
+                guard !Task.isCancelled else { return }
                 detail = loaded
+                self.summaries = summaries
                 selectedArtifact = loaded.artifacts.first(where: { $0.kind == .pdf })?
                     .hash ?? loaded.artifacts.first(where: { $0.kind != .capture })?.hash
                 showOriginal = citation.page != nil

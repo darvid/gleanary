@@ -314,7 +314,7 @@ import Testing
         try await DatabaseQueue(path: store.url.path).write { db in
             for id in source.sourceIDs {
                 try db.execute(
-                    sql: "INSERT INTO note_sources VALUES (?, ?)",
+                    sql: "INSERT INTO note_sources(noteID, sourceID) VALUES (?, ?)",
                     arguments: [noteID.uuidString, id.uuidString]
                 )
             }

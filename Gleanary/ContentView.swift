@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var categorizing = false
     /// An item to select once a scope change has cleared the old selection.
     @State private var pendingSelection: UUID?
+    @State private var pendingSourceMode = false
     @State private var editing: MarkdownDocument?
     /// The filing inspector beside the selected item.
     @State private var showingFiling = false
@@ -118,6 +119,32 @@ struct ContentView: View {
         .onChange(of: location, initial: true) { old, new in record(from: old, to: new) }
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.linkedSourceContext, LinkedSourceContext(
+            store: library.store,
+            revision: "\(library.documentGrid.generation)/\(library.captureRevision)",
+            canAdd: library.ready && !library.busy,
+            add: { url, noteID, jobID in
+                try await library.addLinkedSource(url, from: noteID, retry: jobID)
+            },
+            viewSource: openSavedSource,
+            summarize: { id in
+                Task {
+                    if let document = await library.document(id: id) {
+                        library.generateSummary(for: document)
+                    }
+                }
+            },
+            createAnotherSummary: { id in
+                Task {
+                    if let document = await library.document(id: id) {
+                        library.generateSummary(for: document, createAnother: true)
+                    }
+                }
+            },
+            summarizingID: library.generatingSummaryID,
+            cancelSummary: { library.cancelSummary() },
+            changed: { await library.summaryAssociationsChanged() }
+        ))
         .environment(\.openURL, OpenURLAction { url in
             if let id = NoteLink.id(from: url) {
                 selection = [id]; preview.selectedID = id
@@ -185,7 +212,9 @@ struct ContentView: View {
         .sheet(isPresented: $categorizing, onDismiss: { Task { await loadCategories() } }) {
             FilingSuggestionsView(library: library, inference: currentInference)
         }
-        .sheet(item: $source) { CaptureSourceView(citation: $0, library: library) }
+        .sheet(item: $source) {
+            CaptureSourceView(citation: $0, library: library, openDocument: openSavedItem)
+        }
         .sheet(item: $library.browserJob) { job in
             if let url = job.request.url, let target = try? MediaTarget.parse(url) {
                 SocialBrowserView(job: job, target: target, library: library)
@@ -236,7 +265,9 @@ struct ContentView: View {
             catch { return }
             await library.documentGrid.reloadIfNeeded()
         }
-        .task(id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)") {
+        .task(
+            id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)/\(preview.showsCapturedSource)"
+        ) {
             await library.loadPreview(preview)
             await loadCategories()
             // Dwell before fetching so arrowing through the list doesn't download every page.
@@ -414,6 +445,24 @@ struct ContentView: View {
         // Chat draws its own More menu; the library and Automations share this one.
         if !chatting {
             ToolbarSpacer(.flexible)
+        }
+        if !chatting, !automating, !showingActivity, readerTarget == nil, scope == .unfiled {
+            ToolbarItem {
+                Button { categorizing = true } label: {
+                    if library.categorizing {
+                        HStack(spacing: 6) {
+                            ChatWorkingIndicator(color: .secondary)
+                            Text("Review filing…")
+                        }
+                    } else {
+                        Label("Suggest filing…", systemImage: "sparkles")
+                    }
+                }
+                .disabled(!library.ready || library.busy)
+                .help(
+                    "Suggest homes in batches, then review before filing. Saved suggestions can be resumed."
+                )
+            }
         }
         if !chatting, !automating, !showingActivity, readerTarget == nil {
             ToolbarItem {
@@ -613,9 +662,13 @@ struct ContentView: View {
                 refreshToken: library.documentGrid.generation,
                 kindSelection: $kindFilter, openItem: openFromAtlas,
                 openCapturedSource: { captureID in
-                    source = SourceCitation(
-                        captureID: captureID, blockOrdinal: 0, page: nil, section: nil, url: nil
-                    )
+                    Task {
+                        do {
+                            let id = try await library.store.sourceNoteID(for: captureID)
+                            openFromAtlas(id)
+                            preview.showsCapturedSource = true
+                        } catch { library.error = "This saved source is no longer available." }
+                    }
                 }
             )
         }
@@ -680,6 +733,15 @@ struct ContentView: View {
     /// Shows a saved item from anywhere, such as the Captures list. Switching to All items
     /// clears the selection, so the item is selected after that, not before.
     private func openSavedItem(_ id: UUID) {
+        showSavedItem(id, asSource: false)
+    }
+
+    private func openSavedSource(_ id: UUID) {
+        showSavedItem(id, asSource: true)
+    }
+
+    private func showSavedItem(_ id: UUID, asSource: Bool) {
+        pendingSourceMode = asSource
         readerTarget = nil
         chatting = false
         automating = false
@@ -695,6 +757,8 @@ struct ContentView: View {
     private func revealPendingSelection() {
         guard let id = pendingSelection else { return }
         pendingSelection = nil
+        let asSource = pendingSourceMode
+        pendingSourceMode = false
         selection = [id]
         preview.selectedID = id
         if presentation == .map {
@@ -702,9 +766,11 @@ struct ContentView: View {
         } else if presentation == .graph {
             openFromGraph(id)
         }
+        preview.showsCapturedSource = asSource
     }
 
     private func openFromAtlas(_ id: UUID) {
+        preview.showsCapturedSource = false
         atlas.selectedID = atlas.layout.tile(.item(id))?.id ?? .item(id)
         preview.selectedID = id
         atlasItem = id
@@ -1194,6 +1260,7 @@ struct ContentView: View {
             summaryEnabled: summaryEnabled,
             generatingSummary: preview.selectedID.map(library.summarizing) ?? false,
             generateSummary: { library.generateSummary(for: $0) },
+            createAnotherSummary: { library.generateSummary(for: $0, createAnother: true) },
             cancelSummary: summaryCancel,
             showsLibraryDetails: true,
             bookmarkFetch: preview.selectedID.flatMap { library.bookmarkFetch(for: $0)?.progress },

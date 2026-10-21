@@ -419,6 +419,30 @@ enum DatabaseSchema {
         }
         migrator.registerMigration("note-series-v1", migrate: NoteSeriesSchema.create)
         migrator.registerMigration("library-activity-v1", migrate: ActivitySchema.create)
+        migrator.registerMigration("linked-source-capture-index-v1") { db in
+            try db.execute(sql: """
+            CREATE INDEX ingestion_jobs_identity ON ingestion_jobs(
+                json_extract(CAST(request AS TEXT), '$.identity')
+            );
+            """)
+        }
+        migrator.registerMigration("explicit-summary-role-v1") { db in
+            try db.execute(sql: """
+            ALTER TABLE note_sources ADD COLUMN summaryRole TEXT CHECK(summaryRole IN ('summary','reference'));
+            CREATE INDEX note_sources_summaries ON note_sources(sourceID, noteID) WHERE summaryRole = 'summary';
+            UPDATE note_sources AS ns SET summaryRole = 'summary' WHERE EXISTS (
+                SELECT 1 FROM captures c JOIN notes n ON n.id = c.noteID,
+                    json_each(CAST(c.artifacts AS TEXT)) artifact
+                WHERE c.noteID = ns.noteID AND c.sourceID = ns.sourceID
+                    AND json_extract(artifact.value, '$.name') = 'Summary.md'
+                    AND json_extract(artifact.value, '$.kind') = 'markdown'
+                    AND json_extract(artifact.value, '$.hash') = n.contentHash
+            );
+            UPDATE notes SET summaryEngine = coalesce(summaryEngine, 'Apple Intelligence')
+                WHERE EXISTS (SELECT 1 FROM note_sources
+                    WHERE noteID = notes.id AND summaryRole = 'summary');
+            """)
+        }
         try migrator.migrate(database)
     }
 
