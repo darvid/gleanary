@@ -533,6 +533,78 @@ struct KnowledgeAtlasCameraTests {
         return (atlas, fixture)
     }
 
+    @Test func collectionsRememberIndependentMapCamerasAndSelections() {
+        let (atlas, fixture) = model()
+        atlas.activate(scope: .all, kind: .all)
+        atlas.focus(.category(fixture.ai.id), animated: false)
+        atlas.zoom(by: 1.4, around: CGPoint(x: 500, y: 320))
+        atlas.pan(by: CGSize(width: 25, height: -18))
+        atlas.selectedID = .item(fixtureID(10009))
+        let allCamera = atlas.camera, allFocus = atlas.focusID
+        let allSelection = atlas.selectedID
+
+        atlas.activate(scope: .all, kind: .notes)
+        atlas.zoom(by: 2.2, around: CGPoint(x: 500, y: 320))
+        let notesCamera = atlas.camera
+        atlas.activate(scope: .all, kind: .sources)
+        atlas.zoom(by: 1.7, around: CGPoint(x: 500, y: 320))
+        let sourcesCamera = atlas.camera
+        atlas.activate(scope: .unfiled, kind: .all)
+        #expect(atlas.focusID == .uncategorized)
+        atlas.zoom(by: 1.2, around: CGPoint(x: 500, y: 320))
+        let unfiledCamera = atlas.camera
+        atlas.activate(scope: .category(fixture.technology.id), kind: .all)
+        #expect(atlas.focusID == .category(fixture.technology.id))
+
+        atlas.activate(scope: .all, kind: .all)
+        #expect(atlas.focusID == allFocus)
+        #expect(atlas.selectedID == allSelection)
+        #expect(abs(atlas.camera.scale - allCamera.scale) < 0.000001)
+        #expect(abs(atlas.camera.offset.x - allCamera.offset.x) < 0.000001)
+        #expect(abs(atlas.camera.offset.y - allCamera.offset.y) < 0.000001)
+        let navigations = atlas.navigations
+        let restored = atlas.camera
+        atlas.activate(scope: .all, kind: .all)
+        #expect(atlas.camera == restored)
+        #expect(atlas.navigations == navigations)
+        atlas.activate(scope: .all, kind: .notes)
+        #expect(abs(atlas.camera.scale - notesCamera.scale) < 0.000001)
+        atlas.activate(scope: .all, kind: .sources)
+        #expect(abs(atlas.camera.scale - sourcesCamera.scale) < 0.000001)
+        atlas.activate(scope: .unfiled, kind: .all)
+        #expect(abs(atlas.camera.scale - unfiledCamera.scale) < 0.000001)
+    }
+
+    @Test func viewportChangesKeepMapZoomAndRelativeCenterInsteadOfFitting() {
+        let (atlas, _) = model()
+        atlas.zoom(by: 3, around: CGPoint(x: 350, y: 250))
+        atlas.pan(by: CGSize(width: -22, height: 16))
+        let camera = atlas.camera
+        let center = camera.logical(CGPoint(x: 500, y: 320))
+        atlas.setViewport(CGSize(width: 600, height: 400))
+        #expect(atlas.camera.scale == camera.scale)
+        let resizedCenter = atlas.camera.logical(CGPoint(x: 300, y: 200))
+        #expect(abs(resizedCenter.x / 600 - center.x / 1000) < 0.000001)
+        #expect(abs(resizedCenter.y / 400 - center.y / 640) < 0.000001)
+        atlas.setViewport(CGSize(width: 1000, height: 640))
+        #expect(abs(atlas.camera.offset.x - camera.offset.x) < 0.000001)
+        #expect(abs(atlas.camera.offset.y - camera.offset.y) < 0.000001)
+    }
+
+    @Test func rememberedMapsPruneDeletedSelectionsAndCanRevealHiddenEmptyCategories() {
+        let (atlas, fixture) = model()
+        atlas.activate(scope: .all, kind: .all)
+        atlas.selectedID = .item(fixtureID(10000))
+        atlas.activate(scope: .all, kind: .notes)
+        atlas.apply(AtlasSnapshot(categories: fixture.categories, items: []))
+        atlas.activate(scope: .all, kind: .all)
+        #expect(atlas.selectedID == nil)
+        atlas.hidesEmptyCategories = true
+        atlas.activate(scope: .category(fixture.empty.id), kind: .all)
+        #expect(atlas.focusID == .category(fixture.empty.id))
+        #expect(atlas.focusTile != nil)
+    }
+
     @Test func focusingBackAndResetFollowTheHierarchy() throws {
         let (atlas, fixture) = model()
         #expect(atlas.focusID == .library)

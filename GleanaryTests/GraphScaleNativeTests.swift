@@ -10,11 +10,11 @@ import Testing
 @Suite(.serialized) @MainActor struct GraphScaleNativeTests {
     @Test(
         .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_GRAPH_SCALE_NATIVE"] == "1"),
-        arguments: [4999, 9999]
+        arguments: [11, 1199, 4999, 9999]
     )
     func canonicalLargeGraphsRenderWithSourcesAndSelectedEvidence(count: Int) async throws {
         _ = NSApplication.shared
-        let fixture = try await GraphScaleFixture(count: count)
+        let fixture = try await GraphScaleFixture(count: count, filed: true)
         defer { fixture.clean() }
         let url = try #require(URL(string: "https://example.org/synthetic-graph-source"))
         _ = try await fixture.store.enqueueCapture(CaptureRequest(
@@ -31,6 +31,8 @@ import Testing
                 text: "Synthetic evidence."
             )]
         ), artifacts: [])
+        let sourceHome = try #require(await fixture.store.categories().first { $0.code == "21" })
+        try await fixture.store.fileNote(source, categoryID: sourceHome.id)
         let pair = [fixture.ids[0].uuidString, source.uuidString].sorted()
         try await DatabaseQueue(path: fixture.store.url.path).write { db in
             try db.execute(
@@ -54,6 +56,7 @@ import Testing
         #expect(model.data.sourceNodeIDs == [GraphNode.documentID(source)])
         let sourceNode = try #require(model.snapshot.nodes.first { $0.noteID == source })
         #expect(model.isSource(sourceNode))
+        #expect(model.filings(for: sourceNode).first?.id == sourceHome.id)
         let camera = Binding<GraphCamera?>(get: { model.camera }, set: { model.camera = $0 })
         let content = HStack(spacing: 0) {
             KnowledgeGraphView(
@@ -88,8 +91,11 @@ import Testing
         window.setContentSize(NSSize(width: 1400, height: 800))
         try await Task.sleep(for: .milliseconds(100))
         #expect(model.camera == beforeSelection)
-        for selected in [false, true] {
-            if selected {
+        for phase in ["overview", "filing", "evidence"] {
+            if phase == "filing" {
+                model.select(sourceNode.id)
+            }
+            if phase == "evidence" {
                 let edge = try #require(model.snapshot.edges
                     .first { $0.source == sourceNode.id || $0.target == sourceNode.id })
                 model.select(edge.source, edgeID: edge.id)
@@ -106,14 +112,17 @@ import Testing
             for dark in [false, true] {
                 host.rootView = content.preferredColorScheme(dark ? .dark : .light)
                     .background(Color(nsColor: .windowBackgroundColor))
-                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                let appearance: NSAppearance.Name = phase == "filing"
+                    ? (dark ? .accessibilityHighContrastDarkAqua : .accessibilityHighContrastAqua)
+                    : (dark ? .darkAqua : .aqua)
+                host.appearance = NSAppearance(named: appearance)
                 try await Task.sleep(for: .milliseconds(60))
                 host.layoutSubtreeIfNeeded()
                 let start = ContinuousClock.now
                 let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: bitmap)
                 print(
-                    "GRAPH CANONICAL NATIVE \(count + 1): selected=\(selected) dark=\(dark) raster \(start.duration(to: .now))"
+                    "GRAPH CANONICAL NATIVE \(count + 1): phase=\(phase) dark=\(dark) raster \(start.duration(to: .now))"
                 )
                 if let directory = ProcessInfo.processInfo
                     .environment["GLEANARY_GRAPH_SCALE_SCREENSHOTS"]
@@ -127,10 +136,31 @@ import Testing
                     try png
                         .write(to: output
                             .appending(
-                                path: "canonical-\(count + 1)-\(selected ? "evidence" : "overview")-\(dark ? "dark" : "light").png"
+                                path: "canonical-\(count + 1)-\(phase)-\(dark ? "dark" : "light").png"
                             ))
                 }
             }
         }
+        if count < 1200 {
+            // Compare only the canvas: inspector text must not make this test pass.
+            let bounds = NSRect(x: 0, y: 0, width: 1080, height: 800)
+            let original = try canvasPixels(host, bounds: bounds)
+            let positions = model.positions
+            let newHome = try #require(await fixture.store.categories().first { $0.code == "22" })
+            try await fixture.store.fileNote(source, categoryID: newHome.id)
+            await model.load(from: fixture.store, request: LibraryGraphRequest())
+            try await Task.sleep(for: .milliseconds(150))
+            host.layoutSubtreeIfNeeded()
+            #expect(!model.layingOut && model.positions == positions)
+            #expect(model.camera == beforeSelection)
+            #expect(try canvasPixels(host, bounds: bounds) != original)
+        }
+    }
+
+    private func canvasPixels(_ host: NSView, bounds: NSRect) throws -> Data {
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: bounds))
+        host.cacheDisplay(in: bounds, to: bitmap)
+        let bytes = try #require(bitmap.bitmapData)
+        return Data(bytes: bytes, count: bitmap.bytesPerRow * bitmap.pixelsHigh)
     }
 }

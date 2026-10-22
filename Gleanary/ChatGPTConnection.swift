@@ -20,6 +20,8 @@ final class ChatGPTConnection {
     var filingModel = ""
     var useChatGPT = false
     var busy = false
+    private(set) var refreshingModels = false
+    private(set) var modelCatalogError: String?
     var signingIn = false
     var error: String?
     var welcome = false
@@ -45,6 +47,9 @@ final class ChatGPTConnection {
     func load() async {
         do {
             let snapshot = try await session.accounts()
+            if activeID != snapshot.activeID {
+                resetModelCatalog()
+            }
             accounts = snapshot.accounts
             activeID = snapshot.activeID
             consented = activeID
@@ -61,9 +66,9 @@ final class ChatGPTConnection {
     func refreshModels() async {
         guard !busy else { return }
         busy = true
-        defer { busy = false }
-        models = []
-        selectedModel = ""
+        refreshingModels = true
+        defer { busy = false; refreshingModels = false }
+        modelCatalogError = nil
         catalogError = nil
         do {
             models = try await session.catalog()
@@ -72,22 +77,33 @@ final class ChatGPTConnection {
                 .slug ?? ""
             let filing = preferences.string(forKey: "chatgpt.filing-model." + (activeID ?? ""))
             filingModel = models.first(where: { $0.slug == filing })?.slug ?? ""
-            error = models
-                .isEmpty ?
-                "No models are available for this account. Use on-device inference or try another account." :
-                nil
+            modelCatalogError = models.isEmpty
+                ? "No models are available for this account. Try again or choose another account."
+                : nil
         } catch {
-            catalogError = error as? ChatGPTError ?? .server
-            self.error = safeMessage(error)
+            let reason = error as? ChatGPTError ?? .server
+            catalogError = reason
+            let message = models.isEmpty
+                ? "Could not load models. Try again."
+                : "Could not refresh models. Your current list is still available."
+            modelCatalogError = message +
+                (reason == .server ? "" : " " + reason.localizedDescription)
         }
+    }
+
+    private func resetModelCatalog() {
+        models = []
+        selectedModel = ""
+        filingModel = ""
+        modelCatalogError = nil
+        catalogError = nil
     }
 
     func selectAccount(_ id: String) async {
         guard !busy, !signingIn else { return }
         useChatGPT = false
         preferences.set(false, forKey: "chatgpt.enabled")
-        models = []
-        selectedModel = ""
+        resetModelCatalog()
         do { try await session.select(id); await load() }
         catch { self.error = safeMessage(error) }
     }
@@ -259,8 +275,7 @@ final class ChatGPTConnection {
         busy = true
         setEnabled(false)
         setConsent(false)
-        models = []
-        selectedModel = ""
+        resetModelCatalog()
         do {
             let revoked = try await session.signOut()
             let snapshot = try await session.accounts()

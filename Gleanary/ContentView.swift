@@ -16,6 +16,7 @@ struct ContentView: View {
     @AppStorage("libraryKindFilter") private var kindFilter = LibraryKindFilter.all
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
+    @AppStorage("librarySidebarExpanded") private var librarySidebarExpanded = true
     @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
     @State private var page = 0
@@ -36,7 +37,11 @@ struct ContentView: View {
     @AppStorage("collapsedFilingAreas") private var collapsedAreas = ""
     @State private var atlas = KnowledgeAtlasModel()
     @State private var graph = LibraryGraphModel()
-    @State private var graphFocus: UUID?
+    private var graphFocus: UUID? {
+        get { graph.focus }
+        nonmutating set { graph.focus = newValue }
+    }
+
     /// Shared with the map's Hide empty toggle.
     @AppStorage("atlasHidesEmptyCategories") private var atlasHidesEmpty = false
     /// The item opened from the Atlas or Graph; each canvas keeps its state underneath.
@@ -57,7 +62,8 @@ struct ContentView: View {
         conversation: ConversationModel? = nil,
         initialSelection: UUID? = nil,
         previewModel: DocumentPreviewModel? = nil,
-        atlasModel: KnowledgeAtlasModel? = nil
+        atlasModel: KnowledgeAtlasModel? = nil,
+        graphModel: LibraryGraphModel? = nil
     ) {
         self.library = library
         self.conversation = conversation
@@ -65,6 +71,7 @@ struct ContentView: View {
         self.initialSelection = initialSelection
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
         _atlas = State(initialValue: atlasModel ?? KnowledgeAtlasModel())
+        _graph = State(initialValue: graphModel ?? LibraryGraphModel())
     }
 
     var body: some View {
@@ -249,7 +256,10 @@ struct ContentView: View {
             }
         }
         .onChange(of: kindFilter, initial: true) {
-            atlas.kindFilter = kindFilter
+            if scope != .captures, scope != .archived {
+                graph.activate(scope: scope ?? .all, kind: kindFilter)
+                atlas.activate(scope: scope ?? .all, kind: kindFilter)
+            }
             library.documentGrid.kindFilter = kindFilter
             if atlasItem == nil {
                 selection = []; preview.selectedID = nil
@@ -686,9 +696,6 @@ struct ContentView: View {
             atlasItem = nil
             presentation = newValue
             if newValue == .list {
-                if case let .category(id) = atlas.focusID, scope != .captures, scope != .archived {
-                    scope = .category(id)
-                }
                 preview.selectedID = selection.first
             }
         })
@@ -714,7 +721,7 @@ struct ContentView: View {
                     get: { library.documentGrid.query },
                     set: { library.documentGrid.query = $0 }
                 ),
-                focus: $graphFocus, openNote: openFromGraph, openSource: { source = $0 }
+                focus: $graph.focus, openNote: openFromGraph, openSource: { source = $0 }
             )
         }
     }
@@ -729,6 +736,7 @@ struct ContentView: View {
         chatting = false
         automating = false
         showingActivity = false
+        graph.activate(scope: .all, kind: .all)
         graphFocus = id
         atlasItem = nil
         library.documentGrid.query = ""
@@ -737,7 +745,7 @@ struct ContentView: View {
         presentation = .graph
     }
 
-    /// Shows a saved item from anywhere, such as the Captures list. Switching to All items
+    /// Shows a saved item from anywhere, such as the Captures list. Switching to the full Library
     /// clears the selection, so the item is selected after that, not before.
     private func openSavedItem(_ id: UUID) {
         showSavedItem(id, asSource: false)
@@ -840,11 +848,12 @@ struct ContentView: View {
         restoring = target
         readerTarget = nil
         kindFilter = target.kindFilter
-        atlas.kindFilter = target.kindFilter
+        atlas.activate(scope: target.scope ?? .all, kind: target.kindFilter)
         chatting = target.chatting
         automating = target.automations
         showingActivity = target.activity
         presentation = target.presentation
+        graph.activate(scope: target.scope ?? .all, kind: target.kindFilter)
         graphFocus = target.graphFocus
         if scope != target.scope {
             // The scope change resets the Atlas, so its region and item follow it.
@@ -880,13 +889,9 @@ struct ContentView: View {
     /// Sidebar choices act as shortcuts into the Atlas instead of filtering a list.
     private func showInAtlas(_ scope: LibraryScope) {
         atlasItem = nil
-        atlas.kindFilter = kindFilter
-        switch scope {
-        case .unfiled: atlas.focus(.uncategorized)
-        case let .category(id): atlas.focus(.category(id))
-        case .captures, .archived: break
-        default: atlas.reset()
-        }
+        guard scope != .captures, scope != .archived else { return }
+        graph.activate(scope: scope, kind: kindFilter)
+        atlas.activate(scope: scope, kind: kindFilter)
         seenAtlasNavigations = atlas.navigations
     }
 
@@ -937,23 +942,48 @@ struct ContentView: View {
                             : "\(waiting) proposals to review")
                 }
             }.tag(SidebarItem.automations)
-            Section("Library") {
-                Label("Activity", systemImage: "clock")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingActivity ? .white : .black))
-                    .tag(SidebarItem.activity)
-                Label("All items", systemImage: "tray.full")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
-                    .tag(SidebarItem.library(.all))
-                Label("Sources", systemImage: "doc.text")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.sources)))
-                    .tag(SidebarItem.library(.sources))
-                Label("Notes", systemImage: "note.text")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.notes)))
-                    .tag(SidebarItem.library(.notes))
-                Label("Unfiled", systemImage: "folder.badge.questionmark")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.unfiled)))
-                    .tag(SidebarItem.library(.unfiled))
+            Section {
+                DisclosureGroup(isExpanded: $librarySidebarExpanded) {
+                    Label("Notes", systemImage: "note.text")
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.notes)))
+                        .accessibilityHint("Show notes in Library")
+                        .tag(SidebarItem.library(.notes))
+                    Label("Sources", systemImage: "doc.text")
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.sources)))
+                        .accessibilityHint("Show sources in Library")
+                        .tag(SidebarItem.library(.sources))
+                    Label("Unfiled", systemImage: "folder.badge.questionmark")
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.unfiled)))
+                        .accessibilityHint("Show unfiled items in Library")
+                        .tag(SidebarItem.library(.unfiled))
+                } label: {
+                    // A button still opens all items when this selected row represents a
+                    // hidden filter. Re-selecting an already selected List row would not.
+                    Button {
+                        sidebarSelection.wrappedValue = .library(.all)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Label("Library", systemImage: "books.vertical")
+                                .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
+                            Spacer(minLength: 4)
+                            if let filter = collapsedLibraryFilter {
+                                Text(filter).font(.caption)
+                                    .foregroundStyle(sidebarColor(.all).opacity(0.72))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show all saved items")
+                    .accessibilityLabel("Library")
+                    .accessibilityValue(collapsedLibraryFilter ?? "All items")
+                    .accessibilityHint("Show all saved items")
+                }
+                .foregroundStyle(sidebarColor(.all))
+                .tag(SidebarItem.library(.all))
+            }
+            Section {
                 HStack {
                     Label("Captures", systemImage: "tray.and.arrow.down")
                         .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.captures)))
@@ -973,6 +1003,10 @@ struct ContentView: View {
                                 : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
+                Label("Activity", systemImage: "clock")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingActivity ? .white : .black))
+                    .tag(SidebarItem.activity)
                 Label("Archive", systemImage: "archivebox")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.archived)))
                     .tag(SidebarItem.library(.archived))
@@ -1049,17 +1083,30 @@ struct ContentView: View {
         }
     }
 
+    private var collapsedLibraryFilter: String? {
+        guard !librarySidebarExpanded, !chatting, !automating, !showingActivity else { return nil }
+        switch sidebarScope {
+        case .notes?, .sources?, .unfiled?: return scopeTitle
+        default: return nil
+        }
+    }
+
+    private var visibleSidebarScope: LibraryScope? {
+        collapsedLibraryFilter == nil ? sidebarScope : .all
+    }
+
     /// Pass nil for the conversation row.
     private func sidebarColor(_ item: LibraryScope?) -> Color {
         let selected = item
-            .map { !chatting && !automating && !showingActivity && sidebarScope == $0 } ?? chatting
+            .map { !chatting && !automating && !showingActivity && visibleSidebarScope == $0 } ??
+            chatting
         return colorScheme == .dark || selected ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
             chatting ? .conversation : showingActivity ? .activity : automating ? .automations :
-                sidebarScope.map(SidebarItem.library)
+                visibleSidebarScope.map(SidebarItem.library)
         } set: { item in
             readerTarget = nil
             switch item {
@@ -1067,14 +1114,13 @@ struct ContentView: View {
             case .automations: chatting = false; automating = true; showingActivity = false
             case .activity: chatting = false; automating = false; showingActivity = true
             case let .library(scope):
-                graphFocus = nil
                 chatting = false
                 automating = false
                 showingActivity = false
                 switch scope {
-                case .notes: kindFilter = .notes; self.scope = .all; atlas.reset()
-                case .sources: kindFilter = .sources; self.scope = .all; atlas.reset()
-                case .all: kindFilter = .all; self.scope = .all; atlas.reset()
+                case .notes: kindFilter = .notes; self.scope = .all
+                case .sources: kindFilter = .sources; self.scope = .all
+                case .all: kindFilter = .all; self.scope = .all
                 default: self.scope = scope
                 }
             case nil: break
@@ -1354,6 +1400,7 @@ struct ContentView: View {
 
     private func captureRow(_ job: CaptureJob) -> some View {
         let failed = job.state == .failed
+        let presentation = CaptureRowPresentation(job)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if failed {
@@ -1367,7 +1414,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                         .accessibilityLabel("In progress")
                 }
-                Text(job.request.label).font(.headline).lineLimit(2)
+                CaptureRowHeading(presentation: presentation)
             }
             let status = job.error
                 ?? (job.progress.isEmpty ? job.state.rawValue.capitalized : job.progress)
@@ -1399,6 +1446,14 @@ struct ContentView: View {
             }.controlSize(.small)
         }
         .padding(.vertical, 8)
+        .contextMenu {
+            if let url = presentation.url {
+                Button("Copy link", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                }
+            }
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -1409,7 +1464,7 @@ struct ContentView: View {
 
     private var emptyListMessage: String {
         if !library.documentGrid.query.isEmpty {
-            return "Try another term or choose All items to search more broadly."
+            return "Try another term or choose Library to search more broadly."
         }
         // Empty states keep to one line, so the icon stays put moving between views.
         if scope == .archived {
@@ -1423,7 +1478,7 @@ struct ContentView: View {
 
     private var scopeTitle: String {
         switch sidebarScope ?? .all {
-        case .all: "All items"
+        case .all: "Library"
         case .sources: "Sources"
         case .notes: "Notes"
         case .unfiled: "Unfiled"

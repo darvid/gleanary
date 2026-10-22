@@ -50,16 +50,16 @@ struct GraphDocumentMark {
 
     func draw(
         in context: inout GraphicsContext, rect: CGRect, increasedContrast: Bool,
-        background: Color = Color(nsColor: .windowBackgroundColor)
+        background: Color = Color(nsColor: .windowBackgroundColor), ink: Color = .primary
     ) {
         let shape = path(in: rect)
         if isSource {
             context.fill(shape, with: .color(background))
-            context.fill(shape, with: .color(Color.primary.opacity(0.08)))
-            context.stroke(shape, with: .color(.primary), lineWidth: increasedContrast ? 2 : 1.5)
-            context.stroke(fold(in: rect), with: .color(.primary), lineWidth: 1)
+            context.fill(shape, with: .color(ink.opacity(0.08)))
+            context.stroke(shape, with: .color(ink), lineWidth: increasedContrast ? 2 : 1.5)
+            context.stroke(fold(in: rect), with: .color(ink), lineWidth: 1)
         } else {
-            context.fill(shape, with: .color(.primary))
+            context.fill(shape, with: .color(ink))
             context.stroke(
                 textLines(in: rect),
                 with: .color(background),
@@ -99,13 +99,14 @@ struct DocumentIdentity: Equatable {
 
 struct DocumentIdentityMark: View {
     let isSource: Bool
+    var ink: Color = .primary
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         Canvas { context, size in
             GraphDocumentMark(isSource: isSource).draw(
                 in: &context, rect: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1),
-                increasedContrast: contrast == .increased
+                increasedContrast: contrast == .increased, ink: ink
             )
         }
         .frame(width: 18, height: 18)
@@ -136,17 +137,29 @@ struct DocumentIdentityLabel: View {
 }
 
 struct GraphDocumentLegend: View {
+    var usesFilingColors = false
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        HStack(spacing: 16) {
-            entry(isSource: false, title: "Notes")
-            entry(isSource: true, title: "Sources")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 16) {
+                entry(isSource: false, title: "Notes")
+                entry(isSource: true, title: "Sources")
+            }
+            if usesFilingColors {
+                Text("Color follows primary filing").font(.caption2)
+                    .help("Matches the Map palette. Unfiled items are neutral.")
+            }
         }
         .font(.caption).foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "Notes are filled pages with text lines. Sources are outlined pages with a folded corner."
+                +
+                (
+                    usesFilingColors ? " Colors follow primary filing. Unfiled items are neutral." :
+                        ""
+                )
         )
     }
 

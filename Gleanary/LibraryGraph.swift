@@ -38,4 +38,6 @@ struct LibraryGraphSnapshot: Sendable {
     var titles: [String: String] = [:]
     var truncatedReasons = false
     var sourceNodeIDs: Set<String> = []
+    /// Each visible document's own memberships, primary first and then by code.
+    var nodeFilings: [String: [DecimalCategory]] = [:]
 }

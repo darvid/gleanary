@@ -346,6 +346,110 @@ struct LibraryGraphTests {
             .documentID(notes[0].id))
     }
 
+    @Test @MainActor func collectionsRestoreGraphLayoutCameraSelectionAndSpacing() async throws {
+        let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
+        let notes = try await fixture.store.open(seed: (0 ..< 4).map {
+            MarkdownDocument(name: "Memory \($0)", markdown: "Synthetic canvas evidence.")
+        })
+        try fixture.link(notes[0].id, notes[1].id)
+        let graph = LibraryGraphModel()
+        graph.reduceMotion = true
+        defer { graph.stop() }
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        try await waitForLayout(graph)
+        let counts = try fixture.counts()
+        graph.setSpacing(0.8)
+        graph.finishSpacingChange()
+        try await waitForLayout(graph)
+        let edge = try #require(graph.snapshot.edges.first)
+        graph.move(edge.source, to: GraphPosition(x: 243, y: -159))
+        graph.select(edge.source, edgeID: edge.id)
+        graph.inspectorVisible = false
+        let camera = GraphCamera(scale: 1.7, pan: CGSize(width: 84, height: -52))
+        graph.camera = camera
+        let positions = graph.positions
+
+        await graph.load(from: fixture.store, request: LibraryGraphRequest(kind: .notes))
+        try await waitForLayout(graph)
+        graph.select(edge.target)
+        let notesCamera = GraphCamera(scale: 0.65, pan: CGSize(width: -18, height: 36))
+        graph.camera = notesCamera
+        let notesPositions = graph.positions
+        await graph.load(from: fixture.store, request: LibraryGraphRequest(kind: .sources))
+        #expect(graph.snapshot.nodes.isEmpty)
+
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        #expect(graph.camera == camera)
+        #expect(graph.positions == positions)
+        #expect(graph.selectedID == edge.source)
+        #expect(graph.selectedEdgeID == edge.id)
+        #expect(graph.spacing.value == 0.8)
+        #expect(!graph.inspectorVisible)
+        #expect(!graph.layingOut)
+        await graph.load(from: fixture.store, request: LibraryGraphRequest(kind: .notes))
+        #expect(graph.camera == notesCamera)
+        #expect(graph.positions == notesPositions)
+        #expect(graph.selectedID == edge.target)
+        #expect(graph.spacing == .standard)
+        #expect(graph.inspectorVisible)
+        #expect(!graph.layingOut)
+        #expect(try fixture.counts() == counts)
+    }
+
+    @Test @MainActor func collectionGraphControlsRememberNeighborhoodConceptsAndDepth() {
+        let graph = LibraryGraphModel()
+        let first = UUID(), second = UUID()
+        graph.activate(scope: .all, kind: .all)
+        graph.focus = first
+        graph.includesConcepts = true
+        graph.depth = 2
+        graph.activate(scope: .all, kind: .notes)
+        #expect(graph.focus == nil)
+        #expect(!graph.includesConcepts)
+        #expect(graph.depth == 1)
+        graph.focus = second
+        graph.activate(scope: .all, kind: .sources)
+        #expect(graph.focus == nil)
+        graph.activate(scope: .all, kind: .all)
+        #expect(graph.focus == first)
+        #expect(graph.includesConcepts)
+        #expect(graph.depth == 2)
+        graph.activate(scope: .all, kind: .all)
+        #expect(graph.focus == first)
+        graph.activate(scope: .all, kind: .notes)
+        #expect(graph.focus == second)
+        #expect(!graph.includesConcepts)
+        #expect(graph.depth == 1)
+    }
+
+    @Test @MainActor func returningGraphsRefreshTopologyAndDiscardDeletedSelections() async throws {
+        let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
+        let notes = try await fixture.store.open(seed: (0 ..< 3).map {
+            MarkdownDocument(name: "Refresh \($0)", markdown: "Synthetic canvas evidence.")
+        })
+        try fixture.link(notes[0].id, notes[1].id)
+        let graph = LibraryGraphModel()
+        graph.reduceMotion = true
+        defer { graph.stop() }
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        try await waitForLayout(graph)
+        let deletedID = GraphNode.documentID(notes[0].id)
+        graph.select(deletedID, edgeID: graph.snapshot.edges.first?.id)
+        graph.camera = GraphCamera(scale: 2)
+        await graph.load(from: fixture.store, request: LibraryGraphRequest(kind: .notes))
+        try await waitForLayout(graph)
+        try await fixture.store.archive(notes[0].id, reason: "Synthetic refresh")
+        await graph.load(from: fixture.store, request: LibraryGraphRequest())
+        try await waitForLayout(graph)
+        #expect(!graph.snapshot.nodes.contains { $0.id == deletedID })
+        #expect(graph.positions[deletedID] == nil)
+        #expect(graph.selectedID == nil)
+        #expect(graph.selectedEdgeID == nil)
+        #expect(graph.evidence.isEmpty)
+        #expect(graph.camera?.scale == 2)
+        #expect(graph.positions.count == graph.snapshot.nodes.count)
+    }
+
     @Test @MainActor func inspectorNavigationDoesNotChangeScopeOrCamera() async throws {
         let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
         let notes = try await fixture.store.open(seed: [

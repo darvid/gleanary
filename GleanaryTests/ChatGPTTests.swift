@@ -97,18 +97,24 @@ private actor FixtureChatGPTTransport: ChatGPTTransporting {
 
 /// Answers each request with the next status in turn, repeating the last one.
 private actor SequencedChatGPTTransport: ChatGPTTransporting {
-    let response = Data(
-        "{\"models\":[{\"slug\":\"fixture\",\"display_name\":\"Fixture model\",\"visibility\":\"list\"}]}"
-            .utf8
-    )
+    let response: Data
+    let delay: Duration
     var statuses: [Int]
+    private(set) var requestCount = 0
 
-    init(statuses: [Int]) {
+    init(
+        statuses: [Int], delay: Duration = .zero,
+        response: String = "{\"models\":[{\"slug\":\"fixture\",\"display_name\":\"Fixture model\",\"visibility\":\"list\"}]}"
+    ) {
         self.statuses = statuses
+        self.delay = delay
+        self.response = Data(response.utf8)
     }
 
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requestCount += 1
         let status = statuses.count > 1 ? statuses.removeFirst() : statuses[0]
+        try await Task.sleep(for: delay)
         let url = try #require(request.url)
         return try (
             response,
@@ -476,6 +482,105 @@ struct ChatGPTTests {
         } else {
             await #expect(throws: ChatGPTError.server) { try await connection.requestInference() }
         }
+    }
+
+    @Test @MainActor func failedModelRefreshPreservesChoicesAndCanRecoverWithoutRestart(
+    ) async throws {
+        let account = registration()
+        let transport = SequencedChatGPTTransport(
+            statuses: [200, 500, 200],
+            delay: .milliseconds(80),
+            response: """
+            {"models":[{"slug":"fixture","display_name":"Fixture model","visibility":"list"},
+            {"slug":"filing","display_name":"Filing model","visibility":"list"}]}
+            """
+        )
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: transport, hostID: "fixture"
+        )
+        let suite = "gleanary-catalog-retry-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        connection.selectModel("fixture")
+        connection.selectFilingModel("filing")
+        let models = connection.models
+        let refresh = Task { await connection.refreshModels() }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !connection.refreshingModels, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        try #require(connection.refreshingModels)
+        #expect(connection.busy && connection.models == models)
+        #expect(connection.selectedModel == "fixture" && connection.filingModel == "filing")
+        await connection.refreshModels()
+        await refresh.value
+        #expect(await transport.requestCount == 2)
+        #expect(!connection.busy && !connection.refreshingModels)
+        #expect(connection.models == models)
+        #expect(connection.selectedModel == "fixture" && connection.filingModel == "filing")
+        #expect(connection
+            .modelCatalogError == "Could not refresh models. Your current list is still available.")
+        #expect(connection.error == nil)
+        await connection.refreshModels()
+        #expect(await transport.requestCount == 3)
+        #expect(connection.modelCatalogError == nil && connection.models == models)
+        #expect(connection.selectedModel == "fixture" && connection.filingModel == "filing")
+    }
+
+    @Test @MainActor func changingAccountsNeverRetainsThePreviousAccountsModels() async throws {
+        let first = registration()
+        let second = ChatGPTRegistration(
+            id: "other-fixture", clientID: first.clientID, subject: "other-fixture",
+            email: "other@example.invalid", accessToken: "fixture-other-access",
+            refreshToken: nil, idToken: nil, scopes: first.scopes, expiresAt: first.expiresAt
+        )
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [first, second],
+                activeID: first.id
+            )),
+            transport: SequencedChatGPTTransport(statuses: [200, 500]), hostID: "fixture"
+        )
+        let suite = "gleanary-catalog-account-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        connection.selectFilingModel("fixture")
+        try #require(!connection.models.isEmpty)
+        await connection.selectAccount(second.id)
+        #expect(connection.activeID == second.id)
+        #expect(connection.models.isEmpty && connection.selectedModel.isEmpty && connection
+            .filingModel.isEmpty)
+        #expect(connection.modelCatalogError == "Could not load models. Try again.")
+    }
+
+    @Test @MainActor func modelCatalogRetryRecoversFromAnEmptyStartupState() async throws {
+        let account = registration()
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: SequencedChatGPTTransport(statuses: [500, 200]), hostID: "fixture"
+        )
+        let suite = "gleanary-empty-catalog-retry-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        #expect(connection.models.isEmpty && !connection.refreshingModels)
+        #expect(connection.modelCatalogError == "Could not load models. Try again.")
+        await connection.refreshModels()
+        #expect(connection.modelCatalogError == nil)
+        #expect(connection.selectedModel == "fixture")
+        #expect(!connection.models.isEmpty && !connection.busy)
     }
 
     @Test @MainActor func selectingChatGPTPromptsForConsentInsteadOfSilentlyIgnoringTheChoice(
@@ -1334,6 +1439,91 @@ struct ChatGPTTests {
         {
             try png.write(to: URL(fileURLWithPath: path).appendingPathExtension(suffix + ".png"))
         }
+    }
+
+    @Test(
+        .enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_CHATGPT_RECOVERY_SCREENSHOTS"] == "1"),
+        arguments: [false, true]
+    )
+    @MainActor func catalogRecoveryHasNativeLoadingAndErrorLayouts(dark: Bool) async throws {
+        let account = registration()
+        let session = try ChatGPTSession(
+            vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
+                accounts: [account],
+                activeID: account.id
+            )),
+            transport: SequencedChatGPTTransport(
+                statuses: [500, 200, 500, 200],
+                delay: .milliseconds(500)
+            ),
+            hostID: "fixture"
+        )
+        let suite = "gleanary-catalog-layout-" + UUID().uuidString
+        let preferences = try #require(UserDefaults(suiteName: suite))
+        defer { preferences.removePersistentDomain(forName: suite) }
+        let connection = ChatGPTConnection(session: session, preferences: preferences)
+        await connection.load()
+        connection.setConsent(true)
+        connection.setEnabled(true)
+        let host = NSHostingView(rootView: ScrollView {
+            ChatGPTSettings(connection: connection).padding(24)
+        }.preferredColorScheme(dark ? .dark : .light)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 640)
+        host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        let window = NSWindow(
+            contentRect: host.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        window.orderBack(nil)
+        defer { window.contentView = nil; window.close() }
+        try await recoveryScreenshot(host, state: "empty", dark: dark)
+        let retry = Task { await connection.refreshModels() }
+        try await waitForModelRefresh(connection)
+        try await recoveryScreenshot(host, state: "loading", dark: dark)
+        await retry.value
+        #expect(connection.modelCatalogError == nil && !connection.models.isEmpty)
+        try await recoveryScreenshot(host, state: "loaded", dark: dark)
+        await connection.refreshModels()
+        #expect(connection.modelCatalogError != nil && !connection.models.isEmpty)
+        try await recoveryScreenshot(host, state: "retained", dark: dark)
+        let refresh = Task { await connection.refreshModels() }
+        try await waitForModelRefresh(connection)
+        try await recoveryScreenshot(host, state: "refreshing", dark: dark)
+        await refresh.value
+        #expect(connection.modelCatalogError == nil && connection.selectedModel == "fixture")
+    }
+
+    @MainActor private func waitForModelRefresh(_ connection: ChatGPTConnection) async throws {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while !connection.refreshingModels, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        try #require(connection.refreshingModels)
+    }
+
+    @MainActor private func recoveryScreenshot(
+        _ host: NSView,
+        state: String,
+        dark: Bool
+    ) async throws {
+        try await Task.sleep(for: .milliseconds(25))
+        host.layoutSubtreeIfNeeded()
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        let png = try #require(bitmap.representation(using: .png, properties: [:]))
+        try png
+            .write(
+                to: URL(
+                    fileURLWithPath: "/tmp/gleanary-model-recovery-\(state)-\(dark ? "dark" : "light").png"
+                )
+            )
     }
 
     @Test @MainActor func settingsRenderConnectedAndDisconnectedInBothAppearances() async throws {

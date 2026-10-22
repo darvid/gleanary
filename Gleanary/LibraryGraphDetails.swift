@@ -11,6 +11,7 @@ struct LibraryGraphDetails: View {
     @State private var itemQuery = ""
     @State private var extraConnections = 0
     @State private var hoveredConnection: String?
+    @Environment(\.colorScheme) private var colorScheme
 
     private var inspector: LibraryGraphInspector {
         graph.inspector
@@ -59,6 +60,7 @@ struct LibraryGraphDetails: View {
                                     if let relationship {
                                         evidence(relationship)
                                     } else {
+                                        filingDetails(for: anchor)
                                         neighborSections(for: anchor)
                                     }
                                 }
@@ -117,10 +119,10 @@ struct LibraryGraphDetails: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(node.label).font(.body.weight(.medium))
                                     .lineLimit(2).foregroundStyle(.primary)
-                                Text(
-                                    "\(inspector.kind(of: node)) · \(countLabel(inspector.connectionCount(for: node.id)))"
-                                )
-                                .font(.caption).foregroundStyle(.secondary)
+                                HStack(spacing: 12) {
+                                    Text(inspector.kind(of: node))
+                                    Text(countLabel(inspector.connectionCount(for: node.id)))
+                                }.font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,6 +130,7 @@ struct LibraryGraphDetails: View {
                         .contentShape(Rectangle())
                         .tag(node.id)
                         .help(node.label)
+                        .accessibilityLabel(graph.accessibilityLabel(for: node))
                         .accessibilityHint("Select to inspect connections")
                     }
                 }.listStyle(.inset)
@@ -137,7 +140,13 @@ struct LibraryGraphDetails: View {
 
     @ViewBuilder private func itemMark(_ node: GraphNode) -> some View {
         if node.kind == .document {
-            DocumentIdentityMark(isSource: graph.data.sourceNodeIDs.contains(node.id))
+            DocumentIdentityMark(
+                isSource: graph.isSource(node),
+                ink: AtlasPalette.ink(
+                    graph.nodeStyle(for: node).filingHue,
+                    dark: colorScheme == .dark
+                )
+            )
         } else {
             Image(systemName: inspector.symbol(for: node))
                 .foregroundStyle(.secondary).frame(width: 18)
@@ -159,10 +168,10 @@ struct LibraryGraphDetails: View {
             if relationship == nil {
                 Text(node.label).font(.headline).textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text(
-                    "\(inspector.kind(of: node)) · \(countLabel(inspector.connectionCount(for: node.id)))"
-                )
-                .font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Text(inspector.kind(of: node))
+                    Text(countLabel(inspector.connectionCount(for: node.id)))
+                }.font(.caption).foregroundStyle(.secondary)
                 if let id = node.noteID {
                     ViewThatFits(in: .horizontal) {
                         HStack(spacing: 8) { noteActions(id, node: node) }
@@ -189,6 +198,27 @@ struct LibraryGraphDetails: View {
         }
         if let focusNote {
             Button("Focus in graph", systemImage: "scope") { focusNote(id) }
+        }
+    }
+
+    @ViewBuilder private func filingDetails(for node: GraphNode) -> some View {
+        if node.kind == .document {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Filing").font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
+                let homes = graph.filings(for: node)
+                if homes.isEmpty {
+                    Text("Unfiled").font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(homes.enumerated()), id: \.element.id) { index, home in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(home.label).font(.callout).textSelection(.enabled)
+                            Text(index == 0 ? "Primary" : "Also filed here")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
     }
 

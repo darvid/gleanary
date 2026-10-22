@@ -29,7 +29,7 @@ import SwiftUI
     }
 
     private static func run(count: Int) async throws {
-        let fixture = try await GraphScaleFixture(count: count)
+        let fixture = try await GraphScaleFixture(count: count, filed: true)
         defer { fixture.clean() }
         let graph = LibraryGraphModel()
         graph.reduceMotion = true
@@ -186,7 +186,7 @@ import SwiftUI
         NSApplication.shared.sendEvent(event)
     }
 
-    private static func accessibleFrame(in root: NSView, label: String) -> CGRect? {
+    static func accessibleFrame(in root: NSView, label: String) -> CGRect? {
         var pending: [Any] = [root]
         var visited = Set<ObjectIdentifier>()
         while let value = pending.popLast() {

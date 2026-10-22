@@ -447,17 +447,55 @@ private actor FirstRelatedJudge: LinkJudging {
         try await historyScreenshot(model, dark: true, name: "older")
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo
+            .environment["GLEANARY_AUTOMATION_SCREENSHOTS"] == "1"))
+    @MainActor func longReviewTitlesHaveLeadingNativeLayouts() async throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let titles = [
+            "Synthetic review title: how a local library keeps a long source title readable when it wraps across multiple lines",
+            "Synthetic tooling experiments and performance comparisons for a small native document library",
+        ]
+        let (store, ingestion, ids) = try await library(titles)
+        let id = try await store.beginAutomationRun(.inboxSummarizer, at: Date())
+        var run = AutomationRun(
+            id: id,
+            kind: .inboxSummarizer,
+            startedAt: Date(),
+            status: .succeeded
+        )
+        run.proposed = 2
+        for (index, title) in titles.enumerated() {
+            run.note(
+                .proposed,
+                ids[index],
+                title,
+                "Link to another synthetic item: both sources describe the same implementation tradeoff."
+            )
+        }
+        try await store.finishAutomationRun(run)
+        let model = AutomationsModel(
+            store: store,
+            engine: engine(store, ingestion: ingestion),
+            schedules: false
+        )
+        await model.load()
+        for dark in [false, true] {
+            try await historyScreenshot(model, dark: dark, name: "leading-review", width: 900)
+        }
+    }
+
     @MainActor private func historyScreenshot(
         _ model: AutomationsModel,
         dark: Bool,
-        name: String
+        name: String,
+        width: CGFloat = 1100
     ) async throws {
         let host = NSHostingView(rootView: AutomationsView(model: model, open: { _ in })
-            .frame(width: 1100, height: 1100)
+            .frame(width: width, height: 1100)
             .background(Color(nsColor: .windowBackgroundColor))
             .preferredColorScheme(dark ? .dark : .light))
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 1100),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: 1100),
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
