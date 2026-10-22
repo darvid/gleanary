@@ -135,6 +135,8 @@ struct CaptureJob: Identifiable, Sendable {
     let progress: String
     let error: String?
     let noteID: UUID?
+    /// Read-only display metadata from the saved item, not the durable request label.
+    var savedTitle: String?
     var recovery: CaptureRecovery?
     /// Failed for a reason that may pass on its own, so the failed-capture retry may try again.
     var retryable = false

@@ -160,6 +160,7 @@ struct CaptureTests {
         #expect(duplicate.state == .ready)
         #expect(duplicate.noteID == documents.first?.id)
         #expect(duplicate.progress == "Already captured; existing note kept")
+        #expect(duplicate.savedTitle == documents.first?.name)
         #expect(try await fixture.store.claimCapture() == nil)
         try await engine.run()
         #expect(try await fixture.store.documents().count == 1)

@@ -82,6 +82,22 @@ extension DocumentStore {
              SELECT 'note:' || n.id FROM notes n
              WHERE 'note:' || n.id IN (\(placeholders)) AND (\(Self.libraryKindSQL)) = 'source'
             """, arguments: StatementArguments(ids))
+            var filings: [String: [DecimalCategory]] = [:]
+            let noteIDs = nodes.filter { $0.kind == .document }.compactMap { $0.noteID?.uuidString }
+            if !noteIDs.isEmpty {
+                let filingRows = try Row.fetchAll(db, sql: """
+                 SELECT nc.noteID, c.id, c.code, c.name
+                 FROM note_categories nc JOIN decimal_categories c ON c.id = nc.categoryID
+                 WHERE nc.noteID IN (\(noteIDs.map { _ in "?" }.joined(separator: ",")))
+                 ORDER BY nc.noteID, nc.isPrimary DESC, c.code, c.id
+                """, arguments: StatementArguments(noteIDs))
+                for row in filingRows {
+                    let noteID: String = row["noteID"]
+                    try filings["note:" + noteID, default: []].append(DecimalCategory(
+                        id: Self.uuid(row["id"]), code: row["code"], name: row["name"]
+                    ))
+                }
+            }
             return LibraryGraphSnapshot(
                 graph: GraphSnapshot(
                     nodes: nodes,
@@ -96,7 +112,8 @@ extension DocumentStore {
                 ) },
                 titles: Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0.label) }),
                 truncatedReasons: evidenceRows.count > 2400,
-                sourceNodeIDs: Set(sourceNodeIDs)
+                sourceNodeIDs: Set(sourceNodeIDs),
+                nodeFilings: filings
             )
         }
     }

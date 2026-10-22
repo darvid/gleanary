@@ -10,10 +10,7 @@ struct LibraryGraphView: View {
     @Binding var focus: UUID?
     var openNote: (UUID) -> Void
     var openSource: (SourceCitation) -> Void
-    @State private var includesConcepts = false
-    @State private var depth = 1
     @State private var retry = 0
-    @State private var inspectorVisible = true
     @FocusState private var searching: Bool
 
     private var request: LibraryGraphRequest {
@@ -22,8 +19,8 @@ struct LibraryGraphView: View {
             kind: kind,
             query: query,
             focus: focus,
-            depth: depth,
-            includesConcepts: includesConcepts,
+            depth: graph.depth,
+            includesConcepts: graph.includesConcepts,
             limit: max(
                 200,
                 graph.visibleLimit
@@ -36,23 +33,24 @@ struct LibraryGraphView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 16) {
                     LibraryKindPicker(selection: $kind)
-                    Toggle("Concepts", isOn: $includesConcepts).toggleStyle(.checkbox)
+                    Toggle("Concepts", isOn: $graph.includesConcepts).toggleStyle(.checkbox)
                         .help("Include saved, evidence-backed concepts. No analysis is started.")
                     Spacer(minLength: 16)
                     HStack(spacing: 12) {
                         GraphArrangementControl(graph: graph)
                         Button {
-                            inspectorVisible.toggle()
+                            graph.inspectorVisible.toggle()
                         } label: {
-                            Image(systemName: inspectorVisible
+                            Image(systemName: graph.inspectorVisible
                                 ? "rectangle.righthalf.inset.filled" : "sidebar.right")
                                 .frame(width: 24, height: 24)
                         }
                         .buttonStyle(.borderless).foregroundStyle(.secondary)
-                        .help(inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
-                        .accessibilityLabel(inspectorVisible ? "Hide graph inspector" :
+                        .help(graph
+                            .inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
+                        .accessibilityLabel(graph.inspectorVisible ? "Hide graph inspector" :
                             "Show graph inspector")
-                        .accessibilityValue(inspectorVisible ? "Shown" : "Hidden")
+                        .accessibilityValue(graph.inspectorVisible ? "Shown" : "Hidden")
                     }
                 }
                 HStack {
@@ -73,13 +71,13 @@ struct LibraryGraphView: View {
                         Button("All connections", systemImage: "arrow.left") { focus = nil }
                             .buttonStyle(.borderless)
                         Spacer()
-                        Picker("Neighborhood", selection: $depth) {
+                        Picker("Neighborhood", selection: $graph.depth) {
                             Text("Direct").tag(1)
                             Text("2 hops").tag(2)
                         }.pickerStyle(.segmented).fixedSize()
                     }
                 }
-                if includesConcepts {
+                if graph.includesConcepts {
                     Text(graph.snapshot.nodes.contains(where: { $0.kind != .document })
                         ? "Dashed lines are extracted relationships. Select a connection to inspect its evidence."
                         :
@@ -115,10 +113,10 @@ struct LibraryGraphView: View {
                         showsDocumentLegend: true, camera: $graph.camera
                     )
                     .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
-                    if inspectorVisible {
+                    if graph.inspectorVisible {
                         LibraryGraphDetails(
                             graph: graph, openNote: openNote, openSource: openSource,
-                            focusNote: { focus = $0 }, close: { inspectorVisible = false }
+                            focusNote: { focus = $0 }, close: { graph.inspectorVisible = false }
                         )
                         .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
                     }
@@ -129,16 +127,6 @@ struct LibraryGraphView: View {
             do { try await Task.sleep(for: .milliseconds(250)) }
             catch { return }
             await graph.load(from: store, request: request)
-        }
-        .onChange(of: graph.selectedID) { _, id in
-            if id != nil {
-                inspectorVisible = true
-            }
-        }
-        .onChange(of: graph.selectedEdgeID) { _, id in
-            if id != nil {
-                inspectorVisible = true
-            }
         }
         .onDisappear { graph.stop() }
         .onExitCommand { query = "" }

@@ -10,13 +10,25 @@ struct GraphScaleFixture {
     let store: DocumentStore
     let ids: [UUID]
 
-    init(count: Int, linksPerNode: Int = 2, hub: Bool = false) async throws {
+    init(count: Int, linksPerNode: Int = 2, hub: Bool = false, filed: Bool = false) async throws {
         directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         store = DocumentStore(url: directory.appending(path: "library.sqlite"))
         ids = (0 ..< count).map { _ in UUID() }
         _ = try await store.open(seed: [])
         let identifiers = ids
         try await DatabaseQueue(path: store.url.path).write { db in
+            if filed {
+                for code in 20 ... 28 {
+                    try db.execute(
+                        sql: "INSERT OR IGNORE INTO decimal_categories(id, code, name) VALUES (?, ?, ?)",
+                        arguments: [UUID().uuidString, String(code), "Synthetic filing \(code)"]
+                    )
+                }
+            }
+            let filing = try db.makeStatement(sql: """
+            INSERT INTO note_categories(noteID, categoryID, isPrimary)
+            SELECT ?, id, 1 FROM decimal_categories WHERE code = ?
+            """)
             let note = try db.makeStatement(sql: """
             INSERT INTO notes(id, name, markdown, revision, contentHash, createdAt, updatedAt)
             VALUES (?, ?, 'Synthetic scale fixture.', ?, 'synthetic', 0, 0)
@@ -27,6 +39,9 @@ struct GraphScaleFixture {
                     "Synthetic note \(index)",
                     UUID().uuidString,
                 ])
+                if filed, !index.isMultiple(of: 10) {
+                    try filing.execute(arguments: [id.uuidString, String(20 + index % 9)])
+                }
             }
             let link = try db
                 .makeStatement(
@@ -214,7 +229,7 @@ private actor ScaleFrames {
         arguments: [1000, 5000, 10000]
     )
     func profileActualVisibleGraph(count: Int) async throws {
-        let fixture = try await GraphScaleFixture(count: count)
+        let fixture = try await GraphScaleFixture(count: count, filed: true)
         defer { fixture.clean() }
         let start = ContinuousClock.now
         let loaded = try await fixture.store.libraryGraph(
@@ -266,14 +281,17 @@ private actor ScaleFrames {
     @MainActor func profileNativeCanvas() async throws {
         _ = NSApplication.shared
         for count in [1000, 5000, 10000] {
-            let directory = FileManager.default.temporaryDirectory
-                .appending(path: UUID().uuidString)
-            defer { try? FileManager.default.removeItem(at: directory) }
-            let model =
-                KnowledgeGraphModel(store: DocumentStore(url: directory
-                        .appending(path: "unused.sqlite")))
-            model.snapshot = GraphScaleFixture.snapshot(count: count)
-            model.positions = GraphScaleFixture.positions(count: count)
+            let fixture = try await GraphScaleFixture(count: count, filed: true)
+            defer { fixture.clean() }
+            let model = LibraryGraphModel()
+            model.reduceMotion = true
+            defer { model.stop() }
+            await model.load(from: fixture.store, request: LibraryGraphRequest())
+            let deadline = ContinuousClock.now + .seconds(10)
+            while model.layingOut, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            try #require(!model.layingOut)
             let view = KnowledgeGraphView(graph: model, openNote: { _ in })
             let host = NSHostingView(rootView: view)
             host.frame = NSRect(x: 0, y: 0, width: 1200, height: 800)
@@ -292,7 +310,7 @@ private actor ScaleFrames {
             for density in [1, 2] {
                 var durations: [Double] = []
                 for index in 0 ..< 8 {
-                    model.select("scale-\(index)")
+                    model.select(model.snapshot.nodes[index].id)
                     host.layoutSubtreeIfNeeded()
                     let start = ContinuousClock.now
                     let bitmap = try #require(NSBitmapImageRep(

@@ -14,6 +14,14 @@ import Observation
         didSet { geometry = GraphGeometry(snapshot: snapshot, positions: positions) }
     }
 
+    var usesFilingColors: Bool {
+        true
+    }
+
+    var nodeFilings: [String: [DecimalCategory]] {
+        data.nodeFilings
+    }
+
     var maximumVisibleNodes: Int {
         LibraryGraphRequest.maximumNodes
     }
@@ -23,6 +31,10 @@ import Observation
     private(set) var request = LibraryGraphRequest()
     private(set) var loading = false
     private(set) var error: String?
+    var focus: UUID?
+    var includesConcepts = false
+    var depth = 1
+    var inspectorVisible = true
     var reduceMotion = false
     var camera: GraphCamera?
     private(set) var cameraReset = 0
@@ -35,6 +47,45 @@ import Observation
     @ObservationIgnored private var spacingTask: Task<Void, Never>?
     @ObservationIgnored private var appliedSpacing: GraphSpacing? = .standard
     private let layout = GraphLayout()
+    private struct ViewState {
+        let positions: [String: GraphPosition]
+        let topology: String
+        let camera: GraphCamera?
+        let selection: String?
+        let edge: String?
+        let spacing: GraphSpacing
+        let appliedSpacing: GraphSpacing?
+        let inspectorVisible: Bool
+    }
+
+    private struct Controls {
+        var focus: UUID?
+        var includesConcepts = false
+        var depth = 1
+    }
+
+    @ObservationIgnored private var activeScope: LibraryCanvasScope?
+    @ObservationIgnored private var savedControls: [LibraryCanvasScope: Controls] = [:]
+    @ObservationIgnored private var displayedRequest: LibraryGraphRequest?
+    @ObservationIgnored private var savedViews: [LibraryCanvasScope: ViewState] = [:]
+
+    private func viewKey(_ request: LibraryGraphRequest) -> LibraryCanvasScope {
+        LibraryCanvasScope(scope: request.scope, kind: request.kind)
+    }
+
+    private func topologyKey(_ snapshot: GraphSnapshot) -> String {
+        ContentHash.of(snapshot.nodes.map(\.id).sorted().joined(separator: "\0")
+            + "\u{1}" + snapshot.edges.map(\.id).sorted().joined(separator: "\0"))
+    }
+
+    private func saveView() {
+        guard let displayedRequest else { return }
+        savedViews[viewKey(displayedRequest)] = ViewState(
+            positions: positions, topology: topologyKey(snapshot), camera: camera,
+            selection: selectedID, edge: selectedEdgeID,
+            spacing: spacing, appliedSpacing: appliedSpacing, inspectorVisible: inspectorVisible
+        )
+    }
 
     var snapshot: GraphSnapshot {
         data.graph
@@ -73,10 +124,25 @@ import Observation
         }
     }
 
+    func activate(scope: LibraryScope, kind: LibraryKindFilter) {
+        let key = LibraryCanvasScope(scope: scope, kind: kind)
+        guard key != activeScope else { return }
+        if let activeScope {
+            savedControls[activeScope] = Controls(
+                focus: focus, includesConcepts: includesConcepts, depth: depth
+            )
+        }
+        activeScope = key
+        let saved = savedControls[key] ?? Controls()
+        focus = saved.focus
+        includesConcepts = saved.includesConcepts
+        depth = saved.depth
+    }
+
     func load(from store: DocumentStore, request: LibraryGraphRequest) async {
         let token = UUID()
         loadToken = token
-        var previousScope = self.request
+        var previousScope = displayedRequest ?? self.request
         previousScope.limit = request.limit
         let scopeChanged = previousScope != request
         self.store = store
@@ -92,25 +158,33 @@ import Observation
             let updated = try await store.libraryGraph(request, includingReasons: false)
             try Task.checkCancellation()
             guard token == loadToken else { return }
-            let topologyChanged = snapshot.nodes != updated.graph.nodes || snapshot.edges != updated
-                .graph.edges
+            let changedCollection = displayedRequest
+                .map { viewKey($0) != viewKey(request) } ?? true
+            if changedCollection {
+                saveView()
+            }
+            let remembered = changedCollection ? savedViews[viewKey(request)] : nil
+            let topologyChanged = remembered.map { $0.topology != topologyKey(updated.graph) }
+                ?? (snapshot.nodes != updated.graph.nodes || snapshot.edges != updated.graph.edges)
             data = updated
+            displayedRequest = request
             inspector = LibraryGraphInspector(data: updated)
             let ids = Set(snapshot.nodes.map(\.id))
-            if scopeChanged {
+            if scopeChanged || remembered != nil {
+                stop()
                 deselect()
-                positions = [:]
-                camera = nil
+                positions = remembered?.positions ?? [:]
+                camera = remembered?.camera
+                spacing = remembered?.spacing ?? (changedCollection ? .standard : spacing)
+                inspectorVisible = remembered?.inspectorVisible ?? inspectorVisible
+                appliedSpacing = remembered?.appliedSpacing
+                selectedID = remembered?.selection
+                selectedEdgeID = remembered?.edge
                 cameraReset += 1
-            } else if let selectedID, !ids.contains(selectedID) {
-                deselect()
-            } else if let selectedEdgeID,
-                      !snapshot.edges.contains(where: { $0.id == selectedEdgeID })
-            {
-                self.selectedEdgeID = nil
             }
+            pruneSelection(visibleIDs: ids)
             positions = positions.filter { ids.contains($0.key) }
-            if topologyChanged || scopeChanged || positions.count != snapshot.nodes.count {
+            if topologyChanged || positions.count != snapshot.nodes.count {
                 startLayout()
             } else if spacing != appliedSpacing {
                 finishSpacingChange()
@@ -119,7 +193,10 @@ import Observation
         } catch is CancellationError {
         } catch {
             guard token == loadToken else { return }
-            // Do not leave the previous note's graph under a new title after a failed load.
+            // Keep presentation memory, but never show old data under a failed scope's title.
+            saveView()
+            displayedRequest = nil
+            camera = nil
             data = LibraryGraphSnapshot()
             inspector = LibraryGraphInspector(data: data)
             positions = [:]
@@ -129,11 +206,22 @@ import Observation
         }
     }
 
+    private func pruneSelection(visibleIDs: Set<String>) {
+        if let selectedID, !visibleIDs.contains(selectedID) {
+            deselect()
+        } else if let selectedEdgeID,
+                  !snapshot.edges.contains(where: { $0.id == selectedEdgeID })
+        {
+            self.selectedEdgeID = nil
+        }
+    }
+
     func isSource(_ node: GraphNode) -> Bool {
         node.kind == .document && data.sourceNodeIDs.contains(node.id)
     }
 
     func select(_ id: String, edgeID: String? = nil) {
+        inspectorVisible = true
         selectedID = id
         selectedEdgeID = edgeID
         loadEvidence(reset: true)

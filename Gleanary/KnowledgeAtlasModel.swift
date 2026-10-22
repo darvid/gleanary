@@ -74,6 +74,62 @@ final class KnowledgeAtlasModel {
     @ObservationIgnored private var thumbnailTask: Task<Void, Never>?
     @ObservationIgnored private var store: DocumentStore?
     @ObservationIgnored private var transitionTask: Task<Void, Never>?
+    private struct ViewState {
+        let camera: AtlasCamera
+        let viewport: CGSize
+        let focus: AtlasNodeID
+        let selection: AtlasNodeID?
+    }
+
+    @ObservationIgnored private var activeScope: LibraryCanvasScope?
+    @ObservationIgnored private var savedViews: [LibraryCanvasScope: ViewState] = [:]
+    @ObservationIgnored private var pendingScopeFocus: AtlasNodeID?
+
+    /// Sidebar navigation restores this collection without treating it as a Fit command.
+    func activate(scope: LibraryScope, kind: KindFilter) {
+        let key = LibraryCanvasScope(scope: scope, kind: kind)
+        guard key != activeScope else { return }
+        if let activeScope {
+            savedViews[activeScope] = ViewState(
+                camera: camera, viewport: viewport, focus: focusID, selection: selectedID
+            )
+        }
+        activeScope = key
+        transitionTask?.cancel()
+        transition = nil
+        pendingScopeFocus = nil
+        kindFilter = kind
+        let saved = savedViews[key]
+        let target: AtlasNodeID = saved?.focus ?? {
+            switch scope {
+            case .unfiled: .uncategorized
+            case let .category(id): .category(id)
+            default: .library
+            }
+        }()
+        if layout.index[target] == nil, case let .category(id) = target,
+           snapshot?.categories.contains(where: { $0.id == id }) == true
+        {
+            focusID = target
+            rebuild()
+        }
+        if layout.index[target] != nil {
+            focusID = target
+            if let saved {
+                camera = restoredCamera(saved.camera, from: saved.viewport)
+                selectedID = saved.selection.flatMap { layout.tile($0)?.id }
+            } else {
+                selectedID = nil
+                fit(target, animated: false)
+            }
+        } else {
+            focusID = .library
+            selectedID = nil
+            fit(.library, animated: false)
+            pendingScopeFocus = target
+        }
+        navigations += 1
+    }
 
     init(snapshot: AtlasSnapshot? = nil) {
         let root = AtlasHierarchy.project(
@@ -191,6 +247,10 @@ final class KnowledgeAtlasModel {
         }
         camera = clamp(camera)
         recountMatches()
+        if let pendingScopeFocus, layout.index[pendingScopeFocus] != nil {
+            self.pendingScopeFocus = nil
+            focus(pendingScopeFocus, animated: false)
+        }
     }
 
     private func recountMatches() {
@@ -213,10 +273,30 @@ final class KnowledgeAtlasModel {
 
     func setViewport(_ size: CGSize) {
         guard size.width > 0, size.height > 0, size != viewport else { return }
+        let previousSize = viewport
+        let previousCamera = camera
         viewport = size
         layout = AtlasLayout(root: root, bounds: CGRect(origin: .zero, size: size))
         recountMatches()
-        fit(focusID, animated: false)
+        if previousSize.width > 0, previousSize.height > 0 {
+            transitionTask?.cancel()
+            transition = nil
+            camera = restoredCamera(previousCamera, from: previousSize)
+        } else {
+            fit(focusID, animated: false)
+        }
+    }
+
+    private func restoredCamera(_ saved: AtlasCamera, from size: CGSize) -> AtlasCamera {
+        guard size.width > 0, size.height > 0 else { return clamp(saved) }
+        let center = saved.logical(CGPoint(x: size.width / 2, y: size.height / 2))
+        return clamp(.centered(
+            on: CGPoint(
+                x: center.x * viewport.width / size.width,
+                y: center.y * viewport.height / size.height
+            ),
+            scale: saved.scale, in: viewport
+        ))
     }
 
     var scaleRange: ClosedRange<CGFloat> {

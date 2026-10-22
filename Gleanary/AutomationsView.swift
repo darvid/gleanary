@@ -611,9 +611,12 @@ private struct OutcomeGroup<Trailing: View>: View {
                             .help("No longer in your library")
                             .accessibilityLabel("\(entry.title), no longer in your library")
                     } else if let id = entry.itemID {
-                        Button(entry.title) { open(id) }
-                            .buttonStyle(.link).lineLimit(1)
-                            .help("Show this item")
+                        Button { open(id) } label: {
+                            Text(entry.title).multilineTextAlignment(.leading)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.link).lineLimit(2)
+                        .help("Show this item")
                     } else {
                         Text(entry.title).lineLimit(1)
                     }

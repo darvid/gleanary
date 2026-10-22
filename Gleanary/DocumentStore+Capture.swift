@@ -61,9 +61,19 @@ extension DocumentStore {
         try readyDatabase().read { db in
             try Row.fetchAll(
                 db,
-                sql: "SELECT * FROM ingestion_jobs ORDER BY CASE WHEN state IN ('queued','fetching','extracting') THEN 0 WHEN state = 'failed' THEN 1 WHEN state = 'cancelled' THEN 2 ELSE 3 END, createdAt DESC LIMIT ?",
+                sql: """
+                SELECT j.*, n.name AS savedTitle FROM ingestion_jobs j
+                LEFT JOIN notes n ON n.id = j.noteID AND n.deletedAt IS NULL
+                ORDER BY CASE WHEN j.state IN ('queued','fetching','extracting') THEN 0
+                    WHEN j.state = 'failed' THEN 1 WHEN j.state = 'cancelled' THEN 2 ELSE 3 END,
+                    j.createdAt DESC LIMIT ?
+                """,
                 arguments: [limit]
-            ).map(Self.captureJob)
+            ).map { row in
+                var job = try Self.captureJob(row)
+                job.savedTitle = row["savedTitle"]
+                return job
+            }
         }
     }
 

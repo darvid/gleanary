@@ -25,18 +25,37 @@ struct ChatGPTSettings: View {
             }
             if connection.useChatGPT {
                 Divider()
-                InferenceSettingsRow(title: "Model", refreshModels: {
-                    Task { await connection.refreshModels() }
-                }) {
+                InferenceSettingsRow(
+                    title: "Model",
+                    detail: connection.refreshingModels ? "Refreshing models…" : nil,
+                    refreshingModels: connection.refreshingModels,
+                    refreshModels: {
+                        Task { await connection.refreshModels() }
+                    }
+                ) {
                     Picker("ChatGPT model", selection: Binding(
                         get: { connection.selectedModel }, set: { connection.selectModel($0) }
                     )) {
                         if connection.models.isEmpty {
-                            Text("No models loaded").tag("")
+                            Text(connection
+                                .refreshingModels ? "Loading models…" : "No models loaded")
+                                .tag("")
                         }
                         ForEach(connection.models) { Text($0.displayName).tag($0.slug) }
                     }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
                 }.disabled(changingAccount)
+                if let message = connection.modelCatalogError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(message).font(.callout).foregroundStyle(.red)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        Button(connection.models
+                            .isEmpty ? "Retry loading models" : "Retry refreshing models")
+                        {
+                            Task { await connection.refreshModels() }
+                        }
+                        .controlSize(.small).disabled(changingAccount)
+                    }.padding(.bottom, 16)
+                }
                 InferenceSettingsRow(title: "Filing model") {
                     Picker("Filing model", selection: Binding(
                         get: { connection.filingModel },
@@ -87,7 +106,7 @@ struct ChatGPTSettings: View {
                         )
                 }
             }
-            if connection.busy {
+            if connection.busy, !connection.refreshingModels {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Updating connection…").font(.caption)
@@ -202,6 +221,7 @@ struct ChatGPTSettings: View {
 private struct InferenceSettingsRow<Content: View>: View {
     let title: String
     var detail: String?
+    var refreshingModels = false
     var refreshModels: (() -> Void)?
     @ViewBuilder let content: () -> Content
 
@@ -210,7 +230,9 @@ private struct InferenceSettingsRow<Content: View>: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text(title)
-                    if let refreshModels {
+                    if refreshingModels {
+                        ChatWorkingIndicator(color: .secondary)
+                    } else if let refreshModels {
                         Button(
                             "Refresh models",
                             systemImage: "arrow.clockwise",

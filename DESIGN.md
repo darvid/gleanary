@@ -229,14 +229,20 @@ button radius. Code blocks use a rectangular control surface.
 
 ## Components
 
-- **Navigation:** `.sidebar` list with Library/Filing sections, SF Symbols,
-  and category codes. Filing rows carry their Atlas colour: a 7pt dot
-  before the name, or the area row's folder icon tinted with it. Graph is
-  a Library presentation, not a separate sidebar destination; Mind Map
-  navigation remains deferred. Go › Back/Forward (⌘[ / ⌘]) and the mouse's
-  back and forward buttons step through visited places: Chat or a scope,
-  the Atlas region, and an opened item. Free zooming updates the current
-  place rather than adding one.
+- **Navigation:** `.sidebar` list with a selectable Library parent and
+  collapsible Notes, Sources, and Unfiled filters. Expanded by default,
+  it remembers its disclosure state. The label opens all items; only the
+  chevron changes expansion. A collapsed active filter stays selected
+  through Library and appears beside its label, without changing scope.
+  Captures, Activity, and Archive are peer destinations,
+  separate from the collection filters. Filing retains its own section,
+  SF Symbols, and category codes. Filing rows carry their Atlas colour:
+  a 7pt dot before the name, or the area row's folder icon tinted with it.
+  Graph is a Library presentation, not a separate sidebar destination;
+  Mind Map navigation remains deferred. Go › Back/Forward (⌘[ / ⌘]) and
+  the mouse's back and forward buttons step through visited places: Chat
+  or a scope, the Atlas region, and an opened item. Free zooming updates
+  the current place rather than adding one.
 - **Empty filing categories:** the map's Hide empty preference also dims
   empty sidebar homes in Chat and Automations. Both load and refresh the
   shared category snapshot without requiring a visit to the map first.
@@ -264,6 +270,14 @@ button radius. Code blocks use a rectangular control surface.
   outlined pages with a folded corner. Both the Library and embedded
   graph show the same legend. Shape and fill carry the distinction without
   relying on color; the accent outline remains reserved for selection.
+  Document colors follow their own primary filing with the existing Map
+  palette, falling back to the lowest-coded membership when none is
+  primary. Unfiled documents and concepts/entities stay neutral. Filing
+  metadata is fetched in one batch for visible documents, never per-node
+  queries or inherited from linked sources or summaries. Secondary homes
+  appear in the inspector and accessibility labels, not split-color
+  glyphs. Filing-only refreshes preserve positions and camera; bounded
+  drawing batches group by palette slot and Source/Note shape.
   Source/note labels also reach the canvas accessibility controls.
   Concepts and entities retain their existing shapes. The canvas uses native appearance,
   keyboard selection, pan, pinch/wheel zoom, fit controls, and a text
@@ -329,6 +343,16 @@ button radius. Code blocks use a rectangular control surface.
   positions; large runs publish a seed and settled frame rather than
   invalidating the whole UI every six ticks. Reduce Motion skips animated
   settling. Library and embedded graph cameras and layouts stay separate.
+  Within a window, each collection and item-type filter remembers its
+  Map camera, focus, and selection, plus its Graph camera, node positions,
+  selection, spacing, and inspector visibility. Returning reads current
+  canonical data, discards missing selections, and only rearranges when
+  topology changed or a layout was unfinished. Searches do not create
+  additional collection memories. Graph neighborhood, concept, and depth
+  controls also belong to each collection and survive presentation
+  changes. Changing Map/List/Graph does not retarget the Map to a different
+  collection. Viewport resizing preserves Map zoom
+  and relative center; Fit and Reset remain explicit.
   The accessibility-only item list exposes at most 80 items per page,
   with explicit previous/next actions and range announcements. Every item
   remains reachable without materializing thousands of virtual buttons

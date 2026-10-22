@@ -50,7 +50,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 .accessibilityValue(accessibilityPage.value)
                 .accessibilityChildren {
                     ForEach(accessibilityPage.nodes) { node in
-                        Button("\(node.label), \(graph.kindLabel(for: node))") {
+                        Button(graph.accessibilityLabel(for: node)) {
                             selectAccessibleNode(node.id)
                         }
                     }
@@ -121,7 +121,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             }
             .overlay(alignment: .topLeading) {
                 if showsDocumentLegend {
-                    GraphDocumentLegend()
+                    GraphDocumentLegend(usesFilingColors: graph.usesFilingColors)
                         .padding(.horizontal, 8).padding(.vertical, 6)
                         .background(
                             Color(nsColor: .windowBackgroundColor),
@@ -154,7 +154,16 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             }
             .onChange(of: scale) { saveCamera() }
             .onChange(of: pan) { saveCamera() }
-            .onChange(of: graph.cameraReset) { hasFitted = false; fit(size: geometry.size) }
+            .onChange(of: graph.cameraReset) {
+                if let saved = camera?.wrappedValue {
+                    scale = saved.scale
+                    pan = saved.pan
+                    hasFitted = true
+                } else {
+                    hasFitted = false
+                    fit(size: geometry.size)
+                }
+            }
             .onChange(of: graph.positions.isEmpty) { _, empty in
                 if !empty, !hasFitted, graph.snapshot.nodes.count > 1000 {
                     fit(size: geometry.size)
@@ -270,7 +279,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 width: radius * 2,
                 height: radius * 2
             )
-            let color = nodeColor(node.kind)
+            let color = nodeInk(graph.nodeStyle(for: node))
             if matched {
                 context.fill(
                     nodePath(node, in: rect.insetBy(dx: -7, dy: -7)),
@@ -279,7 +288,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             }
             if node.kind == .document {
                 GraphDocumentMark(isSource: graph.isSource(node)).draw(
-                    in: &context, rect: rect, increasedContrast: contrast == .increased
+                    in: &context, rect: rect, increasedContrast: contrast == .increased, ink: color
                 )
             } else {
                 let shape = nodePath(node, in: rect)
@@ -289,6 +298,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 }
             }
             if selected {
+                context.stroke(
+                    nodePath(node, in: rect.insetBy(dx: -5, dy: -5)),
+                    with: .color(Color(nsColor: .windowBackgroundColor)), lineWidth: 4
+                )
                 context.stroke(
                     nodePath(node, in: rect.insetBy(dx: -5, dy: -5)),
                     with: .color(.accentColor),
@@ -304,8 +317,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         in context: inout GraphicsContext,
         size: CGSize
     ) {
-        var shapes: [String: GraphDrawingBatch] = [:]
-        var folds = GraphDrawingBatch(), lines = GraphDrawingBatch()
+        var shapes: [GraphNodeStyle: GraphDrawingBatch] = [:]
+        var folds: [GraphNodeStyle: GraphDrawingBatch] = [:]
+        var lines = GraphDrawingBatch()
         for node in nodes {
             guard let center = point(node.id, size: size) else { continue }
             let radius = nodeRadius(node.kind)
@@ -315,18 +329,28 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 width: radius * 2,
                 height: radius * 2
             )
-            let key = node.kind == .document ? (graph.isSource(node) ? "source" : "note") : node
-                .kind.rawValue
-            shapes[key, default: GraphDrawingBatch()].append(nodePath(node, in: rect).cgPath)
+            let style = graph.nodeStyle(for: node)
+            shapes[style, default: GraphDrawingBatch()].append(nodePath(node, in: rect).cgPath)
             if node.kind == .document, radius >= 6 {
-                let mark = GraphDocumentMark(isSource: graph.isSource(node))
-                folds.append(mark.fold(in: rect).cgPath)
-                lines.append(mark.textLines(in: rect).cgPath)
+                let mark = GraphDocumentMark(isSource: style.isSource)
+                if style.isSource {
+                    folds[style, default: GraphDrawingBatch()].append(mark.fold(in: rect).cgPath)
+                } else {
+                    lines.append(mark.textLines(in: rect).cgPath)
+                }
             }
         }
-        for kind in [GraphNode.Kind.concept, .person, .organization, .tool] {
-            for path in shapes[kind.rawValue]?.paths ?? [] {
-                context.fill(Path(path), with: .color(nodeColor(kind)))
+        drawEntityBatches(shapes, in: &context)
+        drawDocumentBatches(shapes, folds: folds, lines: lines, in: &context)
+        drawNodeHighlights(in: &context, size: size)
+    }
+
+    private func drawEntityBatches(
+        _ shapes: [GraphNodeStyle: GraphDrawingBatch], in context: inout GraphicsContext
+    ) {
+        for (style, batch) in shapes.sorted(by: { $0.key < $1.key }) where style.kind != .document {
+            for path in batch.paths {
+                context.fill(Path(path), with: .color(nodeInk(style)))
                 if contrast == .increased {
                     context.stroke(
                         Path(path),
@@ -336,9 +360,21 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 }
             }
         }
+    }
+
+    private func drawDocumentBatches(
+        _ shapes: [GraphNodeStyle: GraphDrawingBatch],
+        folds: [GraphNodeStyle: GraphDrawingBatch],
+        lines: GraphDrawingBatch,
+        in context: inout GraphicsContext
+    ) {
         let background = Color(nsColor: .windowBackgroundColor)
-        for path in shapes["note"]?.paths ?? [] {
-            context.fill(Path(path), with: .color(.primary))
+        for (style, batch) in shapes.sorted(by: { $0.key < $1.key })
+            where style.kind == .document && !style.isSource
+        {
+            for path in batch.paths {
+                context.fill(Path(path), with: .color(nodeInk(style)))
+            }
         }
         for path in lines.paths {
             context.stroke(
@@ -347,19 +383,24 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 style: StrokeStyle(lineWidth: max(1, nodeRadius(.document) * 0.13), lineCap: .round)
             )
         }
-        for path in shapes["source"]?.paths ?? [] {
-            context.fill(Path(path), with: .color(background))
-            context.fill(Path(path), with: .color(Color.primary.opacity(0.08)))
-            context.stroke(
-                Path(path),
-                with: .color(.primary),
-                lineWidth: contrast == .increased ? 2 : 1.5
-            )
+        for (style, batch) in shapes.sorted(by: { $0.key < $1.key })
+            where style.kind == .document && style.isSource
+        {
+            let ink = nodeInk(style)
+            for path in batch.paths {
+                context.fill(Path(path), with: .color(background))
+                context.fill(Path(path), with: .color(ink.opacity(0.08)))
+                context.stroke(
+                    Path(path), with: .color(ink),
+                    lineWidth: contrast == .increased ? 2 : 1.5
+                )
+            }
         }
-        for path in folds.paths {
-            context.stroke(Path(path), with: .color(.primary), lineWidth: 1)
+        for (style, batch) in folds.sorted(by: { $0.key < $1.key }) {
+            for path in batch.paths {
+                context.stroke(Path(path), with: .color(nodeInk(style)), lineWidth: 1)
+            }
         }
-        drawNodeHighlights(in: &context, size: size)
     }
 
     private func drawNodeHighlights(in context: inout GraphicsContext, size: CGSize) {
@@ -378,6 +419,11 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 y: center.y - radius,
                 width: radius * 2,
                 height: radius * 2
+            )
+            context.stroke(
+                nodePath(node, in: rect),
+                with: .color(Color(nsColor: .windowBackgroundColor)),
+                lineWidth: 4
             )
             context.stroke(nodePath(node, in: rect), with: .color(.accentColor), lineWidth: 2)
         }
@@ -448,6 +494,14 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
 
     private func viewport(_ size: CGSize) -> GraphViewport {
         GraphViewport(size: size, scale: scale, pan: pan)
+    }
+
+    private func nodeInk(_ style: GraphNodeStyle) -> Color {
+        if graph.usesFilingColors {
+            return style.kind == .document
+                ? AtlasPalette.ink(style.filingHue, dark: colorScheme == .dark) : .primary
+        }
+        return style.kind == .document ? .primary : nodeColor(style.kind)
     }
 
     private func nodeColor(_ kind: GraphNode.Kind) -> Color {
