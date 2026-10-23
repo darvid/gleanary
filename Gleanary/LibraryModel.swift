@@ -22,6 +22,7 @@ struct CaptureNotice: Identifiable, Equatable {
 final class LibraryModel {
     let graph: KnowledgeGraphModel
     let documentGrid: DocumentGridModel
+    let workspace: NoteWorkspaceModel
     private(set) var documentCount = 0
     private var documentChangeSequence: Int64 = 0
     var matches: [SearchMatch] = []
@@ -81,6 +82,7 @@ final class LibraryModel {
         schedulesAutomations: Bool = false
     ) {
         self.store = store
+        workspace = NoteWorkspaceModel(store: store)
         documentGrid = DocumentGridModel(store: store)
         graph = KnowledgeGraphModel(store: store, provider: graphProvider)
         let engine = SearchEngine(store: store, provider: provider)
@@ -280,6 +282,16 @@ final class LibraryModel {
             graph.startExtraction()
         }
         startIndexing()
+    }
+
+    /// Workspace presentation refreshes must not start agent extraction.
+    func refreshWorkspacePresentation() async {
+        do {
+            try await refreshDocumentGrid()
+            try await applyStatistics(store.statistics())
+            clearResults()
+            startIndexing()
+        } catch { self.error = error.localizedDescription }
     }
 
     func refreshConversationChanges() async {
@@ -770,13 +782,13 @@ final class LibraryModel {
             .data(for: artifact)
     }
 
-    func save(_ document: MarkdownDocument) async -> Bool {
+    func save(_ document: MarkdownDocument, profile: NoteProfile? = nil) async -> Bool {
         guard ready, !busy else { return false }
         busy = true
         error = nil
         defer { busy = false }
         do {
-            _ = try await store.save(document)
+            _ = try await store.save(document, profile: profile)
             try await refreshAfterMutation()
             return true
         } catch {

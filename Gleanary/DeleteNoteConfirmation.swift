@@ -11,7 +11,7 @@ import AppKit
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Permanently delete “\(document.name)”?"
-        alert.informativeText = "This permanently removes the document, revision history, captures, favicon, search data, and graph and mind-map data. Original files and vectors shared with other documents are kept. This cannot be undone."
+        alert.informativeText = "This permanently removes the document, revision history, captures, favicon, search data, and graph and mind-map data. Tracked tasks remain in Tasks, without this note as their origin. Original files and vectors shared with other documents are kept. This cannot be undone."
         let cancel = alert.addButton(withTitle: "Cancel")
         cancel.keyEquivalent = "\r"
         let delete = alert.addButton(withTitle: "Delete permanently")

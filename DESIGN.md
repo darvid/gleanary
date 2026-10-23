@@ -234,7 +234,7 @@ button radius. Code blocks use a rectangular control surface.
   it remembers its disclosure state. The label opens all items; only the
   chevron changes expansion. A collapsed active filter stays selected
   through Library and appears beside its label, without changing scope.
-  Captures, Activity, and Archive are peer destinations,
+  Captures, Tasks, Activity, and Archive are peer destinations,
   separate from the collection filters. Filing retains its own section,
   SF Symbols, and category codes. Filing rows carry their Atlas colour:
   a 7pt dot before the name, or the area row's folder icon tinted with it.
@@ -247,6 +247,26 @@ button radius. Code blocks use a rectangular control surface.
   empty sidebar homes in Chat and Automations. Both load and refresh the
   shared category snapshot without requiring a visit to the map first.
   Empty homes remain reachable.
+- **Note properties and templates:** optional semantic types do not
+  replace Source/Note identity or filing. The Markdown editor keeps its
+  body-first layout with a collapsible property editor. The reading pane
+  exposes linked properties, backlinks, local checklists, and canonical
+  tracked tasks in a native disclosure group. Pickers search saved notes
+  locally and paginate; choosing a link never creates a placeholder note.
+  More → Note templates opens stock and personal starters. Choosing one
+  opens an unsaved draft; an existing draft requires discard confirmation.
+  Dates and people are not copied silently by Save as template.
+- **Tasks:** one native sidebar destination with Inbox, Today, Upcoming,
+  All, and Completed filters, search, and bounded result pages. Titles
+  wrap and open a task editor; completion controls update the same record
+  shown in notes. A quiet checkbox outline and borderless entry field sit
+  above saved tasks. Return creates a task, clears the field, and retains
+  keyboard focus; blank entries are never records. Today entries get a
+  plan, not a deadline. Upcoming/Completed entries go to Inbox with a
+  visible hint. Plan and Due have separate date controls. Only past due
+  dates use the Overdue label and warning color. Project and origin links
+  return to their saved notes. Use system controls, semantic surfaces,
+  and the shared fading-dot loading indicator.
 - **Activity:** a sidebar destination with a native daily list and a
   read-only inspection pane. Day headers summarize matching activity;
   repeated edits and bulk operations expand into individual changes.
