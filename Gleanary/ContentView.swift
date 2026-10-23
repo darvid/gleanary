@@ -9,6 +9,13 @@ struct ContentView: View {
     /// The Automations screen, in place of the library; Chat still takes precedence.
     @State private var automating = false
     @State private var showingActivity = false
+    @State private var showingTasks = false
+    @State private var taskView = WorkspaceTaskView.inbox
+    @State private var showingTemplates = false
+    @State private var editingProfile: NoteProfile?
+    @State private var openingTask: WorkspaceTask?
+    @State private var pendingTemplate: NoteTemplate?
+    @State private var replacingDraft = false
     @State private var readerTarget: ChatAttachmentTarget?
     @State private var readerPreview = DocumentPreviewModel()
     var initialSelection: UUID?
@@ -92,7 +99,7 @@ struct ContentView: View {
             }
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting, !showingActivity, readerTarget == nil {
+            if showingFiling, !chatting, !showingActivity, !showingTasks, readerTarget == nil {
                 // One unit, so the edge slides in with the panel instead of appearing first.
                 HStack(spacing: 0) {
                     Divider()
@@ -152,7 +159,25 @@ struct ContentView: View {
             cancelSummary: { library.cancelSummary() },
             changed: { await library.summaryAssociationsChanged() }
         ))
+        .environment(\.noteWorkspace, library.workspace)
+        .sheet(isPresented: $showingTemplates) {
+            NoteTemplatesView(workspace: library.workspace, current: preview.document) {
+                requestDraft($0)
+            }
+        }
+        .sheet(item: $openingTask) { WorkspaceTaskEditor(workspace: library.workspace, task: $0) }
+        .confirmationDialog("Replace the open draft?", isPresented: $replacingDraft) {
+            Button("Discard draft and create note", role: .destructive) {
+                startDraft(pendingTemplate)
+            }
+        } message: { Text("Unsaved changes in the open editor will be discarded.") }
+        .onChange(of: library.workspace.noteGeneration) {
+            Task { await library.refreshWorkspacePresentation() }
+        }
         .environment(\.openURL, OpenURLAction { url in
+            if handleTaskURL(url) {
+                return .handled
+            }
             if let id = NoteLink.id(from: url) {
                 selection = [id]; preview.selectedID = id
                 return .handled
@@ -164,15 +189,7 @@ struct ContentView: View {
             \.gleanaryActions,
             chatting && readerTarget == nil ? nil : GleanaryActions(
                 enabled: library.ready && !library.busy,
-                newItem: {
-                    // Activity and Captures have no editing pane.
-                    showingActivity = false
-                    readerTarget = nil
-                    if scope == .captures {
-                        scope = .all
-                    }
-                    editing = MarkdownDocument(name: "Untitled", markdown: "")
-                },
+                newItem: { requestDraft(nil) },
                 attach: { importing = true }, focus: {
                     if presentation == .graph {
                         NotificationCenter.default.post(name: .focusLibraryGraphSearch, object: nil)
@@ -276,7 +293,7 @@ struct ContentView: View {
             await library.documentGrid.reloadIfNeeded()
         }
         .task(
-            id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)/\(preview.showsCapturedSource)"
+            id: "\(preview.selectedID?.uuidString ?? "")/\(library.documentGrid.generation)/\(preview.showsCapturedSource)/\(library.workspace.noteGeneration)"
         ) {
             await library.loadPreview(preview)
             await loadCategories()
@@ -353,6 +370,9 @@ struct ContentView: View {
         }
         .environment(\.isReaderMode, true)
         .environment(\.openURL, OpenURLAction { url in
+            if handleTaskURL(url) {
+                return .handled
+            }
             if let id = NoteLink.id(from: url) {
                 openSavedItem(id)
                 return .handled
@@ -412,6 +432,16 @@ struct ContentView: View {
     @ViewBuilder private var browsingMain: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
+        } else if showingTasks {
+            if library.ready {
+                WorkspaceTasksView(
+                    workspace: library.workspace,
+                    openNote: openSavedItem,
+                    selection: $taskView
+                )
+            } else {
+                ProgressView("Opening tasks…")
+            }
         } else if showingActivity {
             if library.ready {
                 ActivityView(store: library.store, open: openSavedItem, openSource: { source = $0 })
@@ -456,7 +486,9 @@ struct ContentView: View {
         if !chatting {
             ToolbarSpacer(.flexible)
         }
-        if !chatting, !automating, !showingActivity, readerTarget == nil, scope == .unfiled {
+        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
+           scope == .unfiled
+        {
             ToolbarItem {
                 Button { categorizing = true } label: {
                     if library.categorizing {
@@ -474,7 +506,7 @@ struct ContentView: View {
                 )
             }
         }
-        if !chatting, !automating, !showingActivity, readerTarget == nil,
+        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
            presentation.showsPicker(
                in: scope,
                hasOpenedItem: atlasItem != nil,
@@ -491,6 +523,11 @@ struct ContentView: View {
                 // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
                 // Plain ellipsis: Liquid Glass already draws the circular button.
                 Menu("More", systemImage: "ellipsis") {
+                    Button("Note templates…", systemImage: "doc.badge.plus") {
+                        showingTemplates = true
+                    }
+                    .disabled(!library.ready || library.busy)
+                    Divider()
                     Button("Attach Documents…", systemImage: "paperclip") { importing = true }
                         .disabled(!library.ready || library.busy)
                     Button("Import Bookmarks…", systemImage: "square.and.arrow.down") {
@@ -504,7 +541,7 @@ struct ContentView: View {
                     SettingsLink { Label("Settings…", systemImage: "gearshape") }
                 }
                 .menuIndicator(.hidden)
-                .help("Import, review filing, and open Settings")
+                .help("Templates, import, filing review, and Settings")
                 .accessibilityIdentifier("library-more-menu")
             }
         }
@@ -726,6 +763,51 @@ struct ContentView: View {
         }
     }
 
+    private func requestDraft(_ template: NoteTemplate?) {
+        pendingTemplate = template
+        if editing != nil {
+            replacingDraft = true
+        } else {
+            startDraft(template)
+        }
+    }
+
+    private func startDraft(_ template: NoteTemplate?) {
+        readerTarget = nil
+        chatting = false
+        automating = false
+        showingActivity = false
+        showingTasks = false
+        scope = .all
+        if kindFilter == .sources {
+            kindFilter = .notes
+        }
+        if let template {
+            let (document, profile) = template.draft()
+            editingProfile = profile
+            editing = document
+        } else {
+            editingProfile = NoteProfile()
+            editing = MarkdownDocument(name: "Untitled", markdown: "")
+        }
+        pendingTemplate = nil
+    }
+
+    private func handleTaskURL(_ url: URL) -> Bool {
+        guard url.scheme == "gleanary", url.host == "task" else { return false }
+        guard let id = UUID(uuidString: url.lastPathComponent) else { return true }
+        Task {
+            do {
+                if let task = try await library.store.workspaceTask(id) {
+                    openingTask = task
+                } else {
+                    library.error = "This task is no longer available."
+                }
+            } catch { library.error = "Could not open this task. Try finding it in Tasks." }
+        }
+        return true
+    }
+
     private func openFromGraph(_ id: UUID) {
         preview.selectedID = id
         atlasItem = id
@@ -736,6 +818,7 @@ struct ContentView: View {
         chatting = false
         automating = false
         showingActivity = false
+        showingTasks = false
         graph.activate(scope: .all, kind: .all)
         graphFocus = id
         atlasItem = nil
@@ -761,6 +844,7 @@ struct ContentView: View {
         chatting = false
         automating = false
         showingActivity = false
+        showingTasks = false
         pendingSelection = id
         if scope == .all {
             revealPendingSelection()
@@ -807,7 +891,8 @@ struct ContentView: View {
     private var location: NavigationLocation {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
-            automations: automating, activity: showingActivity, kindFilter: kindFilter,
+            automations: automating, activity: showingActivity, tasks: showingTasks,
+            kindFilter: kindFilter,
             presentation: presentation, graphFocus: graphFocus
         )
     }
@@ -852,6 +937,7 @@ struct ContentView: View {
         chatting = target.chatting
         automating = target.automations
         showingActivity = target.activity
+        showingTasks = target.tasks
         presentation = target.presentation
         graph.activate(scope: target.scope ?? .all, kind: target.kindFilter)
         graphFocus = target.graphFocus
@@ -1003,6 +1089,10 @@ struct ContentView: View {
                                 : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
+                Label("Tasks", systemImage: "checklist")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingTasks ? .white : .black))
+                    .tag(SidebarItem.tasks)
                 Label("Activity", systemImage: "clock")
                     .labelStyle(LibrarySidebarLabelStyle(color:
                         colorScheme == .dark || showingActivity ? .white : .black))
@@ -1084,7 +1174,8 @@ struct ContentView: View {
     }
 
     private var collapsedLibraryFilter: String? {
-        guard !librarySidebarExpanded, !chatting, !automating, !showingActivity else { return nil }
+        guard !librarySidebarExpanded, !chatting, !automating, !showingActivity,
+              !showingTasks else { return nil }
         switch sidebarScope {
         case .notes?, .sources?, .unfiled?: return scopeTitle
         default: return nil
@@ -1098,21 +1189,27 @@ struct ContentView: View {
     /// Pass nil for the conversation row.
     private func sidebarColor(_ item: LibraryScope?) -> Color {
         let selected = item
-            .map { !chatting && !automating && !showingActivity && visibleSidebarScope == $0 } ??
+            .map {
+                !chatting && !automating && !showingActivity && !showingTasks &&
+                    visibleSidebarScope == $0
+            } ??
             chatting
         return colorScheme == .dark || selected ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
-            chatting ? .conversation : showingActivity ? .activity : automating ? .automations :
+            chatting ? .conversation : showingTasks ? .tasks : showingActivity ? .activity :
+                automating ? .automations :
                 visibleSidebarScope.map(SidebarItem.library)
         } set: { item in
             readerTarget = nil
+            showingTasks = item == .tasks
             switch item {
             case .conversation: chatting = true; automating = false; showingActivity = false
             case .automations: chatting = false; automating = true; showingActivity = false
             case .activity: chatting = false; automating = false; showingActivity = true
+            case .tasks: chatting = false; automating = false; showingActivity = false
             case let .library(scope):
                 chatting = false
                 automating = false
@@ -1137,6 +1234,7 @@ struct ContentView: View {
         readerTarget = nil
         automating = false
         showingActivity = false
+        showingTasks = false
         chatting = true
         return nil
     }
@@ -1285,8 +1383,14 @@ struct ContentView: View {
     @ViewBuilder private func detail(openDocument: ((UUID) -> Void)? = nil) -> some View {
         if let editing {
             // The editor stays put while the selection changes, so a draft is never dropped.
-            NoteEditor(document: editing, library: library) {
+            NoteEditor(
+                document: editing,
+                library: library,
+                profile: editingProfile,
+                didSave: openSavedItem
+            ) {
                 self.editing = nil
+                editingProfile = nil
                 Task { await library.loadPreview(preview) }
             }
             .id(editing.id)
@@ -1547,6 +1651,7 @@ struct ContentView: View {
                 chatting = false
                 automating = false
                 showingActivity = false
+                showingTasks = false
                 scope = .captures
             }
             Button("Try Again") {
@@ -1748,5 +1853,6 @@ private enum SidebarItem: Hashable {
     case conversation
     case automations
     case activity
+    case tasks
     case library(LibraryScope)
 }

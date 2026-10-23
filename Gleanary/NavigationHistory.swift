@@ -10,6 +10,7 @@ struct NavigationLocation: Equatable {
     var atlasItem: UUID?
     var automations = false
     var activity = false
+    var tasks = false
     var kindFilter = LibraryKindFilter.all
     var presentation = LibraryPresentation.map
     var graphFocus: UUID?

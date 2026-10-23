@@ -186,6 +186,12 @@ extension DocumentStore {
                 'link:' || l.changeID, 'Linked notes', l.rationale, NULL, NULL
             FROM note_links l
             UNION ALL
+            SELECT 'note:' || l.noteID, 'note:' || l.targetID, 'links_to',
+                'property:' || l.noteID || ':' || l.propertyID || ':' || l.targetID,
+                'Note property', CASE l.propertyID WHEN 'project' THEN 'Project'
+                    WHEN 'participants' THEN 'Participant' ELSE 'Related note' END, NULL, NULL
+            FROM note_property_links l
+            UNION ALL
             SELECT 'note:' || min(k.leftID, k.rightID), 'note:' || max(k.leftID, k.rightID),
                 'related_to', 'proposal:' || k.proposalID, 'Linked notes', p.rationale, NULL, NULL
             FROM knowledge_links k JOIN knowledge_proposals p ON p.id = k.proposalID

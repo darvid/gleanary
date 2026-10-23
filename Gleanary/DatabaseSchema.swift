@@ -443,6 +443,7 @@ enum DatabaseSchema {
                     WHERE noteID = notes.id AND summaryRole = 'summary');
             """)
         }
+        migrator.registerMigration("typed-notes-and-tasks-v1", migrate: NoteWorkspaceSchema.create)
         try migrator.migrate(database)
     }
 

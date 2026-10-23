@@ -96,6 +96,10 @@ actor DocumentStore {
     }
 
     func save(_ document: MarkdownDocument) throws -> MarkdownDocument {
+        try save(document, profile: nil)
+    }
+
+    func save(_ document: MarkdownDocument, profile: NoteProfile?) throws -> MarkdownDocument {
         try Self.validate(document)
         let result = try activityWrite(actor: "manual") { db -> SaveResult in
             if try Bool.fetchOne(
@@ -118,12 +122,22 @@ actor DocumentStore {
                     return .conflict(deleted: deleted != nil)
                 }
                 if current.name == document.name, current.markdown == document.markdown {
-                    return .saved(current)
+                    let unchangedProfile = try profile.map { try Self.noteProfile(
+                        document.id,
+                        in: db
+                    ) == $0 } ?? true
+                    if unchangedProfile {
+                        return .saved(current)
+                    }
                 }
             } else if document.revision != nil {
                 throw GleanaryError.invalidDatabase
             }
-            return try .saved(Self.writeNote(document, in: db))
+            let saved = try Self.writeNote(document, in: db)
+            if let profile {
+                try Self.writeProfile(profile, for: saved, in: db)
+            }
+            return .saved(saved)
         }
         switch result {
         case let .saved(saved): return saved

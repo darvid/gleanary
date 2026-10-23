@@ -197,6 +197,7 @@ struct DocumentPreview: View {
     @Environment(\.enterReader) private var enterReader
     @Environment(\.libraryGraphContext) private var graphContext
     @Environment(\.linkedSourceContext) private var linkedSourceContext
+    @Environment(\.noteWorkspace) private var noteWorkspace
     private var appearance = ReadingAppearance()
 
     private var readingKind: ReadingKind {
@@ -295,6 +296,13 @@ struct DocumentPreview: View {
                             )
                             .accessibilityElement(children: .contain)
                             .accessibilityLabel("Document content")
+                            if !model.showsCapturedSource, let noteWorkspace {
+                                NoteWorkspaceSection(
+                                    document: document,
+                                    workspace: noteWorkspace,
+                                    openNote: openDocument
+                                )
+                            }
                             if readingKind == .notes, let linkedSourceContext {
                                 LinkedSourcesView(
                                     document: document, context: linkedSourceContext,
