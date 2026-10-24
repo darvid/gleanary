@@ -141,15 +141,9 @@ struct GraphDocumentLegend: View {
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 16) {
-                entry(isSource: false, title: "Notes")
-                entry(isSource: true, title: "Sources")
-            }
-            if usesFilingColors {
-                Text("Color follows primary filing").font(.caption2)
-                    .help("Matches the Map palette. Unfiled items are neutral.")
-            }
+        HStack(spacing: 16) {
+            entry(isSource: false, title: "Notes")
+            entry(isSource: true, title: "Sources")
         }
         .font(.caption).foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
