@@ -21,6 +21,8 @@ extension AgentCoordinator {
         try await store.updateConversationTask(
             taskID,
             progress: "Capturing \(jobs.count) sources",
+            owner: .librarian,
+            event: "delegated",
             onlyWhileRunning: true
         )
         await changed()

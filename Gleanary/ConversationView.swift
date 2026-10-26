@@ -455,7 +455,7 @@ struct ConversationView: View {
         let working = entry.taskID.map { model.isWorking(on: $0) } ?? false
         let activity = entry.activity(working: working)
         let replies = entry.replies(working: working)
-        let progress = model.tasks.first { $0.id == entry.taskID }?.progress
+        let task = model.tasks.first { $0.id == entry.taskID }
         return VStack(alignment: .leading, spacing: 12) {
             Label("Gleanary", systemImage: "bubble.left")
                 .font(.callout.weight(.semibold))
@@ -466,7 +466,8 @@ struct ConversationView: View {
                     ConversationActivityView(
                         messages: activity,
                         working: working,
-                        progress: progress
+                        progress: task?.progress,
+                        agent: task?.owner
                     ) {
                         VStack(alignment: .leading, spacing: 20) {
                             ForEach(activity) { message in
@@ -830,9 +831,11 @@ struct ConversationView: View {
             if let task = model.activeTask {
                 HStack(spacing: 8) {
                     ChatWorkingIndicator(color: .secondary)
+                    Text(task.owner.title).fontWeight(.medium).fadesOnChange(task.owner)
+                        .help(task.owner.responsibility)
                     StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
-                        .font(.caption).foregroundStyle(.secondary)
                 }
+                .font(.caption).foregroundStyle(.secondary)
                 // The composer's send button doubles as Stop; keep Escape without a second control.
                 .background {
                     Button("Stop current task") { Task { await model.cancel() } }

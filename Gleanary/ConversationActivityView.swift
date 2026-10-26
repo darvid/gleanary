@@ -4,6 +4,7 @@ struct ConversationActivityView<Content: View>: View {
     let messages: [ConversationMessage]
     let working: Bool
     let progress: String?
+    let agent: AgentRole?
     @ViewBuilder var content: () -> Content
     @State private var expanded = false
 
@@ -29,7 +30,8 @@ struct ConversationActivityView<Content: View>: View {
                     if working {
                         ChatWorkingIndicator(color: .secondary)
                     }
-                    Text(working ? "Working" : "Activity").fontWeight(.medium)
+                    Text(working ? agent.map { "\($0.title) working" } ?? "Working" : "Activity")
+                        .fontWeight(.medium)
                     Text(messages.count == 1 ? "1 update" : "\(messages.count) updates")
                         .monospacedDigit().foregroundStyle(.secondary)
                 }
