@@ -294,9 +294,14 @@ struct ConversationView: View {
                         followLatest = false; Task { await model.loadOlder() }
                     }
                 }
-                ForEach(model.messages) { message in
-                    messageRow(message)
-                        .id(message.id)
+                ForEach(ConversationFeedEntry.entries(in: model.messages)) { entry in
+                    if let message = entry.userMessage {
+                        messageRow(message)
+                            .id(entry.id)
+                    } else {
+                        response(entry)
+                            .id(entry.id)
+                    }
                 }
             }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
         }
@@ -446,22 +451,66 @@ struct ConversationView: View {
         contentHeight + bottomInset - visibleBottom <= 40
     }
 
+    func response(_ entry: ConversationFeedEntry) -> some View {
+        let working = entry.taskID.map { model.isWorking(on: $0) } ?? false
+        let activity = entry.activity(working: working)
+        let replies = entry.replies(working: working)
+        let progress = model.tasks.first { $0.id == entry.taskID }?.progress
+        return VStack(alignment: .leading, spacing: 12) {
+            Label("Gleanary", systemImage: "bubble.left")
+                .font(.callout.weight(.semibold))
+                .labelStyle(.titleAndIcon)
+                .accessibilityAddTraits(.isHeader)
+            VStack(alignment: .leading, spacing: 16) {
+                if !activity.isEmpty {
+                    ConversationActivityView(
+                        messages: activity,
+                        working: working,
+                        progress: progress
+                    ) {
+                        VStack(alignment: .leading, spacing: 20) {
+                            ForEach(activity) { message in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(message.author.capitalized)
+                                        .font(.callout.weight(.semibold))
+                                        .help(AgentRole(rawValue: message.author)?
+                                            .responsibility ?? "")
+                                    messageText(message)
+                                    references(for: message)
+                                }
+                                .accessibilityElement(children: .contain)
+                            }
+                        }
+                    }
+                }
+                ForEach(replies) { message in
+                    messageText(message)
+                }
+                // Keep each saved result visible once; activity retains per-message provenance.
+                ForEach(entry.referenceIDs, id: \.self) { id in
+                    reference(id)
+                }
+                // Approvals remain reachable while activity is collapsed.
+                ForEach(entry.messages) { message in
+                    messageActions(message)
+                }
+            }
+            .padding(.leading, 24)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func messageText(_ message: ConversationMessage) -> some View {
+        MarkdownPreview(markdown: researchResult(in: message) == nil
+            ? message.text : message.textWithoutResearchBibliography)
+            .textSelection(.enabled)
+            .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
+    }
+
     private func messageRow(_ message: ConversationMessage) -> some View {
         VStack(alignment: .leading, spacing: 9) {
             if message.author == "user" {
                 userBubble(message)
-            } else {
-                let responsibility = AgentRole(rawValue: message.author)?.responsibility
-                let timestamp = message.createdAt.formatted(date: .abbreviated, time: .shortened)
-                Text(message.author.capitalized).font(.headline)
-                    .help(responsibility.map { "\($0)\n\(timestamp)" } ?? timestamp)
-                    .accessibilityHint(responsibility ?? "")
-                MarkdownPreview(markdown: researchResult(in: message) == nil
-                    ? message.text : message.textWithoutResearchBibliography)
-                    .textSelection(.enabled)
-            }
-            if message.author != "user" {
-                references(for: message)
             }
             if let taskID = message.taskID, message.author == "user",
                let task = model.tasks.first(where: { $0.id == taskID }),
@@ -482,49 +531,52 @@ struct ConversationView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 80).padding(.trailing, 4)
             }
-            ForEach(model.proposals
-                .filter {
-                    $0.appears(in: message, history: model.messages)
-                }) { proposal in
-                    proposalCard(proposal)
-                }
-            if let taskID = message.taskID, isLastReply(message) {
-                if let filing = model.seriesFiling[taskID] {
-                    SeriesFilingActions(
-                        status: filing,
-                        working: model.isWorking(on: taskID),
-                        review: { reviewingFiling = filing },
-                        undo: { Task { await model.undoSeriesFiling(filing) } }
-                    )
-                }
-                if let changes = model.agentChanges[taskID], !changes.isEmpty {
-                    AgentChangesCard(
-                        changes: changes,
-                        review: { reviewingChanges = ReviewedChangeset(id: taskID) },
-                        undo: { Task { await model.undoAgentChanges(changes) } }
-                    )
-                }
-                if let scope = model.writerScopes[taskID] {
-                    WriterScopeCard(
-                        request: scope,
-                        styles: WritingStyleChoice.current().styles,
-                        busy: model.running,
-                        open: open,
-                        confirm: { selection, style, general in
-                            Task {
-                                await model.confirmScope(
-                                    taskID, selection: selection, style: style,
-                                    generalKnowledge: general
-                                )
-                            }
-                        },
-                        cancel: { Task { await model.cancelScope(taskID) } }
-                    )
-                    .id(scope.taskID)
-                }
-            }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private func messageActions(_ message: ConversationMessage) -> some View {
+        ForEach(model.proposals
+            .filter {
+                $0.appears(in: message, history: model.messages)
+            }) { proposal in
+                proposalCard(proposal)
+            }
+        if let taskID = message.taskID, isLastReply(message) {
+            if let filing = model.seriesFiling[taskID] {
+                SeriesFilingActions(
+                    status: filing,
+                    working: model.isWorking(on: taskID),
+                    review: { reviewingFiling = filing },
+                    undo: { Task { await model.undoSeriesFiling(filing) } }
+                )
+            }
+            if let changes = model.agentChanges[taskID], !changes.isEmpty {
+                AgentChangesCard(
+                    changes: changes,
+                    review: { reviewingChanges = ReviewedChangeset(id: taskID) },
+                    undo: { Task { await model.undoAgentChanges(changes) } }
+                )
+            }
+            if let scope = model.writerScopes[taskID] {
+                WriterScopeCard(
+                    request: scope,
+                    styles: WritingStyleChoice.current().styles,
+                    busy: model.running,
+                    open: open,
+                    confirm: { selection, style, general in
+                        Task {
+                            await model.confirmScope(
+                                taskID, selection: selection, style: style,
+                                generalKnowledge: general
+                            )
+                        }
+                    },
+                    cancel: { Task { await model.cancelScope(taskID) } }
+                )
+                .id(scope.taskID)
+            }
+        }
     }
 
     func researchResult(in message: ConversationMessage) -> ConversationReference? {

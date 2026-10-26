@@ -47,6 +47,32 @@ struct WorkspaceFixture {
 }
 
 @Suite(.serialized) struct NoteWorkspaceTests {
+    @Test func windowTitleFollowsTasksRatherThanTheLastLibraryFilter() {
+        var location = NavigationLocation(
+            chatting: false,
+            scope: .all,
+            atlasFocus: .library,
+            atlasItem: nil,
+            tasks: true,
+            kindFilter: .notes
+        )
+        for libraryTitle in ["Library", "Notes", "Sources", "Unfiled", "Archive", "31 Synthetic"] {
+            #expect(location.windowTitle(libraryTitle: libraryTitle) == "Tasks")
+        }
+        #expect(location.windowTitle(libraryTitle: "Notes", showingReader: true) == "Reader")
+        location.chatting = true
+        #expect(location.windowTitle(libraryTitle: "Notes") == "Chat")
+        location.chatting = false
+        location.tasks = false
+        location.activity = true
+        #expect(location.windowTitle(libraryTitle: "Notes") == "Activity")
+        location.activity = false
+        location.automations = true
+        #expect(location.windowTitle(libraryTitle: "Notes") == "Automations")
+        location.automations = false
+        #expect(location.windowTitle(libraryTitle: "Notes") == "Notes")
+    }
+
     @Test func calendarDaysAreValidatedAndPortable() throws {
         #expect(WorkspaceDay(rawValue: "2024-02-29") != nil)
         for invalid in [

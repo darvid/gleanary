@@ -112,6 +112,14 @@ The principal interface is `#general`, a persistent chronological feed of messag
 
 These are **task-scoped roles with real tools**, not permanently running LLM personas. Their differences must arise from their instructions, tools, responsibilities, and mutation authority.
 
+Presentation groups consecutive specialist messages and their coordinating
+reply by task. Gleanary is the main visible conversation voice; specialist
+updates are expandable activity, not competing top-level speakers. Saved
+results and review actions remain accessible while activity is collapsed.
+User messages and task boundaries keep their original order. Direct or
+legacy specialist-only exchanges retain their final answer visibly.
+This grouping does not alter the persisted transcript or model context.
+
 ### 3.2 Interaction rules
 
 - A message with **no mention** goes to the assistant or an appropriate currently engaged agent chosen by the lightweight coordinator.
@@ -210,6 +218,49 @@ Minimum constraints:
 - Persist meaningful messages, task states, and durable outcomes. Streaming token fragments and verbose traces need not all be stored permanently.
 - Recover interrupted tasks after restart as interrupted/retryable rather than falsely marking them completed.
 - Tool calls should return typed results and typed errors; validation occurs in application code, not only in prompts.
+
+#### Model-led conversation
+
+Normal conversation with ChatGPT or Apple Intelligence uses the bounded
+model/tool loop. The model chooses reads, follow-up calls, clarification,
+and its final answer. Do not route questions by keywords, intent-pattern
+tables, or canned question-specific replies. Explicit UI actions such as
+capture retry and resuming an approved scope remain application-owned.
+
+- Return category, search, item, and pending-review reads as tool data.
+  The model answers after seeing those results; the app does not post a
+  taxonomy dump or search template instead.
+- Bound each conversation to 30 turns and 120 calls. Reject missing or
+  repeated call IDs, validate tool arguments, and propagate cancellation.
+  Exhaustion and blank replies are failures, not inferred success.
+- Expose existing capture, personal-note saving, source/web research,
+  Writer compose/refresh, and linked-note-series workflows through one
+  publishing tool. Permit one document-publishing workflow plus one
+  source-capture batch per message. Document workflows accept four
+  distinct item handles; a capture batch accepts up to 20 source-link
+  handles read from live saved-item revisions. Supply the user request to
+  the workflow, not instructions from retrieved content.
+- Direct-URL capture requires a URL from the current user request.
+  Follow-up capture can select links retrieved from saved artifacts when
+  the user requests retaining those resources. Validate source-link
+  handles and origin revisions before queueing; never infer permission
+  from source content. Reading links does not enqueue captures. Models
+  cannot approve, reject, or undo protected changes. Those stay in the
+  UI; existing evidence checks and atomic publication remain mandatory.
+- Preserve saved-item references in recent conversation context. Offer
+  bounded, read-only conversation retrieval for older messages and full
+  external-link enumeration for saved artifacts. Truncated chat excerpts
+  are not grounds to ask the user to re-paste recoverable resources.
+  Capture reuses the durable queue and existing Source identities,
+  reports each job's actual state, and never equates a research citation
+  with a retained original. Filing remains separately reviewable.
+- Apple Intelligence uses guided generation for tool turns with an
+  explicit smaller context boundary. Context or availability failures do
+  not fall back to a fixed planner. Its existing four-item Writer scope
+  and local drafting pipeline remain unchanged.
+- Progress must not reopen an awaiting or completed workflow. A final
+  model reply may describe an awaiting scope or committed series without
+  approving the scope, changing published notes, or reopening its task.
 
 ### 4.3 Context management
 

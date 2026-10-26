@@ -15,18 +15,22 @@ private actor ScriptedAgent: ConversationInferring, AgentResponding {
     )
     private var turns: [AgentTurn]
     private(set) var inputs: [[Data]] = []
+    private(set) var availableTools: [Data] = []
+    private(set) var planCalls = 0
 
     init(_ turns: [AgentTurn]) {
         self.turns = turns
     }
 
-    func agentTurn(instructions _: String, input: [Data], tools _: Data) throws -> AgentTurn {
+    func agentTurn(instructions _: String, input: [Data], tools: Data) throws -> AgentTurn {
         inputs.append(input)
+        availableTools.append(tools)
         return turns.isEmpty ? AgentTurn(text: "Nothing left.") : turns.removeFirst()
     }
 
     func plan(request _: String, context _: ConversationPlanningContext) -> ConversationPlan {
-        ConversationPlan(steps: [.init(action: .organize)])
+        planCalls += 1
+        return ConversationPlan(steps: [.init(action: .organize)])
     }
 
     nonisolated func research(question _: String, sources _: [ResearchSource])
@@ -194,7 +198,7 @@ private func turn(_ calls: AgentCall...) -> AgentTurn {
             try await Task.sleep(for: .milliseconds(20))
         }
         await model.refresh()
-        let reply = try #require(model.messages.last { $0.author == AgentRole.librarian.rawValue })
+        let reply = try #require(model.messages.last { $0.author == AgentRole.assistant.rawValue })
         #expect(reply.text == "Proposed 1 shorter title.")
         let taskID = try #require(reply.taskID)
         let changes = try #require(model.agentChanges[taskID])

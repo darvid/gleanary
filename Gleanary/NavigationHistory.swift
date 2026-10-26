@@ -14,6 +14,25 @@ struct NavigationLocation: Equatable {
     var kindFilter = LibraryKindFilter.all
     var presentation = LibraryPresentation.map
     var graphFocus: UUID?
+
+    func windowTitle(libraryTitle: String, showingReader: Bool = false) -> String {
+        if showingReader {
+            return "Reader"
+        }
+        if chatting {
+            return "Chat"
+        }
+        if tasks {
+            return "Tasks"
+        }
+        if activity {
+            return "Activity"
+        }
+        if automations {
+            return "Automations"
+        }
+        return libraryTitle
+    }
 }
 
 /// Back and forward through visited locations, like a browser: visiting after going back drops

@@ -474,10 +474,11 @@ struct ContentView: View {
                     Divider().frame(height: 22)
                 }
                 Spacer().frame(width: 14)
-                Text(readerTarget != nil ? "Reader" : chatting ? "Chat" : showingActivity ?
-                    "Activity" : automating ? "Automations" :
-                    scopeTitle)
-                    .font(.headline).lineLimit(1)
+                Text(location.windowTitle(
+                    libraryTitle: scopeTitle,
+                    showingReader: readerTarget != nil
+                ))
+                .font(.headline).lineLimit(1)
             }
             .transaction { $0.animation = nil }
         }

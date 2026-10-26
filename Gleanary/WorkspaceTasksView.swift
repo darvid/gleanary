@@ -27,17 +27,16 @@ struct WorkspaceTasksView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(choose == nil ? "Tasks" : "Link an existing task")
-                    .font(.title2.weight(.semibold))
-                Spacer()
-                if choose != nil {
+            if choose != nil {
+                HStack {
+                    Text("Link an existing task").font(.title2.weight(.semibold))
+                    Spacer()
                     Button("Cancel") { dismiss() }
                 }
             }
             Picker("Task view", selection: viewBinding) {
                 ForEach(WorkspaceTaskView.allCases) { Text($0.label).tag($0) }
-            }.pickerStyle(.segmented)
+            }.pickerStyle(.segmented).labelsHidden()
             TextField("Search tasks", text: $query).textFieldStyle(.roundedBorder)
             if let message = error ?? workspace
                 .error

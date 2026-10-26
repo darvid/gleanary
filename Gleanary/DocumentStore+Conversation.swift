@@ -31,6 +31,17 @@ extension DocumentStore {
         }
     }
 
+    func conversationRequestSequence(taskID: UUID) throws -> Int64 {
+        guard let sequence = try readyDatabase().read({ db in
+            try Int64.fetchOne(
+                db,
+                sql: "SELECT min(sequence) FROM conversation_messages WHERE taskID = ? AND author = 'user'",
+                arguments: [taskID.uuidString]
+            )
+        }) else { throw CancellationError() }
+        return sequence
+    }
+
     func conversationReferences(_ ids: Set<UUID>) throws -> [UUID: ConversationReference] {
         guard !ids.isEmpty else { return [:] }
         return try readyDatabase().read { db in
@@ -138,7 +149,7 @@ extension DocumentStore {
         captureID: UUID? = nil,
         sources: [UUID] = []
     ) throws -> UUID {
-        _ = try ConversationRoute(request)
+        _ = try ConversationRoute(request, detectsURL: false)
         return try readyDatabase().write { db in
             for source in sources {
                 _ = try Self.liveNote(source, in: db)
@@ -178,13 +189,15 @@ extension DocumentStore {
         progress: String,
         captureID: UUID? = nil,
         owner: AgentRole? = nil,
-        event: String = "progress"
+        event: String = "progress",
+        onlyWhileRunning: Bool = false
     ) throws {
         try readyDatabase().write { db in
             // Terminal states are fences against late model/network completions.
             try db.execute(sql: """
             UPDATE conversation_tasks SET state = ?, progress = ?, captureID = coalesce(?, captureID), owner = coalesce(?, owner), updatedAt = ?
             WHERE id = ? AND state IN ('queued','running','awaiting_user')
+              AND (? = 0 OR state IN ('queued','running'))
             """, arguments: [
                 state,
                 progress,
@@ -192,6 +205,7 @@ extension DocumentStore {
                 owner?.rawValue,
                 Date().timeIntervalSince1970,
                 id.uuidString,
+                onlyWhileRunning,
             ])
             if db.changesCount > 0 {
                 try db.execute(
@@ -206,10 +220,11 @@ extension DocumentStore {
         author: AgentRole,
         text: String,
         references: [UUID] = [],
-        taskID: UUID
+        taskID: UUID,
+        isToolOutcome: Bool = false
     ) throws {
         try readyDatabase().write { db in
-            try Self.requireConversationTask(taskID, in: db)
+            try Self.requireConversationTask(taskID, in: db, isToolOutcome: isToolOutcome)
             for id in references {
                 _ = try Self.liveNote(id, in: db)
             }
@@ -1057,12 +1072,24 @@ extension DocumentStore {
         return try document(row)
     }
 
-    private static func requireConversationTask(_ id: UUID, in db: Database) throws {
-        guard try String.fetchOne(
+    private static func requireConversationTask(
+        _ id: UUID, in db: Database, isToolOutcome: Bool = false
+    ) throws {
+        let state = try String.fetchOne(
             db,
             sql: "SELECT state FROM conversation_tasks WHERE id = ?",
             arguments: [id.uuidString]
-        ) == "running"
+        )
+        // Series publication atomically completes its task. A tool outcome may describe
+        // that committed result, but must never reopen the task or permit late writes.
+        let publishedSeries = try isToolOutcome && state == "succeeded" && Bool.fetchOne(
+            db,
+            sql: """
+            SELECT EXISTS(SELECT 1 FROM note_series_runs WHERE taskID = ? AND published = 1)
+            """,
+            arguments: [id.uuidString]
+        ) == true
+        guard state == "running" || (isToolOutcome && state == "awaiting_user") || publishedSeries
         else { throw CancellationError() }
         try Task.checkCancellation()
     }

@@ -68,6 +68,13 @@ import Testing
                 name: "tasks-empty"
             )
             try await render(
+                WorkspaceTasksView(workspace: workspace, choose: { _ in }),
+                width: 760,
+                height: 560,
+                dark: dark,
+                name: "task-picker"
+            )
+            try await render(
                 NoteTemplatesView(workspace: workspace, use: { _ in }),
                 width: 760,
                 height: 560,

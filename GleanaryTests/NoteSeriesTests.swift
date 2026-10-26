@@ -761,6 +761,27 @@ private actor SeriesFixture: ConversationInferring, NoteSeriesInferring, WriterI
         .init(from: from, to: to, paragraph: paragraph, anchor: anchor, reason: reason)
     }
 
+    @Test func toolOutcomeCanDescribePublicationWithoutReopeningTheTask() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await execute(fixture)
+        let run = try await run(fixture)
+        #expect(run.published)
+        let before = try await fixture.store.documents()
+        try await fixture.store.postConversation(
+            author: .assistant, text: "Model-authored publication acknowledgement.",
+            references: [run.indexID], taskID: fixture.task, isToolOutcome: true
+        )
+        try await fixture.store.updateConversationTask(
+            fixture.task, progress: "Late tool progress", onlyWhileRunning: true
+        )
+        #expect(try await fixture.store.conversationTasks().first { $0.id == fixture.task }?
+            .state == "succeeded")
+        #expect(try await fixture.store.conversationMessages().last?
+            .text == "Model-authored publication acknowledgement.")
+        #expect(try await fixture.store.documents().map(\.revision) == before.map(\.revision))
+    }
+
     @Test func curationDiagnosticsIdentifyEachStructuralFailure() throws {
         let a = UUID(), b = UUID(), c = UUID()
         let outline = NoteSeries.Outline(

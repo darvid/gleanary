@@ -34,6 +34,11 @@ private actor FakeWriter: ConversationInferring, WriterInferring, AgentRespondin
     private var extractDelay: Duration?
     /// Claims bass for every source, with a quote no source contains.
     private var inventsBass = false
+    private var requestedWorkflow = ConversationWorkflows.Kind.compose
+
+    func requestRefresh() {
+        requestedWorkflow = .refresh
+    }
 
     init(brief: WriterBrief) {
         planned = brief
@@ -74,6 +79,31 @@ private actor FakeWriter: ConversationInferring, WriterInferring, AgentRespondin
     }
 
     func agentTurn(instructions: String, input: [Data], tools: Data) throws -> AgentTurn {
+        let definitions = try #require(JSONSerialization
+            .jsonObject(with: tools) as? [[String: Any]])
+        if definitions.contains(where: { $0["name"] as? String == "start_workflow" }) {
+            let hasResult = try input.contains { data in
+                try (JSONSerialization
+                    .jsonObject(with: data) as? [
+                        String: Any
+                    ])?["type"] as? String == "function_call_output"
+            }
+            if hasResult {
+                return AgentTurn(text: "Reviewed the workflow result.")
+            }
+            let arguments: [String: Any] = ["workflow": requestedWorkflow.rawValue,
+                                            "items": requestedWorkflow == .refresh ? ["i1"] : [],
+                                            "url": "", "content": ""]
+            return try AgentTurn(calls: [AgentCall(
+                id: UUID().uuidString,
+                name: "start_workflow",
+                arguments: String(
+                    decoding: JSONSerialization
+                        .data(withJSONObject: arguments),
+                    as: UTF8.self
+                )
+            )])
+        }
         self.instructions.append(instructions)
         self.tools.append(tools)
         guard input.count == 1 else { return AgentTurn(text: "Written.") }
@@ -317,8 +347,9 @@ private actor LocalWriter: ConversationInferring, WriterInferring, DocumentDraft
         #expect(try await store.documents().count == before)
         #expect(try await store.awaitingWriterRequests().map(\.taskID) == [task])
         let messages = try await store.conversationMessages().filter { $0.taskID == task }
-        #expect(messages.last?.author == "curator")
-        #expect(messages.last?.text.contains("1 may be off-topic") == true)
+        #expect(messages.last?.text == "Reviewed the workflow result.")
+        #expect(messages
+            .contains { $0.author == "curator" && $0.text.contains("1 may be off-topic") })
 
         // Only gathered items can be confirmed, and only once.
         let stray = try await store.save(MarkdownDocument(name: "Stray", markdown: "Other."))
@@ -610,6 +641,7 @@ private actor LocalWriter: ConversationInferring, WriterInferring, DocumentDraft
         try await store.fileNote(echo.id, categoryID: library.audio.id)
         await writer.reset()
 
+        await writer.requestRefresh()
         let request = "@writer refresh “Headphone guide”"
         let refresh = try await store.beginConversation(
             request,
@@ -659,8 +691,9 @@ private actor LocalWriter: ConversationInferring, WriterInferring, DocumentDraft
         )
         #expect(await writer.extracted.isEmpty)
         #expect(try await store.agentChanges(taskID: again).isEmpty)
-        #expect(try await store.conversationMessages().last?.text
-            .contains("nothing to refresh") == true)
+        #expect(try await store.conversationMessages().contains {
+            $0.taskID == again && $0.text.contains("nothing to refresh")
+        })
 
         // Undo puts the earlier text back.
         #expect(try await store.undoAgentChanges(changes.map(\.id)) == 2)
