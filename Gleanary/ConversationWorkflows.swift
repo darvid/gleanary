@@ -9,6 +9,18 @@ actor ConversationWorkflows {
         case capture, saveNote = "save_note", research = "research_sources"
         case webResearch = "research_web", compose = "compose_document"
         case refresh = "refresh_document", researchSeries = "research_series"
+
+        var action: ConversationPlan.Action {
+            switch self {
+            case .capture: .ingest
+            case .saveNote: .saveNote
+            case .research: .research
+            case .webResearch: .webResearch
+            case .compose: .compose
+            case .refresh: .refresh
+            case .researchSeries: .researchSeries
+            }
+        }
     }
 
     struct Request: Decodable, Sendable {

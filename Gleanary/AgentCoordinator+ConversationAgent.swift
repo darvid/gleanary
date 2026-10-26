@@ -24,18 +24,46 @@ extension AgentCoordinator {
         try await store.updateConversationTask(taskID, progress: "Thinking", event: "delegated")
         await changed()
         let toolbox = AgentToolbox(store: store, search: search, conversationBefore: before)
-        let workflows = ConversationWorkflows { [self] arguments, ids in
-            try await runConversationWorkflow(
-                arguments,
-                ids: ids,
-                taskID: taskID,
-                request: request,
-                toolbox: toolbox,
-                changed: changed
+        let store = store
+        let handBack: @Sendable () async -> Void = {
+            try? await store.updateConversationTask(
+                taskID,
+                progress: "Thinking",
+                owner: route.roles[0],
+                onlyWhileRunning: true
             )
+            await changed()
+        }
+        let workflows = ConversationWorkflows { [self] arguments, ids in
+            do {
+                let result = try await runConversationWorkflow(
+                    arguments,
+                    ids: ids,
+                    taskID: taskID,
+                    request: request,
+                    toolbox: toolbox,
+                    changed: changed
+                )
+                await handBack()
+                return result
+            } catch {
+                await handBack()
+                throw error
+            }
         }
         let captures = ConversationSourceCaptures { [self] candidates in
-            try await captureConversationSources(candidates, taskID: taskID, changed: changed)
+            do {
+                let outcomes = try await captureConversationSources(
+                    candidates,
+                    taskID: taskID,
+                    changed: changed
+                )
+                await handBack()
+                return outcomes
+            } catch {
+                await handBack()
+                throw error
+            }
         }
         let agent = LibraryAgent(
             model: model,
@@ -43,7 +71,6 @@ extension AgentCoordinator {
             workflows: workflows,
             sourceCaptures: captures
         )
-        let store = store
         let outcome = try await agent.run(
             request: route.text,
             history: history,
@@ -115,7 +142,16 @@ extension AgentCoordinator {
         try Task.checkCancellation()
         let previous = try await store.conversationMessages(limit: 200).last?.sequence ?? 0
         let route = try ConversationRoute(request, detectsURL: false)
-        let action: ConversationPlan.Action
+        let action = arguments.workflow.action
+        // Name the specialist in chat progress; converseWithTools hands the task back afterwards.
+        try await store.updateConversationTask(
+            taskID,
+            progress: "Working",
+            owner: action.owner,
+            event: "delegated",
+            onlyWhileRunning: true
+        )
+        await changed()
         var created: [UUID] = []
         switch arguments.workflow {
         case .capture:
@@ -126,7 +162,6 @@ extension AgentCoordinator {
                 postsAcknowledgement: false,
                 changed: changed
             )
-            action = .ingest
         case .saveNote:
             let note = try await store.saveResearch(
                 arguments.content,
@@ -137,12 +172,7 @@ extension AgentCoordinator {
                 kind: "note"
             )
             created.append(note.id)
-            action = .saveNote
-        case .research: action = .research
-        case .webResearch: action = .webResearch
-        case .compose: action = .compose
-        case .refresh: action = .refresh
-        case .researchSeries: action = .researchSeries
+        case .research, .webResearch, .compose, .refresh, .researchSeries: break
         }
         if action != .ingest, action != .saveNote {
             var references = ids
