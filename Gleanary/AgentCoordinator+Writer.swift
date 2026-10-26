@@ -36,7 +36,7 @@ extension AgentCoordinator {
             )
             return
         }
-        let local = !(inference is any AgentResponding)
+        let local = inference.capabilities.local
         let limit = local ? WriterLimits.localScope : WriterLimits.maximumScope
         let onTopic = gathered.candidates.filter { !$0.offTopic }.map(\.id)
         try await store.beginWriterRequest(WriterRequest(
@@ -193,8 +193,8 @@ extension AgentCoordinator {
         let live = try await Set(store.scopeDetails(previous.selection).keys)
         let kept = previous.selection.filter(live.contains)
         let added = gathered.candidates.filter { !known.contains($0.id) && !$0.offTopic }
-        let limit = inference is any AgentResponding ? WriterLimits.maximumScope : WriterLimits
-            .localScope
+        let limit = inference.capabilities.local ? WriterLimits.localScope : WriterLimits
+            .maximumScope
         guard kept.count <= limit else { throw WriterError.needsChatGPT }
         let selection = Array((kept + added.map(\.id)).prefix(limit))
         let request = WriterRequest(

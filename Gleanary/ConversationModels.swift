@@ -243,7 +243,15 @@ struct ConversationRoute: Sendable {
         text.range(of: #"(?<!\w)@[A-Za-z]*\s*$"#, options: .regularExpression)
     }
 
-    init(_ input: String) throws {
+    init(_ input: String, captureURL: URL) throws {
+        let request = try Self(input, detectsURL: false)
+        roles = request.roles
+        text = request.text
+        _ = try CaptureRequest.canonicalURL(captureURL)
+        url = captureURL
+    }
+
+    init(_ input: String, detectsURL: Bool = true) throws {
         guard !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               input.utf8.count <= 32000 else { throw CaptureError.emptyInput }
         let expression =
@@ -263,6 +271,7 @@ struct ConversationRoute: Sendable {
         text = expression.stringByReplacingMatches(
             in: input, range: NSRange(input.startIndex..., in: input), withTemplate: ""
         ).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard detectsURL else { url = nil; return }
         let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         let links = detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
         guard links.count <= 1 else { throw ConversationError.multipleURLs }

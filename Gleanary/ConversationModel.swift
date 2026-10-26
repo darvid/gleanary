@@ -191,7 +191,8 @@ final class ConversationModel {
                 }
                 return
             }
-            let route = try ConversationRoute(request)
+            let toolDriven = await coordinator.usesConversationTools
+            let route = try ConversationRoute(request, detectsURL: !toolDriven)
             let capturing = route.url != nil || captureID != nil || retry?.captureID != nil
             // History remains conversational context, not invisible draft attachments.
             let context = capturing ? [] : sources ?? retry?.sources ?? selectedSources

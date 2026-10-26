@@ -92,7 +92,7 @@ struct WriterPipeline {
         calls: CallCount,
         progress: @escaping @Sendable (String, AgentRole?) async -> Void
     ) async throws -> WriterDraft {
-        if let agent = inference as? any AgentResponding {
+        if !inference.capabilities.local, let agent = inference as? any AgentResponding {
             return try await WriterAgent(
                 model: CountingResponder(model: agent, calls: calls),
                 toolbox: WriterToolbox(document: document), style: request.style,

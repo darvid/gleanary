@@ -30,8 +30,9 @@ actor AgentCoordinator {
         search = SearchEngine(store: store)
     }
 
-    /// One validated intent plan, at most four capability steps, no recursive model/tool loop.
-    /// Models select capabilities; application code owns persistence and review permissions.
+    /// Tool-capable providers reason over actual tool results. Explicit capture retries and
+    /// providers without tool turns retain the bounded workflow adapter below. Application
+    /// code owns persistence, evidence verification and review permissions.
     /// `userSelected` is true when the user picked `selected` themselves, rather than it being
     /// inferred from the last agent message.
     func execute(
@@ -49,18 +50,26 @@ actor AgentCoordinator {
             try await continueNoteSeries(run, changed: changed)
             return
         }
+        if let model = toolResponder(forCaptureRetry: existingCaptureID) {
+            try await converseWithTools(
+                taskID: taskID,
+                request: request,
+                selected: selected,
+                model: model,
+                changed: changed
+            )
+            return
+        }
         let route = try ConversationRoute(request)
         let context = try await planningContext(taskID: taskID, selected: selected)
-        let plan: ConversationPlan
-        if existingCaptureID != nil || route.url?.absoluteString == route.text {
-            plan = ConversationPlan(steps: [.init(action: .ingest)])
-        } else if Self.isRefresh(route, selected: selected) {
-            plan = ConversationPlan(steps: [.init(action: .refresh)])
-        } else {
-            try await store.updateConversationTask(taskID, progress: "Understanding request")
-            await changed()
-            plan = try await inference.plan(request: route.text, context: context)
-        }
+        let plan = try await workflowAdapterPlan(
+            taskID: taskID,
+            route: route,
+            context: context,
+            selected: selected,
+            existingCaptureID: existingCaptureID,
+            changed: changed
+        )
         try plan.validate(context: context, hasURL: route.url != nil || existingCaptureID != nil)
         try Task.checkCancellation()
         let owner = plan.steps.first?.action == .chat ? route.roles.first : plan.steps.first?.action
@@ -124,6 +133,22 @@ actor AgentCoordinator {
         await changed()
     }
 
+    private func workflowAdapterPlan(
+        taskID: UUID, route: ConversationRoute, context: ConversationPlanningContext,
+        selected: [UUID], existingCaptureID: UUID?,
+        changed: @escaping @Sendable () async -> Void
+    ) async throws -> ConversationPlan {
+        if existingCaptureID != nil || route.url?.absoluteString == route.text {
+            return ConversationPlan(steps: [.init(action: .ingest)])
+        }
+        if Self.isRefresh(route, selected: selected) {
+            return ConversationPlan(steps: [.init(action: .refresh)])
+        }
+        try await store.updateConversationTask(taskID, progress: "Understanding request")
+        await changed()
+        return try await inference.plan(request: route.text, context: context)
+    }
+
     private static func composes(_ plan: ConversationPlan) -> Bool {
         plan.steps.first?.action == .compose || plan.steps.first?.action == .researchSeries
     }
@@ -149,10 +174,20 @@ actor AgentCoordinator {
         await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
     }
 
-    private func capture(
+    private func toolResponder(forCaptureRetry captureID: UUID?) -> (any AgentResponding)? {
+        guard captureID == nil else { return nil }
+        return inference as? any AgentResponding
+    }
+
+    var usesConversationTools: Bool {
+        inference is any AgentResponding
+    }
+
+    func capture(
         taskID: UUID,
         route: ConversationRoute,
         existingCaptureID: UUID?,
+        postsAcknowledgement: Bool = true,
         changed: @escaping @Sendable () async -> Void
     ) async throws {
         let captureID: UUID
@@ -235,12 +270,11 @@ actor AgentCoordinator {
                 }
             }
         }
-        let filed = try await store.categories(for: noteID).first?.label ?? "Unfiled"
-        try await store.postConversation(
-            author: .librarian,
-            text: "Saved locally under \(filed). Original and extracted text are retained.\(filingExplanation)",
-            references: [noteID],
-            taskID: taskID
+        try await acknowledgeCapture(
+            taskID: taskID,
+            noteID: noteID,
+            explanation: filingExplanation,
+            enabled: postsAcknowledgement
         )
         await changed()
         if source.document.blocks.allSatisfy({ $0.method == "metadata-only" }) {
@@ -258,6 +292,35 @@ actor AgentCoordinator {
             references: [noteID],
             changed: changed
         )
+        try await suggestCaptureLinks(
+            taskID: taskID,
+            source: source,
+            enabled: postsAcknowledgement,
+            changed: changed
+        )
+    }
+
+    private func acknowledgeCapture(
+        taskID: UUID,
+        noteID: UUID,
+        explanation: String,
+        enabled: Bool
+    ) async throws {
+        guard enabled else { return }
+        let filed = try await store.categories(for: noteID).first?.label ?? "Unfiled"
+        try await store.postConversation(
+            author: .librarian,
+            text: "Saved locally under \(filed). Original and extracted text are retained.\(explanation)",
+            references: [noteID],
+            taskID: taskID
+        )
+    }
+
+    private func suggestCaptureLinks(
+        taskID: UUID, source: ResearchSource, enabled: Bool,
+        changed: @escaping @Sendable () async -> Void
+    ) async throws {
+        guard enabled else { return }
         try await related(
             taskID: taskID,
             note: source.note,
@@ -298,7 +361,7 @@ actor AgentCoordinator {
         return title.isEmpty ? "Thought" : String(title.prefix(80))
     }
 
-    private func dispatch(
+    func dispatch(
         _ step: ConversationPlan.Step,
         taskID: UUID,
         route: ConversationRoute,
