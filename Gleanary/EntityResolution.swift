@@ -20,9 +20,14 @@ enum EntityKey {
         _ name: String,
         tagger: NLTagger = NLTagger(tagSchemes: [.lemma])
     ) -> [String] {
-        let text = name.lowercased()
-            .replacingOccurrences(of: "’s", with: "").replacingOccurrences(of: "'s", with: "")
-            .map { $0.isLetter || $0.isNumber ? $0 : " " }
+        // A trailing "(LLMs)" restates the name, so "Large Language Models (LLMs)" keys like
+        // "large language model".
+        let text = name.replacingOccurrences(
+            of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression
+        )
+        .lowercased()
+        .replacingOccurrences(of: "’s", with: "").replacingOccurrences(of: "'s", with: "")
+        .map { $0.isLetter || $0.isNumber ? $0 : " " }
         let plain = String(text)
         tagger.string = plain
         var words: [String] = []

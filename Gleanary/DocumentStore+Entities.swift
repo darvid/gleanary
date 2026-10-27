@@ -456,6 +456,48 @@ extension DocumentStore {
         }
     }
 
+    /// Merges every pending pair, each into its side's current entity, so overlapping pairs
+    /// such as "LLMs" and "Large Language Models (LLMs)" with one name end up together.
+    /// Returns how many pairs merged.
+    @discardableResult
+    func mergeAllEntitySuggestions() throws -> Int {
+        var merged = 0
+        for suggestion in try entitySuggestions() {
+            let left = try canonicalEntity(suggestion.left.id)
+            let right = try canonicalEntity(suggestion.right.id)
+            if left != right {
+                // The same rule as merging one pair: more mentions, then the longer name, stays.
+                let leftFirst = (suggestion.left.noteCount, suggestion.left.name.count)
+                    >= (suggestion.right.noteCount, suggestion.right.name.count)
+                do {
+                    try mergeEntity(leftFirst ? right : left, into: leftFirst ? left : right)
+                    merged += 1
+                } catch { continue }
+            }
+            // Either merged now, or an earlier merge already put both sides together.
+            try markEntitySuggestion(suggestion, state: "merged")
+        }
+        return merged
+    }
+
+    private func canonicalEntity(_ id: String) throws -> String {
+        try readyDatabase().read { db in
+            try String.fetchOne(
+                db, sql: "SELECT mergedInto FROM entity_overrides WHERE entityID = ?",
+                arguments: [id]
+            ) ?? id
+        }
+    }
+
+    private func markEntitySuggestion(_ suggestion: EntitySuggestion, state: String) throws {
+        let (left, right) = Self.pairKey(suggestion.left.id, suggestion.right.id)
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE entity_merge_suggestions SET state = ? WHERE leftID = ? AND rightID = ?
+            """, arguments: [state, left, right])
+        }
+    }
+
     private func updateEntityOverride(_ id: String, _ change: (Database) throws -> Void) throws {
         try readyDatabase().write { db in
             try db.execute(sql: """

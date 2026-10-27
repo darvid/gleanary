@@ -74,6 +74,10 @@ import SwiftUI
         await load()
     }
 
+    func mergeAllSuggestions() async {
+        await apply { try await self.store.mergeAllEntitySuggestions() }
+    }
+
     func resolve(_ suggestion: EntitySuggestion, merge: Bool) async {
         await apply { try await self.store.resolveEntitySuggestion(suggestion, merge: merge) }
     }
@@ -471,6 +475,9 @@ private struct DuplicateReview: View {
             }
             Divider()
             HStack {
+                Button("Merge All") { Task { await model.mergeAllSuggestions() } }
+                    .disabled(model.suggestions.isEmpty)
+                    .help("Merge every pair listed; Unmerge on an entity puts one back")
                 Spacer()
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             }

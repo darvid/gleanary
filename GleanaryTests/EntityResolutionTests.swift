@@ -55,6 +55,10 @@ private struct FakeMatchJudge: EntityMatchJudging {
         #expect(EntityKey.of("Fine-Tuning") == EntityKey.of("fine tuning"))
         #expect(EntityKey.of("the transformer") == EntityKey.of("transformers"))
         #expect(EntityKey.of("AI agents") != EntityKey.of("agent loops"))
+        #expect(EntityKey.of("Large Language Models (LLMs)") == EntityKey
+            .of("large language model"))
+        #expect(EntityKey.of("recursive self-improvement (RSI)")
+            == EntityKey.of("recursive self-improvement"))
         #expect(EntityKey.initials("retrieval-augmented generation") == "rag")
         #expect(EntityKey.initials("reinforcement learning from human feedback") == "rlhf")
         #expect(EntityKey.abbreviation("LLMs") == "llm")
@@ -186,6 +190,52 @@ private struct FakeMatchJudge: EntityMatchJudging {
         let concepts = try await store.entities(kind: .concept).map(\.name)
         #expect(!concepts.contains("RAG"))
         #expect(try await store.entities(kind: .tool).count == 2)
+    }
+
+    @Test func mergeAllHandlesOverlappingPairs() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = try await store.save(MarkdownDocument(name: "One", markdown: "Notes."))
+        let two = try await store.save(MarkdownDocument(name: "Two", markdown: "Notes."))
+        try await mention(
+            "large language model",
+            kind: .concept,
+            quote: "a large language model",
+            in: one,
+            store: store
+        )
+        try await mention(
+            "large language model",
+            kind: .concept,
+            quote: "large language model again",
+            in: two,
+            store: store
+        )
+        try await mention("LLMs", kind: .concept, quote: "LLMs answer", in: one, store: store)
+        try await mention(
+            "foundation model",
+            kind: .concept,
+            quote: "a foundation model",
+            in: two,
+            store: store
+        )
+        let ids = try await Dictionary(uniqueKeysWithValues: store.entities()
+            .map { ($0.name, $0.id) })
+        let large = try #require(ids["large language model"])
+        let llms = try #require(ids["LLMs"])
+        let foundation = try #require(ids["foundation model"])
+        // Three pairs among three names: once two merge, the third is already settled.
+        try await store.recordEntityPairs([
+            (llms, large, "Abbreviation", "pending"),
+            (foundation, large, "Same thing", "pending"),
+            (llms, foundation, "Same thing", "pending"),
+        ])
+        #expect(try await store.entitySuggestions().count == 3)
+        #expect(try await store.mergeAllEntitySuggestions() == 2)
+        let remaining = try await store.entities(kind: .concept)
+        #expect(remaining.map(\.name) == ["large language model"])
+        #expect(Set(remaining.first?.aliases.map(\.id) ?? []) == [llms, foundation])
+        #expect(try await store.entitySuggestions().isEmpty)
     }
 
     @Test func sortingAndPagingCoverEveryEntityOnce() async throws {
