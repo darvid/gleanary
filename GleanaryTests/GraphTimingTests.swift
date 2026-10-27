@@ -5,7 +5,12 @@ import Testing
 /// Times each model call while one note is read for entities. Opt-in: it uses the real
 /// on-device model, so set GLEANARY_LIVE_GRAPH=1 to run it.
 private actor TimingProvider: GraphExtracting {
-    let base = AppleGraphExtractor()
+    let base: any GraphExtracting
+
+    init(base: any GraphExtracting = AppleGraphExtractor()) {
+        self.base = base
+    }
+
     private(set) var calls: [(String, Double)] = []
 
     private func time<T>(_ name: String, _ work: () async throws -> T) async rethrows -> T {
@@ -41,6 +46,89 @@ private actor TimingProvider: GraphExtracting {
     {
         try await time("mind map") { try await base.mindMap(work, entities: entities) }
     }
+}
+
+/// The synthetic article both timing runs read.
+private func timingNote(in store: DocumentStore) async throws -> MarkdownDocument {
+    let paragraph = """
+    Synthetic Labs, a research group led by Dana Reyes, built Orion, a retrieval system for long \
+    documents. Reyes argues that agents should split work into small tasks, an idea she credits \
+    to Sam Okafor at Northwind Institute. Orion uses a planning scaffold and a vector index, and \
+    the team evaluated it on the Atlas benchmark. Okafor's group later compared Orion with Vega, \
+    a summarization tool from Bluefin, and found that Orion improves on Vega for multi-step \
+    questions while costing more to run.
+    """
+    let markdown = (1 ... 14).map { "## Section \($0)\n\n\(paragraph)" }.joined(separator: "\n\n")
+    return try await store.save(MarkdownDocument(
+        name: "Synthetic agents article",
+        markdown: markdown
+    ))
+}
+
+private func timeOneNote(with base: any GraphExtracting, label: String) async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+    _ = try await store.open()
+    let note = try await timingNote(in: store)
+    try await store.prepareGraphJobs([note.id])
+    let provider = TimingProvider(base: base)
+    let start = ContinuousClock.now
+    try await GraphExtractor(store: store, provider: provider).run(
+        only: [note.id],
+        mindMaps: false
+    ) {}
+    let total = (ContinuousClock.now - start) / .seconds(1)
+    for (name, seconds) in await provider.calls {
+        print(String(format: "  %6.1fs  %@", seconds, name))
+    }
+    let found = try await store.entities(in: [note.id]).map(\.name)
+    await print(String(
+        format: "%@ TOTAL %.1fs over %d model calls",
+        label,
+        total,
+        provider.calls.count
+    ))
+    print("\(label) ENTITIES \(found.joined(separator: ", "))")
+    #expect(try await store.graphProgress([note.id]).ready == 1)
+}
+
+/// Your ChatGPT sign-in, read from the app's keychain item; refreshed tokens are written back
+/// so the app keeps working. Nothing here prints a token.
+private struct WriteThroughVault: ChatGPTCredentialStoring {
+    let keychain = KeychainChatGPTCredentials()
+    func load() throws -> Data? {
+        try keychain.load()
+    }
+
+    func save(_ data: Data) throws {
+        try keychain.save(data)
+    }
+}
+
+/// Opt-in: uses your ChatGPT plan. Set GLEANARY_LIVE_CHATGPT=1, and optionally
+/// GLEANARY_CHATGPT_MODEL to pick a model.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_LIVE_CHATGPT"] == "1"))
+@MainActor func timeReadingOneNoteWithChatGPT() async throws {
+    let session = ChatGPTSession(vault: WriteThroughVault())
+    let suite = "gleanary-live-chatgpt-" + UUID().uuidString
+    let preferences = try #require(UserDefaults(suiteName: suite))
+    defer { preferences.removePersistentDomain(forName: suite) }
+    let connection = ChatGPTConnection(session: session, preferences: preferences)
+    await connection.load()
+    let account = try #require(connection.activeAccount, "No ChatGPT account in the keychain")
+    #expect(account.planAuthorized)
+    let wanted = ProcessInfo.processInfo.environment["GLEANARY_CHATGPT_MODEL"]
+    let model = try #require(
+        connection.models.first { $0.slug == wanted }?.slug
+            ?? (connection.selectedModel.isEmpty ? nil : connection.selectedModel)
+            ?? connection.models.first?.slug,
+        "No ChatGPT models available: \(connection.error ?? "")"
+    )
+    print("CHATGPT MODEL \(model) of \(connection.models.map(\.slug).joined(separator: ", "))")
+    try await timeOneNote(
+        with: ChatGPTConversationInference(session: session, model: model), label: "CHATGPT"
+    )
 }
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_LIVE_GRAPH"] == "1"))
