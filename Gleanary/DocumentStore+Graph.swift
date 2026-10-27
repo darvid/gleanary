@@ -11,6 +11,7 @@ extension DocumentStore {
         INSERT INTO graph_nodes(id, kind, label, noteID) VALUES (?, 'document', ?, ?)
         ON CONFLICT(id) DO UPDATE SET label = excluded.label
         """, arguments: [GraphNode.documentID(document.id), document.name, id])
+        try reapplyEntityAssertions(document, in: db)
         try db.execute(sql: """
         INSERT INTO graph_jobs(noteID, revision, version, token, state) VALUES (?, ?, ?, ?, 'queued')
         ON CONFLICT(noteID) DO UPDATE SET revision = excluded.revision, version = excluded.version,

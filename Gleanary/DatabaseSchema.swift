@@ -483,6 +483,7 @@ enum DatabaseSchema {
         }
         migrator.registerMigration("entity-overrides-v1", migrate: EntitySchema.create)
         migrator.registerMigration("entity-resolution-v1", migrate: EntitySchema.addResolution)
+        migrator.registerMigration("entity-assertions-v1", migrate: EntitySchema.addAssertions)
         // Rebuilding agent_changes for renames dropped Activity's trigger on it; restore it
         // unchanged, whether or not that rebuild ran without it.
         migrator.registerMigration("activity-automation-revision-trigger-v2") { db in

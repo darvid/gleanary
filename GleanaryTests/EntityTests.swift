@@ -254,6 +254,79 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
         #expect(unknown.contains("Unknown entity handle"))
     }
 
+    @Test func recordedEntitiesSurviveEditsWhileTheirQuoteRemains() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var note = try await store.save(MarkdownDocument(
+            name: "Research: Dana Reyes",
+            markdown: "Dana Reyes leads the Atlas benchmark at Northwind."
+        ))
+        let id = try await store.recordEntity("Dana Reyes", kind: .person, in: note.id, quote: "")
+        #expect(try await store.entities(kind: .person).map(\.id) == [id])
+        // Another note joins the same entity rather than making a second one.
+        let other = try await store.save(MarkdownDocument(
+            name: "Follow-up",
+            markdown: "Met dana reyes."
+        ))
+        #expect(try await store
+            .recordEntity("Dana Reyes", kind: .person, in: other.id, quote: "") == id)
+        #expect(try await store.entities(kind: .person).first?.noteCount == 2)
+        await #expect(throws: EntityEditError.self) {
+            try await store.recordEntity("Sam Okafor", kind: .person, in: note.id, quote: "")
+        }
+        note.markdown = "Updated: Dana Reyes now advises the team."
+        note = try await store.save(note)
+        #expect(try await store.entities(kind: .person).first?.noteCount == 2)
+        note.markdown = "Nothing about anyone."
+        note = try await store.save(note)
+        #expect(try await store.entities(kind: .person).first?.noteCount == 1)
+        try await store.removeEntity(id)
+        #expect(try await store.entities(kind: .person).isEmpty)
+        // Recording it again brings it back.
+        try await store.recordEntity("Dana Reyes", kind: .person, in: other.id, quote: "dana reyes")
+        #expect(try await store.entities(kind: .person).map(\.id) == [id])
+    }
+
+    @Test func theAssistantCreatesRenamesMergesAndRemovesEntities() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Research: Toby Ord",
+            markdown: "Toby Ord, a philosopher at Oxford, compares AI and human scaling."
+        ))
+        let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+        _ = await toolbox.run(call("search_library", ["query": "Toby Ord"]))
+        let created = await toolbox.run(call("create_entity", [
+            "name": "Toby Ord", "kind": "person", "item": "i1", "quote": "Toby Ord, a philosopher",
+        ]))
+        #expect(created.contains(#""entity":"e1""#), "\(created)")
+        let oxford = await toolbox.run(call("create_entity", [
+            "name": "Oxford", "kind": "organization", "item": "i1", "quote": "",
+        ]))
+        #expect(oxford.contains(#""entity":"e2""#), "\(oxford)")
+        let university = await toolbox.run(call("create_entity", [
+            "name": "University of Oxford", "kind": "organization", "item": "i1", "quote": "Oxford",
+        ]))
+        #expect(university.contains(#""entity":"e3""#), "\(university)")
+        let renamed = await toolbox.run(call("update_entity", [
+            "entity": "e1", "name": "Toby Ord (philosopher)", "merge_into": "",
+        ]))
+        #expect(renamed.contains("Toby Ord (philosopher)"))
+        let merged = await toolbox.run(call("update_entity", [
+            "entity": "e2", "name": "", "merge_into": "e3",
+        ]))
+        #expect(merged.contains("merged_into"), "\(merged)")
+        let organizations = try await store.entities(kind: .organization)
+        #expect(organizations.map(\.name) == ["University of Oxford"])
+        let removed = await toolbox.run(call("remove_entity", ["entity": "e1"]))
+        #expect(removed.contains("removed"))
+        #expect(try await store.entities(kind: .person).isEmpty)
+        let missing = await toolbox.run(call("create_entity", [
+            "name": "Sam Okafor", "kind": "person", "item": "i1", "quote": "",
+        ]))
+        #expect(missing.contains("doesn't contain"))
+    }
+
     @Test func askingInChatReadsOnlyTheChosenItems() async throws {
         let (root, store) = try await store()
         defer { try? FileManager.default.removeItem(at: root) }

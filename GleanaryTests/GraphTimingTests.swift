@@ -203,3 +203,59 @@ func timeReadingOneNoteForEntities() async throws {
     print(String(format: "CHATGPT BATCH %@ read %d of 4 notes in %.1fs", model, report.read, total))
     #expect(report.read == 4)
 }
+
+/// Opt-in, with GLEANARY_LIVE_CHATGPT=1: asks ChatGPT to research a (synthetic) person and
+/// checks that it records them as an entity on the saved research without being told to.
+/// The research itself is a stand-in that saves a fixed note, so nothing searches the web.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_LIVE_CHATGPT"] == "1"))
+@MainActor func researchingAPersonRecordsThemWithChatGPT() async throws {
+    let session = ChatGPTSession(vault: WriteThroughVault())
+    let suite = "gleanary-live-chatgpt-" + UUID().uuidString
+    let preferences = try #require(UserDefaults(suiteName: suite))
+    defer { preferences.removePersistentDomain(forName: suite) }
+    let connection = ChatGPTConnection(session: session, preferences: preferences)
+    await connection.load()
+    let model = try #require(
+        connection.selectedModel.isEmpty ? connection.models.first?.slug : connection.selectedModel
+    )
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+    _ = try await store.open()
+    let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+    let workflows = ConversationWorkflows { request, _ in
+        let note = try await store.save(MarkdownDocument(
+            name: "Research: Dana Reyes",
+            markdown: """
+            # Dana Reyes
+
+            Dana Reyes is a research scientist at the Northwind Institute who leads the Atlas
+            benchmark for long-document retrieval.
+            """
+        ))
+        return await ConversationWorkflows.Result(
+            status: "completed",
+            messages: [.init(
+                author: "researcher",
+                text: "Saved research on Dana Reyes (\(request.workflow.rawValue)).",
+                truncated: false
+            )],
+            items: toolbox.describeResult([note.id])
+        )
+    }
+    let agent = LibraryAgent(
+        model: ChatGPTConversationInference(session: session, model: model),
+        toolbox: toolbox,
+        workflows: workflows
+    )
+    let outcome = try await agent.run(
+        request: "Research Dana Reyes on the web and save what you find.",
+        history: [],
+        selected: [],
+        progress: { print("PROGRESS \($0)") }
+    )
+    print("REPLY \(outcome.reply)")
+    let people = try await store.entities(kind: .person).map(\.name)
+    print("PEOPLE \(people)")
+    #expect(people.contains("Dana Reyes"))
+}
