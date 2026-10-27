@@ -73,7 +73,7 @@ import SwiftUI
 }
 
 /// People, organizations, tools and concepts found in your notes, each with the passages that
-/// mention it. Extraction keeps these current; nothing here edits them.
+/// mention it. Extraction finds them; here you can rename, merge or hide them.
 struct EntitiesView: View {
     @State private var model: EntitiesModel
     @State private var renaming = false
@@ -98,7 +98,24 @@ struct EntitiesView: View {
         .onChange(of: model.selectedID) { Task { await model.loadMentions() } }
     }
 
+    /// Filters on top, then the list flush with the pane, as in Mail or Notes.
     private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            filters.padding(12)
+            Divider()
+            if model.entities.isEmpty {
+                ContentUnavailableView(
+                    model.query.isEmpty ? "No entities yet" : "No matches",
+                    systemImage: "person.2",
+                    description: Text(model.query.isEmpty ? emptyHint : "Try another name.")
+                )
+            } else {
+                entityList
+            }
+        }
+    }
+
+    private var filters: some View {
         VStack(alignment: .leading, spacing: 10) {
             Picker("Kind", selection: $model.kind) {
                 Text("All").tag(GraphNode.Kind?.none)
@@ -111,31 +128,27 @@ struct EntitiesView: View {
                 .textFieldStyle(.roundedBorder)
             Toggle("Show hidden", isOn: $model.showHidden).toggleStyle(.checkbox)
                 .font(.callout)
-            if model.entities.isEmpty {
-                ContentUnavailableView(
-                    model.query.isEmpty ? "No entities yet" : "No matches",
-                    systemImage: "person.2",
-                    description: Text(model.query.isEmpty ? emptyHint : "Try another name.")
-                )
-            } else {
-                List(model.entities, selection: $model.selectedID) { entity in
-                    HStack(spacing: 8) {
-                        Image(systemName: Self.symbol(entity.kind)).foregroundStyle(.secondary)
-                            .frame(width: 18)
-                        Text(entity.name).lineLimit(1)
-                        Spacer(minLength: 8)
-                        Text(entity.noteCount.formatted()).monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    .tag(entity.id)
-                    .accessibilityLabel(
-                        "\(entity.name), \(Self.singular(entity.kind)), \(Self.noteCount(entity.noteCount))"
-                    )
-                }
-                .listStyle(.sidebar)
-            }
         }
-        .padding(.top, 12).padding(.horizontal, 12)
+    }
+
+    private var entityList: some View {
+        List(model.entities, selection: $model.selectedID) { entity in
+            HStack(spacing: 8) {
+                Image(systemName: Self.symbol(entity.kind)).foregroundStyle(.secondary)
+                    .frame(width: 18)
+                Text(entity.name).lineLimit(1)
+                Spacer(minLength: 8)
+                Text(entity.noteCount.formatted()).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+            .tag(entity.id)
+            .accessibilityLabel(
+                "\(entity.name), \(Self.singular(entity.kind)), \(Self.noteCount(entity.noteCount))"
+            )
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
     }
 
     /// Says how entities get found, since nothing reads notes unless asked or turned on.
