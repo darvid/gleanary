@@ -28,7 +28,7 @@ import Testing
         let response = try #require(entries.last)
         #expect(response.replies(working: false).map(\.id) == [messages[3].id])
         #expect(response.activity(working: false).map(\.id) == [messages[1].id, messages[2].id])
-        #expect(response.id == messages[1].id)
+        #expect(response.id == task)
     }
 
     @Test func neverGroupsAcrossUsersTasksOrUnassociatedMessages() {
@@ -68,6 +68,28 @@ import Testing
         #expect(updated.messages[0].references == [artifact, source])
         #expect(updated.messages[1].references == [artifact])
         #expect(updated.replies(working: true).map(\.id) == [reply.id])
+    }
+
+    @Test func draftedReplyHasAResponsePlaceThatKeepsItsIdentity() {
+        let task = UUID(), other = UUID()
+        let request = message("user", task: task)
+        let later = message("user", task: other)
+        let drafting = ConversationFeedEntry.entries(in: [request, later], drafting: [task])
+        #expect(drafting.map(\.id) == [request.id, task, later.id])
+        #expect(drafting[1].messages.isEmpty)
+        #expect(drafting[1].taskID == task)
+        let reply = message("assistant", task: task)
+        let posted = ConversationFeedEntry.entries(in: [request, reply], drafting: [task])
+        #expect(posted.map(\.id) == [request.id, task])
+        #expect(posted[1].messages.map(\.id) == [reply.id])
+    }
+
+    @Test @MainActor func revealPacerSettlesPastTheEndOnceStreamingStops() async {
+        let pacer = RevealPacer()
+        pacer.count = 12
+        pacer.streaming = false
+        await pacer.run()
+        #expect(pacer.frontier >= 12 + RevealPacer.fadeLength)
     }
 
     @Test @MainActor func nativeActivityExpandsAndKeepsResultsAndReviewVisible() async throws {

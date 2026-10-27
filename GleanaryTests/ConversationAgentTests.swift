@@ -97,6 +97,43 @@ private actor ConversationSourceFetcher: SourceFetching {
     }
 }
 
+/// Streams each turn's text in two growing drafts before returning the turn.
+private actor StreamingToolFixture: AgentResponding {
+    private var turns: [AgentTurn]
+
+    init(_ turns: [AgentTurn]) {
+        self.turns = turns
+    }
+
+    func agentTurn(instructions _: String, input _: [Data], tools _: Data) async throws
+        -> AgentTurn
+    {
+        guard !turns.isEmpty else { throw ConversationError.invalidReply }
+        return turns.removeFirst()
+    }
+
+    func agentTurn(
+        instructions: String,
+        input: [Data],
+        tools: Data,
+        text: @escaping @Sendable (String) async -> Void
+    ) async throws -> AgentTurn {
+        let turn = try await agentTurn(instructions: instructions, input: input, tools: tools)
+        if !turn.text.isEmpty {
+            await text(String(turn.text.prefix(turn.text.count / 2)))
+            await text(turn.text)
+        }
+        return turn
+    }
+}
+
+private actor DraftRecorder {
+    private(set) var drafts: [String] = []
+    func record(_ text: String) {
+        drafts.append(text)
+    }
+}
+
 private actor ConversationToolCounter {
     private(set) var count = 0
     func dispatch(_: AgentCall) -> String {
@@ -657,6 +694,26 @@ private actor ConversationToolCounter {
             try await loop.run(input: [], dispatch: { await counter.dispatch($0) }, progress: {})
         }
         #expect(await counter.count == LibraryAgent.maximumCalls)
+    }
+
+    @Test func toolLoopStreamsTheReplyAndWithdrawsTextBeforeToolCalls() async throws {
+        let model = StreamingToolFixture([
+            AgentTurn(
+                calls: [AgentCall(id: "call-1", name: "fixture", arguments: "{}")],
+                text: "Checking"
+            ),
+            AgentTurn(text: "Done."),
+        ])
+        let recorder = DraftRecorder()
+        let loop = ToolLoop(model: model, instructions: "Fixture", tools: Data("[]".utf8))
+        let reply = try await loop.run(
+            input: [],
+            dispatch: { _ in "{}" },
+            progress: {},
+            text: { await recorder.record($0) }
+        )
+        #expect(reply == "Done.")
+        #expect(await recorder.drafts == ["Chec", "Checking", "", "Do", "Done."])
     }
 
     @Test func cancellationDuringAModelTurnExecutesNoTools() async throws {

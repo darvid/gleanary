@@ -858,13 +858,17 @@ struct MarkdownPreview: View {
     let markdown: String
     var font: Font = .body
     var readingFont: ReadingFont?
+    /// Fades in the end of the last block while a reply streams.
+    var trailingFade: TrailingFade?
 
     var body: some View {
+        let blocks = Self.blocks(markdown)
         VStack(alignment: .leading, spacing: 14) {
-            ForEach(Array(Self.blocks(markdown).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                let fade = index == blocks.count - 1 ? trailingFade : nil
                 if block.hasPrefix("```") {
-                    Text(block.components(separatedBy: "\n").dropFirst().dropLast()
-                        .joined(separator: "\n"))
+                    fading(Text(block.components(separatedBy: "\n").dropFirst().dropLast()
+                            .joined(separator: "\n")), fade)
                         .font(readingFont
                             .map { .system(size: $0.size, design: .monospaced) } ?? .body
                             .monospaced())
@@ -898,7 +902,8 @@ struct MarkdownPreview: View {
                         nativeFont: nativeFont(
                             scale: readingFont == nil ? 1 : (heading == 1 ? 17.0 / 14 : 1),
                             style: heading == 1 ? .title2 : .headline, weight: .semibold
-                        )
+                        ),
+                        fade: fade
                     )
                     .font(readingFont?.scaledFont(
                         heading == 1 ? 17.0 / 14 : 1,
@@ -909,24 +914,28 @@ struct MarkdownPreview: View {
                 } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
                         Text("•").foregroundStyle(.tint).accessibilityHidden(true)
-                        inlineText(String(block.dropFirst(2)), lineSpacing: 3).lineSpacing(3)
+                        inlineText(String(block.dropFirst(2)), lineSpacing: 3, fade: fade)
+                            .lineSpacing(3)
                     }
                 } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
                           let marker = block.firstIndex(of: ".")
                 {
                     HStack(alignment: .top, spacing: 10) {
                         Text(String(block[...marker])).foregroundStyle(.secondary)
-                        inlineText(String(block[block.index(after: marker)...])
-                            .trimmingCharacters(in: .whitespaces))
+                        inlineText(
+                            String(block[block.index(after: marker)...])
+                                .trimmingCharacters(in: .whitespaces),
+                            fade: fade
+                        )
                     }
                 } else if let quote = Self.quoteText(block) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "quote.opening").font(.caption).accessibilityHidden(true)
-                        inlineText(quote, lineSpacing: 4, color: .secondaryLabelColor)
+                        inlineText(quote, lineSpacing: 4, color: .secondaryLabelColor, fade: fade)
                             .lineSpacing(4)
                     }.foregroundStyle(.secondary).padding(.leading, 12)
                 } else {
-                    inlineText(block, lineSpacing: 4).lineSpacing(4)
+                    inlineText(block, lineSpacing: 4, fade: fade).lineSpacing(4)
                 }
             }
         }
@@ -1042,16 +1051,25 @@ struct MarkdownPreview: View {
 
     @ViewBuilder private func inlineText(
         _ source: String, nativeFont: NSFont? = nil, lineSpacing: CGFloat = 0,
-        color: NSColor = .labelColor
+        color: NSColor = .labelColor, fade: TrailingFade? = nil
     ) -> some View {
         let text = Self.inline(source)
+        // Linked text is AppKit-drawn, so it streams in without the fade.
         if text.runs.contains(where: { $0.link != nil }) {
             MarkdownLinkText(
                 text: text, font: nativeFont ?? self.nativeFont(), color: color,
                 lineSpacing: lineSpacing
             )
         } else {
-            Text(text)
+            fading(Text(text), fade)
+        }
+    }
+
+    @ViewBuilder private func fading(_ text: Text, _ fade: TrailingFade?) -> some View {
+        if let fade {
+            text.textRenderer(fade)
+        } else {
+            text
         }
     }
 

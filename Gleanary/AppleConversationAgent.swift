@@ -21,7 +21,22 @@ extension AppleConversationInference: AgentResponding {
         let reply: String
     }
 
+    /// Snapshots render the turn generated so far as if complete; calls precede the reply.
+    private struct PartialTurn: Decodable {
+        let calls: [LocalCall]?
+        let reply: String?
+    }
+
     func agentTurn(instructions: String, input: [Data], tools: Data) async throws -> AgentTurn {
+        try await agentTurn(instructions: instructions, input: input, tools: tools) { _ in }
+    }
+
+    func agentTurn(
+        instructions: String,
+        input: [Data],
+        tools: Data,
+        text: @escaping @Sendable (String) async -> Void
+    ) async throws -> AgentTurn {
         let instructions = instructions + Self.turnInstructions
         let prompt = try Self.agentPrompt(input: input, tools: tools, instructions: instructions)
         let schema = try Self.agentSchema(tools: tools)
@@ -30,16 +45,26 @@ extension AppleConversationInference: AgentResponding {
         }
         let session = LanguageModelSession(instructions: instructions)
         do {
-            let response = try await session.respond(
+            var json = ""
+            var streamed = ""
+            for try await snapshot in session.streamResponse(
                 to: prompt,
                 schema: schema,
                 options: GenerationOptions(maximumResponseTokens: 1800)
-            )
+            ) {
+                try Task.checkCancellation()
+                json = snapshot.content.jsonString
+                // A turn that requests tools has no reply to show.
+                guard let partial = try? JSONDecoder().decode(
+                    PartialTurn.self,
+                    from: Data(json.utf8)
+                ), partial.calls?.isEmpty ?? true,
+                let reply = partial.reply, reply != streamed else { continue }
+                streamed = reply
+                await text(reply)
+            }
             try Task.checkCancellation()
-            let result = try JSONDecoder().decode(
-                LocalTurn.self,
-                from: Data(response.content.jsonString.utf8)
-            )
+            let result = try JSONDecoder().decode(LocalTurn.self, from: Data(json.utf8))
             let calls = result.calls.map { AgentCall(
                 id: UUID().uuidString,
                 name: $0.name,

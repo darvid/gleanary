@@ -294,7 +294,10 @@ struct ConversationView: View {
                         followLatest = false; Task { await model.loadOlder() }
                     }
                 }
-                ForEach(ConversationFeedEntry.entries(in: model.messages)) { entry in
+                ForEach(ConversationFeedEntry.entries(
+                    in: model.messages,
+                    drafting: Set(model.replyDrafts.keys)
+                )) { entry in
                     if let message = entry.userMessage {
                         messageRow(message)
                             .id(entry.id)
@@ -455,6 +458,11 @@ struct ConversationView: View {
         let working = entry.taskID.map { model.isWorking(on: $0) } ?? false
         let activity = entry.activity(working: working)
         let replies = entry.replies(working: working)
+        let draft = entry.taskID.flatMap { model.replyDrafts[$0] }
+        // The posted reply takes over its draft's view, so the reveal carries on.
+        let drafting = draft.map { draft in !replies.contains { $0.sequence > draft.after } }
+            ?? false
+        let latest = drafting ? nil : replies.last
         let task = model.tasks.first { $0.id == entry.taskID }
         return VStack(alignment: .leading, spacing: 12) {
             Label("Gleanary", systemImage: "bubble.left")
@@ -484,8 +492,14 @@ struct ConversationView: View {
                         }
                     }
                 }
-                ForEach(replies) { message in
+                ForEach(drafting ? replies : replies.dropLast()) { message in
                     messageText(message)
+                }
+                if let live = drafting ? draft?.text : latest.map(displayedMarkdown) {
+                    StreamingMarkdown(live, streaming: draft != nil)
+                        .textSelection(.enabled)
+                        .help(latest?.createdAt.formatted(date: .abbreviated, time: .shortened)
+                            ?? "")
                 }
                 // Keep each saved result visible once; activity retains per-message provenance.
                 ForEach(entry.referenceIDs, id: \.self) { id in
@@ -501,9 +515,12 @@ struct ConversationView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private func displayedMarkdown(_ message: ConversationMessage) -> String {
+        researchResult(in: message) == nil ? message.text : message.textWithoutResearchBibliography
+    }
+
     private func messageText(_ message: ConversationMessage) -> some View {
-        MarkdownPreview(markdown: researchResult(in: message) == nil
-            ? message.text : message.textWithoutResearchBibliography)
+        MarkdownPreview(markdown: displayedMarkdown(message))
             .textSelection(.enabled)
             .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
     }

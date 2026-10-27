@@ -41,7 +41,8 @@ actor AgentCoordinator {
         selected: [UUID],
         userSelected: Bool = false,
         existingCaptureID: UUID? = nil,
-        changed: @escaping @Sendable () async -> Void
+        changed: @escaping @Sendable () async -> Void,
+        streamed: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws {
         guard !executing else { throw ConversationError.busy }
         executing = true
@@ -56,7 +57,8 @@ actor AgentCoordinator {
                 request: request,
                 selected: selected,
                 model: model,
-                changed: changed
+                changed: changed,
+                streamed: streamed
             )
             return
         }

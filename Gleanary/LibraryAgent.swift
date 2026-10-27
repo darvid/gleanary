@@ -18,6 +18,25 @@ struct AgentTurn: Sendable {
 /// Providers implement one model-chosen turn; the application owns tool execution and budgets.
 protocol AgentResponding: Sendable {
     func agentTurn(instructions: String, input: [Data], tools: Data) async throws -> AgentTurn
+    /// Streaming providers report the turn's reply text so far while generating it. The text is
+    /// a display draft only; the returned turn stays authoritative.
+    func agentTurn(
+        instructions: String,
+        input: [Data],
+        tools: Data,
+        text: @escaping @Sendable (String) async -> Void
+    ) async throws -> AgentTurn
+}
+
+extension AgentResponding {
+    func agentTurn(
+        instructions: String,
+        input: [Data],
+        tools: Data,
+        text _: @escaping @Sendable (String) async -> Void
+    ) async throws -> AgentTurn {
+        try await agentTurn(instructions: instructions, input: input, tools: tools)
+    }
 }
 
 struct AgentOutcome: Sendable {
@@ -77,7 +96,8 @@ struct LibraryAgent {
         history: [ConversationTurn],
         selected: [UUID],
         recentItems: [UUID] = [],
-        progress: @Sendable (String) async -> Void
+        progress: @Sendable (String) async -> Void,
+        text: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> AgentOutcome {
         var input = try history.suffix(8).map {
             try JSONSerialization.data(withJSONObject: [
@@ -104,7 +124,7 @@ struct LibraryAgent {
                 includingSourceCaptures: sourceCaptures != nil
             )
         )
-        let text = try await loop.run(input: input) { call in
+        let reply = try await loop.run(input: input) { call in
             if call.name == ConversationWorkflows.toolName, let workflows {
                 return try await workflows.run(call, toolbox: toolbox)
             }
@@ -114,11 +134,11 @@ struct LibraryAgent {
             return await toolbox.run(call)
         } progress: {
             await progress(toolbox.progress)
-        }
+        } text: { await text($0) }
         try Task.checkCancellation()
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard let reply, !reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { throw ConversationError.invalidReply }
-        return await outcome(text)
+        return await outcome(reply)
     }
 
     private func outcome(_ text: String) async -> AgentOutcome {
@@ -146,7 +166,8 @@ struct ToolLoop {
         input initial: [Data],
         dispatch: (AgentCall) async throws -> String,
         progress: () async -> Void,
-        finished: () async -> Bool = { false }
+        finished: () async -> Bool = { false },
+        text: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws -> String? {
         var input = initial
         var calls = 0
@@ -154,11 +175,13 @@ struct ToolLoop {
         for _ in 0 ..< LibraryAgent.maximumTurns {
             try Task.checkCancellation()
             let turn = try await model.agentTurn(
-                instructions: instructions, input: input, tools: tools
+                instructions: instructions, input: input, tools: tools, text: text
             )
             try Task.checkCancellation()
             input += turn.output
             guard !turn.calls.isEmpty else { return turn.text }
+            // Text before tool calls is not the reply; withdraw its draft.
+            await text("")
             for call in turn.calls {
                 try Task.checkCancellation()
                 calls += 1

@@ -306,6 +306,15 @@ struct ChatGPTConversationInference: ConversationInferring {
 
 extension ChatGPTConversationInference: AgentResponding {
     func agentTurn(instructions: String, input: [Data], tools: Data) async throws -> AgentTurn {
+        try await agentTurn(instructions: instructions, input: input, tools: tools) { _ in }
+    }
+
+    func agentTurn(
+        instructions: String,
+        input: [Data],
+        tools: Data,
+        text: @escaping @Sendable (String) async -> Void
+    ) async throws -> AgentTurn {
         let fence = try await session.authorizationFence()
         let body = try Self.agentRequestBody(
             model: model, instructions: instructions, input: input, tools: tools
@@ -314,9 +323,13 @@ extension ChatGPTConversationInference: AgentResponding {
         var decoder = ChatGPTAgentDecoder()
         for try await line in session.transport.lines(for: request) {
             try Task.checkCancellation()
+            let streamed = decoder.streamedText
             if let turn = try decoder.consume(line) {
                 try await session.validateFence(fence)
                 return turn
+            }
+            if decoder.streamedText != streamed {
+                await text(decoder.streamedText)
             }
         }
         if let turn = try decoder.consume("") {
@@ -347,6 +360,8 @@ extension ChatGPTConversationInference: AgentResponding {
 struct ChatGPTAgentDecoder {
     private var dataLines: [String] = []
     private var turn = AgentTurn()
+    /// Text deltas so far, for display while the turn is generated.
+    private(set) var streamedText = ""
 
     mutating func consume(_ line: String) throws -> AgentTurn? {
         guard line.utf8.count <= 400_000 else { throw ChatGPTError.invalidStream }
@@ -368,6 +383,8 @@ struct ChatGPTAgentDecoder {
             as? [String: Any], let type = event["type"] as? String
         else { throw ChatGPTError.invalidStream }
         switch type {
+        case "response.output_text.delta":
+            try appendDelta(event)
         case "response.output_item.done":
             guard let item = event["item"] as? [String: Any]
             else { throw ChatGPTError.invalidStream }
@@ -387,6 +404,12 @@ struct ChatGPTAgentDecoder {
             break
         }
         return nil
+    }
+
+    private mutating func appendDelta(_ event: [String: Any]) throws {
+        guard let delta = event["delta"] as? String else { throw ChatGPTError.invalidStream }
+        streamedText += delta
+        guard streamedText.utf8.count <= 64000 else { throw ChatGPTError.invalidStream }
     }
 
     private mutating func collect(_ item: [String: Any]) throws {
