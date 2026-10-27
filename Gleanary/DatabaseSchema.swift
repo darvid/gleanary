@@ -476,6 +476,20 @@ enum DatabaseSchema {
             CREATE INDEX agent_changes_note ON agent_changes(noteID, kind);
             """)
         }
+        // Rebuilding agent_changes for renames dropped Activity's trigger on it; restore it
+        // unchanged, whether or not that rebuild ran without it.
+        migrator.registerMigration("activity-automation-revision-trigger-v2") { db in
+            try db.execute(sql: """
+            DROP TRIGGER IF EXISTS activity_automation_revision;
+            CREATE TRIGGER activity_automation_revision AFTER INSERT ON agent_changes
+                WHEN new.status = 'applied' AND new.appliedRevision IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM automation_runs WHERE id = new.taskID) BEGIN
+                UPDATE activity_events SET actor = 'automation', groupID = new.taskID,
+                    batchLabel = 'Automation changes'
+                    WHERE revisionID = new.appliedRevision AND noteID = new.noteID;
+            END;
+            """)
+        }
         try migrator.migrate(database)
     }
 
