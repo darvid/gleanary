@@ -197,6 +197,104 @@ struct FixedRelevance: LinkRelevanceScoring {
         #expect(companion?.score == 0.19)
     }
 
+    /// A library with the synthetic video and its auto-saved essay.
+    private func balancedLibrary() async throws -> (URL, DocumentStore, IngestionEngine) {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        try await store.seedExampleCategories()
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .balanced) }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        return (root, store, engine)
+    }
+
+    @Test func probationArchivesOnlyUnusedAutomaticSaves() async throws {
+        let (root, store, _) = try await balancedLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let essay = try #require(await store.documents().first { $0.name == "Swarm scaling" })
+        let later = Date().addingTimeInterval(AcquisitionPolicy.probation + 60)
+        // Not due yet.
+        #expect(try await store.expireUnusedAcquisitions() == 0)
+        // Opening it ends probation.
+        try await store.recordAcquisitionOpened(essay.id)
+        #expect(try await store.expireUnusedAcquisitions(now: later) == 0)
+        try await store.readyDatabase().write { db in
+            try db.execute(sql: "UPDATE acquisition_candidates SET openedAt = NULL")
+        }
+        // Filing it outside the Inbox counts as using it.
+        let home = try #require(await store.categories().first { !$0.isInbox })
+        try await store.fileNote(essay.id, categoryID: home.id)
+        #expect(try await store.expireUnusedAcquisitions(now: later) == 0)
+        try await store.readyDatabase().write { db in
+            try db.execute(sql: "DELETE FROM note_categories")
+        }
+        #expect(try await store.expireUnusedAcquisitions(now: later) == 1)
+        let reason = try await store.readyDatabase().read { db in
+            try String.fetchOne(
+                db, sql: "SELECT archiveReason FROM notes WHERE id = ? AND archivedAt IS NOT NULL",
+                arguments: [essay.id.uuidString]
+            )
+        }
+        #expect(reason == "Saved automatically and not opened within 30 days.")
+        let digest = try await store.acquisitionDigest(
+            from: .distantPast, to: later.addingTimeInterval(60)
+        )
+        #expect(digest.expired == 1)
+        #expect(digest.saved.isEmpty)
+    }
+
+    @Test func mutingASiteFiltersItsLinks() async throws {
+        let essay = try link(CreatorVideoFixture.essay, context: "I'd recommend reading this one")
+        let plans = AcquisitionPlanner.plan(
+            [essay], sourceURL: nil, policy: SourceAcquisitionLevel.balanced.policy,
+            savedToday: 0, saved: [], muted: ["essays.example.org"]
+        )
+        #expect(plans.first?.state == .filtered)
+        #expect(plans.first?.reason == "Muted site")
+
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        try await store.muteAcquisitionHost("www.essays.example.org")
+        #expect(try await store.mutedAcquisitionHosts() == ["essays.example.org"])
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .balanced) }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        #expect(try await store.documents().count == 1)
+        try await store.unmuteAcquisitionHost("essays.example.org")
+        #expect(try await store.mutedAcquisitionHosts().isEmpty)
+    }
+
+    @Test func digestListsAutomaticSavesWithWhereTheyWereFound() async throws {
+        let (root, store, _) = try await balancedLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let digest = try await store.acquisitionDigest(
+            from: .distantPast, to: Date().addingTimeInterval(60)
+        )
+        let item = try #require(digest.saved.first)
+        #expect(item.title == "Swarm scaling")
+        #expect(item.originTitle.contains("Synthetic agents talk"))
+        let section = DigestNote.foundForYou(digest.saved, expired: 2)
+        #expect(section.contains("## Found for you"))
+        #expect(section.contains(
+            "- [Swarm scaling](gleanary://note/\(item.noteID.uuidString)): recommended by the creator in ["
+        ))
+        #expect(section.contains("Archived 2 items saved automatically but never opened."))
+        #expect(DigestNote.foundForYou([], expired: 0).isEmpty)
+    }
+
     @Test func creatorTextIsASeparateSectionThatSummariesSkip() async throws {
         let url = try #require(URL(string: "https://www.youtube.com/watch?v=abcdefghijk"))
         let target = try #require(try MediaTarget.parse(url))

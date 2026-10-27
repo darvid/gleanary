@@ -67,6 +67,8 @@ struct AcquisitionPolicy: Sendable, Equatable {
 
     /// Each hop further from your own saves counts for less.
     static let hopDecay = 0.6
+    /// How long an automatic save may go unused before it is archived.
+    static let probation: TimeInterval = 30 * 24 * 60 * 60
 
     /// How closeness to the library scales a score: unrelated links drop, close ones rise.
     static func relevanceFactor(_ similarity: Double?) -> Double {
@@ -127,6 +129,8 @@ enum AcquisitionState: String, Codable, Sendable {
     case rejected
     /// Self-promotion, social profiles and the like.
     case filtered
+    /// Saved automatically, then archived after going unused through probation.
+    case expired
 }
 
 struct AcquisitionCandidate: Identifiable, Sendable, Equatable {
@@ -405,11 +409,21 @@ enum AcquisitionPlanner {
         hop: Int = 1,
         relevance: [String: Double] = [:],
         savedToday: Int,
-        saved: Set<String>
+        saved: Set<String>,
+        muted: Set<String> = []
     ) -> [Plan] {
         let decay = pow(AcquisitionPolicy.hopDecay, Double(max(0, hop - 1)))
         let scored = links.map { link in
-            let base = AcquisitionScorer.score(link, sourceURL: sourceURL)
+            var base = AcquisitionScorer.score(link, sourceURL: sourceURL)
+            if muted
+                .contains(AcquisitionScorer.domain(link.url.host(percentEncoded: false) ?? ""))
+            {
+                base = AcquisitionScorer.Score(
+                    value: 0,
+                    provenance: base.provenance,
+                    filtered: "Muted site"
+                )
+            }
             let factor = policy.usesRelevance
                 ? AcquisitionPolicy.relevanceFactor(relevance[link.identity]) : 1
             let value = min(1, base.value * factor * decay)

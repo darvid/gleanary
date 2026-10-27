@@ -27,7 +27,7 @@ extension IngestionEngine {
                 : [:]
             let plans = AcquisitionPlanner.plan(
                 links, sourceURL: sourceURL, policy: policy, hop: hop + 1, relevance: closeness,
-                savedToday: known.savedToday, saved: known.saved
+                savedToday: known.savedToday, saved: known.saved, muted: known.muted
             )
             try await store.recordAcquisitions(plans, foundIn: noteID, hop: hop + 1)
             if !deferred {

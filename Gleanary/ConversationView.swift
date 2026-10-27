@@ -776,6 +776,9 @@ struct ConversationView: View {
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
         .contextMenu {
             Button("Open in Browser") { NSWorkspace.shared.open(candidate.url) }
+            Button("Don't Suggest Links from \(candidate.host)") {
+                Task { await model.muteAcquisitionHost(candidate.host) }
+            }
         }
         .accessibilityElement(children: .contain)
     }
@@ -1281,7 +1284,7 @@ struct ConversationSettings: View {
                 systemImage: KnowledgeSettingsPage.capture.symbol,
                 value: KnowledgeSettingsPage.capture
             ) {
-                CaptureSettingsView()
+                CaptureSettingsView(store: model.store, categories: model.categories)
             }
             Tab(
                 KnowledgeSettingsPage.filing.title,

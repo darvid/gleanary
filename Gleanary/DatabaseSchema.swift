@@ -445,6 +445,7 @@ enum DatabaseSchema {
         }
         migrator.registerMigration("typed-notes-and-tasks-v1", migrate: NoteWorkspaceSchema.create)
         migrator.registerMigration("source-acquisition-v1", migrate: AcquisitionSchema.create)
+        migrator.registerMigration("source-acquisition-v2", migrate: AcquisitionSchema.addProbation)
         migrator.registerMigration("agent-category-rename-v1") { db in
             try db.execute(sql: """
             CREATE TABLE agent_changes_v6 (

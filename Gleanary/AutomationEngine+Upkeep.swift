@@ -311,8 +311,12 @@ extension AutomationEngine {
         let written = config.usesWriter
             ? try await writtenDigest(items, total: total, from: start, to: now, config, &run)
             : nil
+        var document = written?.document
+            ?? DigestNote.document(items, total: total, from: start, to: now)
+        let found = try await store.acquisitionDigest(from: start, to: now)
+        document.markdown += DigestNote.foundForYou(found.saved, expired: found.expired)
         let note = try await store.writeAutomationNote(
-            written?.document ?? DigestNote.document(items, total: total, from: start, to: now),
+            document,
             reason: "Written by the weekly digest.",
             runID: run.id,
             at: now
@@ -440,6 +444,26 @@ enum DigestNote {
             name: "Weekly digest: \(range)",
             markdown: lines.joined(separator: "\n\n")
         )
+    }
+
+    /// Sources saved automatically this period, each with where it was found.
+    static func foundForYou(_ items: [AcquisitionDigestItem], expired: Int) -> String {
+        guard !items.isEmpty || expired > 0 else { return "" }
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(AgentCoordinator.markdownLabel(title))](gleanary://note/\(id.uuidString))"
+        }
+        var lines = ["\n\n## Found for you"]
+        if !items.isEmpty {
+            lines.append(items.map {
+                "- \(link($0.title, $0.noteID)): \($0.reason.lowercased()) in \(link($0.originTitle, $0.originID))"
+            }.joined(separator: "\n"))
+        }
+        if expired > 0 {
+            lines.append(
+                "Archived \(AutomationEngine.itemCount(expired)) saved automatically but never opened."
+            )
+        }
+        return lines.joined(separator: "\n\n")
     }
 
     static func range(_ start: Date, _ end: Date) -> String {

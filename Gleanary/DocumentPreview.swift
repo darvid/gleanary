@@ -6,6 +6,10 @@ import SwiftUI
         didSet {
             if selectedID != oldValue {
                 showsCapturedSource = false
+                // Opening an automatic save ends its probation.
+                if let id = selectedID, let store {
+                    Task { try? await store.recordAcquisitionOpened(id) }
+                }
             }
         }
     }

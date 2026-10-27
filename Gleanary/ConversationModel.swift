@@ -75,6 +75,14 @@ final class ConversationModel {
         await didMutate?()
     }
 
+    /// Stops suggesting and saving links from this site.
+    func muteAcquisitionHost(_ host: String) async {
+        do {
+            try await store.muteAcquisitionHost(host)
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
     func dismissAcquisition(_ candidate: AcquisitionCandidate) async {
         do {
             try await store.dismissAcquisition(candidate.id)

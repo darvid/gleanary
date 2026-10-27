@@ -160,6 +160,10 @@ actor IngestionEngine {
             active = nil
             await changed()
         }
+        // Cheap when nothing is due; keeps automatic saves from piling up unused.
+        if await (try? store.expireUnusedAcquisitions()) ?? 0 > 0 {
+            await changed()
+        }
     }
 
     func cancel(_ id: UUID) async throws {

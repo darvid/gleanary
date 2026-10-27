@@ -28,13 +28,42 @@ enum AcquisitionSchema {
         CREATE INDEX acquisition_candidates_job ON acquisition_candidates(captureJobID);
         """)
     }
+
+    /// What became of a saved candidate, for probation and the digest, and sites you muted.
+    static func addProbation(_ db: Database) throws {
+        try db.execute(sql: """
+        ALTER TABLE acquisition_candidates ADD COLUMN savedNoteID TEXT;
+        ALTER TABLE acquisition_candidates ADD COLUMN savedAt REAL;
+        ALTER TABLE acquisition_candidates ADD COLUMN openedAt REAL;
+        CREATE INDEX acquisition_candidates_saved ON acquisition_candidates(savedNoteID);
+        CREATE TABLE acquisition_muted_hosts (
+            host TEXT PRIMARY KEY NOT NULL,
+            createdAt REAL NOT NULL
+        );
+        """)
+    }
+}
+
+/// An automatic save, for the weekly digest.
+struct AcquisitionDigestItem: Sendable, Equatable {
+    let noteID: UUID
+    let title: String
+    let originID: UUID
+    let originTitle: String
+    let reason: String
 }
 
 extension DocumentStore {
     /// What the planner needs: automatic saves in the last day and which links are already
     /// in the library.
-    func acquisitionContext(identities: [String]) throws -> (savedToday: Int, saved: Set<String>) {
+    func acquisitionContext(
+        identities: [String]
+    ) throws -> (savedToday: Int, saved: Set<String>, muted: Set<String>) {
         try readyDatabase().read { db in
+            let muted = try Set(String.fetchAll(
+                db,
+                sql: "SELECT host FROM acquisition_muted_hosts"
+            ))
             let savedToday = try Int.fetchOne(db, sql: """
             SELECT count(*) FROM acquisition_candidates
             WHERE automatic = 1 AND state IN ('approved','queued') AND createdAt > ?
@@ -45,7 +74,7 @@ extension DocumentStore {
             {
                 saved.insert(identity)
             }
-            return (savedToday, saved)
+            return (savedToday, saved, muted)
         }
     }
 
@@ -130,6 +159,10 @@ extension DocumentStore {
     /// Links a source Gleanary saved on its own to the source that recommended it.
     func linkAcquiredSource(jobID: UUID, noteID: UUID) throws {
         try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE acquisition_candidates SET savedNoteID = ?, savedAt = coalesce(savedAt, ?)
+            WHERE captureJobID = ?
+            """, arguments: [noteID.uuidString, Date().timeIntervalSince1970, jobID.uuidString])
             for candidate in try Self.acquisitionCandidates(
                 sql: "captureJobID = ?", arguments: [jobID.uuidString], in: db
             ) where candidate.foundInNoteID != noteID {
@@ -145,6 +178,110 @@ extension DocumentStore {
                                  "\(candidate.provenance.label) in “\(origin)”.",
                                  Date().timeIntervalSince1970])
             }
+        }
+    }
+
+    /// Opening a saved candidate ends its probation.
+    func recordAcquisitionOpened(_ noteID: UUID) throws {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE acquisition_candidates SET openedAt = ?
+            WHERE savedNoteID = ? AND openedAt IS NULL
+            """, arguments: [Date().timeIntervalSince1970, noteID.uuidString])
+        }
+    }
+
+    /// Archives automatic saves nobody used within `period`: never opened, filed outside the
+    /// Inbox, or linked to anything beyond where they were found. Archiving is reversible.
+    @discardableResult
+    func expireUnusedAcquisitions(
+        olderThan period: TimeInterval = AcquisitionPolicy.probation,
+        now: Date = Date()
+    ) throws -> Int {
+        try activityWrite(actor: "app", label: "Archived unused automatic saves") { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT c.id, c.savedNoteID FROM acquisition_candidates c
+            JOIN notes n ON n.id = c.savedNoteID
+            WHERE c.automatic = 1 AND c.state = 'queued' AND c.openedAt IS NULL
+              AND c.savedAt < ? AND n.deletedAt IS NULL AND n.archivedAt IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM note_categories nc JOIN decimal_categories dc ON dc.id = nc.categoryID
+                WHERE nc.noteID = n.id AND dc.code != ?)
+              AND NOT EXISTS (
+                SELECT 1 FROM note_links l
+                WHERE (l.leftID = n.id OR l.rightID = n.id)
+                  AND l.leftID != c.foundInNoteID AND l.rightID != c.foundInNoteID)
+            """, arguments: [now.timeIntervalSince1970 - period, DecimalCategory.inboxCode])
+            for row in rows {
+                try db.execute(sql: """
+                UPDATE notes SET archivedAt = ?, archiveReason = ? WHERE id = ? AND archivedAt IS NULL
+                """, arguments: [now.timeIntervalSince1970,
+                                 "Saved automatically and not opened within 30 days.",
+                                 row["savedNoteID"] as String])
+                try db.execute(sql: """
+                UPDATE acquisition_candidates SET state = 'expired', reason = 'Unused after probation',
+                    updatedAt = ? WHERE id = ?
+                """, arguments: [now.timeIntervalSince1970, row["id"] as String])
+            }
+            return rows.count
+        }
+    }
+
+    func muteAcquisitionHost(_ host: String) throws {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            INSERT OR IGNORE INTO acquisition_muted_hosts(host, createdAt) VALUES (?, ?)
+            """, arguments: [AcquisitionScorer.domain(host), Date().timeIntervalSince1970])
+            // Pending suggestions from that site go too.
+            try db.execute(sql: """
+            UPDATE acquisition_candidates SET state = 'filtered', reason = 'Muted site', updatedAt = ?
+            WHERE state IN ('suggested','approved') AND (url LIKE ? OR url LIKE ?)
+            """, arguments: [Date().timeIntervalSince1970,
+                             "%://\(AcquisitionScorer.domain(host))/%",
+                             "%://www.\(AcquisitionScorer.domain(host))/%"])
+        }
+    }
+
+    func unmuteAcquisitionHost(_ host: String) throws {
+        try readyDatabase().write { db in
+            try db.execute(
+                sql: "DELETE FROM acquisition_muted_hosts WHERE host = ?",
+                arguments: [host]
+            )
+        }
+    }
+
+    func mutedAcquisitionHosts() throws -> [String] {
+        try readyDatabase().read { db in
+            try String.fetchAll(db, sql: "SELECT host FROM acquisition_muted_hosts ORDER BY host")
+        }
+    }
+
+    /// Automatic saves in a period with where each was found, and how many probation archived.
+    func acquisitionDigest(
+        from start: Date,
+        to end: Date
+    ) throws -> (saved: [AcquisitionDigestItem], expired: Int) {
+        try readyDatabase().read { db in
+            let saved = try Row.fetchAll(db, sql: """
+            SELECT c.savedNoteID, n.name, c.foundInNoteID, o.name AS origin, c.reason
+            FROM acquisition_candidates c
+            JOIN notes n ON n.id = c.savedNoteID JOIN notes o ON o.id = c.foundInNoteID
+            WHERE c.automatic = 1 AND c.savedAt >= ? AND c.savedAt < ?
+              AND n.deletedAt IS NULL AND n.archivedAt IS NULL
+            ORDER BY c.savedAt
+            """, arguments: [start.timeIntervalSince1970, end.timeIntervalSince1970]).map {
+                try AcquisitionDigestItem(
+                    noteID: Self.uuid($0["savedNoteID"]), title: $0["name"],
+                    originID: Self.uuid($0["foundInNoteID"]), originTitle: $0["origin"],
+                    reason: $0["reason"]
+                )
+            }
+            let expired = try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM acquisition_candidates
+            WHERE state = 'expired' AND updatedAt >= ? AND updatedAt < ?
+            """, arguments: [start.timeIntervalSince1970, end.timeIntervalSince1970]) ?? 0
+            return (saved, expired)
         }
     }
 

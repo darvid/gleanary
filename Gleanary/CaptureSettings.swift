@@ -30,6 +30,9 @@ struct CaptureSettings: Sendable, Equatable {
 }
 
 struct CaptureSettingsView: View {
+    var store: DocumentStore?
+    var categories: [DecimalCategory] = []
+    @State private var muted: [String] = []
     @AppStorage(CaptureSettings.summarizeKey) private var summarize = true
     @AppStorage(CaptureSettings.previewsKey) private var previews = true
     @AppStorage(CaptureSettings.acquisitionKey) private var acquisition =
@@ -84,6 +87,23 @@ struct CaptureSettingsView: View {
                         .font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if !muted.isEmpty {
+                    DisclosureGroup("Sites you muted (\(muted.count))") {
+                        ForEach(muted, id: \.self) { host in
+                            HStack {
+                                Text(host)
+                                Spacer()
+                                Button("Unmute") {
+                                    Task {
+                                        try? await store?.unmuteAcquisitionHost(host)
+                                        await loadMuted()
+                                    }
+                                }
+                                .controlSize(.small)
+                            }
+                        }
+                    }
+                }
             } header: {
                 Text("Source acquisition")
             } footer: {
@@ -94,5 +114,10 @@ struct CaptureSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .task { await loadMuted() }
+    }
+
+    private func loadMuted() async {
+        muted = await (try? store?.mutedAcquisitionHosts()) ?? []
     }
 }
