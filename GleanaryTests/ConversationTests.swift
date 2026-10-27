@@ -3334,6 +3334,21 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(throws: ConversationError.self) { try GroundedResearch.schema(ids: []) }
     }
 
+    @Test func quotesSpanningSourceParagraphsRenderAsOneLine() throws {
+        let evidence = [ResearchEvidence(
+            id: "S1E1",
+            title: "Synthetic talk",
+            quote: "They show no care for the\n\nuser and the  surroundings.",
+            noteID: UUID()
+        )]
+        let research = GroundedResearch(points: [.init(
+            text: "The speaker criticizes careless design.",
+            evidenceID: "S1E1"
+        )])
+        let markdown = try research.markdown(evidence: evidence)
+        #expect(markdown.contains("  > They show no care for the user and the surroundings.\n"))
+    }
+
     @Test @MainActor func nativeConversationRendersCompactActivity() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
