@@ -209,12 +209,19 @@ struct EntitiesView: View {
             }
             .font(.callout)
             HStack(spacing: 8) {
-                Button("Find Duplicates") { Task { await model.findDuplicates() } }
-                    .disabled(model.findingDuplicates)
-                    .help("Merge names written differently and suggest likely duplicates")
                 if model.findingDuplicates {
-                    ProgressView().controlSize(.small)
-                } else if !model.suggestions.isEmpty {
+                    // The same quiet pulse as Chat's working state, in place of the button.
+                    HStack(spacing: 4) {
+                        ChatWorkingIndicator(color: .secondary)
+                        Text("Checking for duplicates…").foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                    .accessibilityElement(children: .combine)
+                } else {
+                    Button("Find Duplicates") { Task { await model.findDuplicates() } }
+                        .help("Merge names written differently and suggest likely duplicates")
+                }
+                if !model.findingDuplicates, !model.suggestions.isEmpty {
                     Button("Review \(model.suggestions.count)") { reviewingDuplicates = true }
                         .help("Possible duplicates for you to confirm")
                 }
@@ -484,5 +491,11 @@ private struct DuplicateReview: View {
             .padding(16)
         }
         .frame(width: 560, height: 480)
+        // Nothing left to decide, so there's nothing to show; close rather than sit empty.
+        .onChange(of: model.suggestions.isEmpty) { _, empty in
+            if empty {
+                dismiss()
+            }
+        }
     }
 }
