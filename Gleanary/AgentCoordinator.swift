@@ -184,7 +184,9 @@ actor AgentCoordinator {
         // Captures made from Chat summarize with the same provider.
         await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
         await ingestion.useRecommendationJudge(inference as? any RecommendationJudging)
-        graphProvider = inference as? any GraphExtracting ?? defaultGraphProvider
+        // Reading many notes is bulk work, so it uses the bulk model when one is chosen.
+        graphProvider = filing as? any GraphExtracting ?? inference as? any GraphExtracting
+            ?? defaultGraphProvider
     }
 
     private func toolResponder(forCaptureRetry captureID: UUID?) -> (any AgentResponding)? {

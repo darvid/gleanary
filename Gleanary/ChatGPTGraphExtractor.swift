@@ -3,6 +3,11 @@ import Foundation
 /// Entity and relationship extraction with ChatGPT: the same prompts and validation as on this
 /// Mac, with a larger context, so it works when ChatGPT is the AI provider.
 extension ChatGPTConversationInference: GraphExtracting {
+    /// Each call waits seconds on the model whatever its size, so a few notes run together.
+    var concurrentNotes: Int {
+        4
+    }
+
     func extract(_ text: String) async throws -> GraphProposal {
         try await extract(text, overview: false)
     }

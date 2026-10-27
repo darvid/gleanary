@@ -170,3 +170,36 @@ func timeReadingOneNoteForEntities() async throws {
     ))
     #expect(try await store.graphProgress([note.id]).ready == 1)
 }
+
+/// Opt-in: four notes through chat's entity reading with ChatGPT, read together.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["GLEANARY_LIVE_CHATGPT_BATCH"] == "1"))
+@MainActor func timeReadingFourNotesWithChatGPT() async throws {
+    let session = ChatGPTSession(vault: WriteThroughVault())
+    let suite = "gleanary-live-chatgpt-" + UUID().uuidString
+    let preferences = try #require(UserDefaults(suiteName: suite))
+    defer { preferences.removePersistentDomain(forName: suite) }
+    let connection = ChatGPTConnection(session: session, preferences: preferences)
+    await connection.load()
+    let wanted = ProcessInfo.processInfo.environment["GLEANARY_CHATGPT_MODEL"]
+    let model = try #require(
+        connection.models.first { $0.slug == wanted }?.slug ?? connection.models.first?.slug
+    )
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+    _ = try await store.open()
+    var ids: [UUID] = []
+    for _ in 1 ... 4 {
+        try await ids.append(timingNote(in: store).id)
+    }
+    let coordinator = AgentCoordinator(
+        store: store,
+        graphProvider: ChatGPTConversationInference(session: session, model: model)
+    )
+    let task = try await store.beginConversation("find entities", owner: .assistant)
+    let start = ContinuousClock.now
+    let report = try await coordinator.findEntities(ids, taskID: task, changed: {})
+    let total = (ContinuousClock.now - start) / .seconds(1)
+    print(String(format: "CHATGPT BATCH %@ read %d of 4 notes in %.1fs", model, report.read, total))
+    #expect(report.read == 4)
+}

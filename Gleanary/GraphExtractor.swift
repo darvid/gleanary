@@ -247,6 +247,9 @@ struct MindMapProposal: Codable, Sendable {
 }
 
 protocol GraphExtracting: Sendable {
+    /// How many notes may be read at once. On-device models take one request at a time;
+    /// remote ones mostly wait on the network, so reading a few together saves time.
+    var concurrentNotes: Int { get }
     func extract(_ text: String) async throws -> GraphProposal
     func extractOverview(_ text: String) async throws -> GraphProposal
     func curate(_ work: GraphCurationWork) async throws -> GraphProposal
@@ -261,6 +264,10 @@ protocol GraphExtracting: Sendable {
 }
 
 extension GraphExtracting {
+    var concurrentNotes: Int {
+        1
+    }
+
     func extractOverview(_ text: String) async throws -> GraphProposal {
         try await extract(text)
     }

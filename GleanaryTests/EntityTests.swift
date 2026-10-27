@@ -40,6 +40,30 @@ private actor OrderRecordingProvider: GraphExtracting {
     }
 }
 
+/// Allows three notes at once and records how many calls overlap.
+private actor ConcurrentProvider: GraphExtracting {
+    nonisolated var concurrentNotes: Int {
+        3
+    }
+
+    private var inFlight = 0
+    private(set) var mostAtOnce = 0
+    private(set) var overviews = 0
+
+    func extract(_ text: String) async throws -> GraphProposal {
+        inFlight += 1
+        mostAtOnce = max(mostAtOnce, inFlight)
+        try await Task.sleep(for: .milliseconds(80))
+        inFlight -= 1
+        return OrionGraphProvider().extract(text)
+    }
+
+    func extractOverview(_ text: String) async throws -> GraphProposal {
+        overviews += 1
+        return try await extract(text)
+    }
+}
+
 private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
     let data = (try? JSONSerialization.data(withJSONObject: arguments)) ?? Data()
     return AgentCall(
@@ -392,5 +416,24 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
             "\(steps)"
         )
         #expect(try await store.graphProgress([alpha.id, beta.id]).ready == 2)
+    }
+
+    @Test func remoteProvidersReadSeveralNotesAtOnceAndEachOnlyOnce() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ids: [UUID] = []
+        for index in 1 ... 6 {
+            try await ids.append(store.save(MarkdownDocument(
+                name: "Note \(index)", markdown: "Note \(index). Orion uses retrieval."
+            )).id)
+        }
+        let provider = ConcurrentProvider()
+        let task = try await store.beginConversation("find entities", owner: .assistant)
+        let coordinator = AgentCoordinator(store: store, graphProvider: provider)
+        let report = try await coordinator.findEntities(ids, taskID: task, changed: {})
+        #expect(report.read == 6)
+        #expect(await provider.overviews == 6)
+        #expect(await provider.mostAtOnce > 1)
+        #expect(await provider.mostAtOnce <= 3)
     }
 }

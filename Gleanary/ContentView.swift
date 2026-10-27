@@ -313,7 +313,9 @@ struct ContentView: View {
             await library.useLinkSummarizer(linkSummarizer())
             library.useLinkJudge(linkJudge())
             library.useRecommendationJudge(linkJudge() as? any RecommendationJudging)
-            library.useGraphExtractor(linkJudge() as? any GraphExtracting ?? AppleGraphExtractor())
+            library.useGraphExtractor(
+                currentInference() as? any GraphExtracting ?? AppleGraphExtractor()
+            )
             library.useFiler(currentInference())
         }
         .task {
