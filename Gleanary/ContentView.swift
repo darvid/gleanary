@@ -1030,37 +1030,6 @@ struct ContentView: View {
                 .help(conversation.running ? "Chat is working" : "Chat")
                 .tag(SidebarItem.conversation)
             }
-            // The agents' scheduled work sits with Chat, above the library's content.
-            HStack {
-                let color: Color = colorScheme == .dark || (automating && !chatting)
-                    ? .white : .black
-                Label("Automations", systemImage: "clock.arrow.2.circlepath")
-                    .labelStyle(LibrarySidebarLabelStyle(color: color))
-                Spacer()
-                if library.automations.running != nil {
-                    Image(systemName: "progress.indicator")
-                        .symbolEffect(.variableColor.iterative, options: .repeating)
-                        .font(.caption).foregroundStyle(color.opacity(0.72))
-                        .help("An automation is running")
-                        .accessibilityLabel("An automation is running")
-                }
-                if !library.automations.failed.isEmpty {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                        .help("An automation's last run failed")
-                        .accessibilityLabel("An automation's last run failed")
-                }
-                // Proposals waiting for review, like Captures' count of failures.
-                let waiting = library.automations.pendingCount
-                if waiting > 0 {
-                    Text(waiting.formatted())
-                        .font(.caption.weight(.medium)).monospacedDigit()
-                        .foregroundStyle(color.opacity(0.72))
-                        .countsOnChange(waiting)
-                        .accessibilityLabel(waiting == 1 ? "1 proposal to review"
-                            : "\(waiting) proposals to review")
-                }
-            }.tag(SidebarItem.automations)
             Section {
                 DisclosureGroup(isExpanded: $librarySidebarExpanded) {
                     Label("Notes", systemImage: "note.text")
@@ -1101,6 +1070,15 @@ struct ContentView: View {
                 }
                 .foregroundStyle(sidebarColor(.all))
                 .tag(SidebarItem.library(.all))
+                // What you browse and work on sits with the library; housekeeping follows.
+                Label("Entities", systemImage: "person.2")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingEntities ? .white : .black))
+                    .tag(SidebarItem.entities)
+                Label("Tasks", systemImage: "checklist")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingTasks ? .white : .black))
+                    .tag(SidebarItem.tasks)
             }
             Section {
                 HStack {
@@ -1122,14 +1100,36 @@ struct ContentView: View {
                                 : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
-                Label("Tasks", systemImage: "checklist")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingTasks ? .white : .black))
-                    .tag(SidebarItem.tasks)
-                Label("Entities", systemImage: "person.2")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingEntities ? .white : .black))
-                    .tag(SidebarItem.entities)
+                HStack {
+                    let color: Color = colorScheme == .dark || (automating && !chatting)
+                        ? .white : .black
+                    Label("Automations", systemImage: "clock.arrow.2.circlepath")
+                        .labelStyle(LibrarySidebarLabelStyle(color: color))
+                    Spacer()
+                    if library.automations.running != nil {
+                        Image(systemName: "progress.indicator")
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                            .font(.caption).foregroundStyle(color.opacity(0.72))
+                            .help("An automation is running")
+                            .accessibilityLabel("An automation is running")
+                    }
+                    if !library.automations.failed.isEmpty {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                            .help("An automation's last run failed")
+                            .accessibilityLabel("An automation's last run failed")
+                    }
+                    // Proposals waiting for review, like Captures' count of failures.
+                    let waiting = library.automations.pendingCount
+                    if waiting > 0 {
+                        Text(waiting.formatted())
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(color.opacity(0.72))
+                            .countsOnChange(waiting)
+                            .accessibilityLabel(waiting == 1 ? "1 proposal to review"
+                                : "\(waiting) proposals to review")
+                    }
+                }.tag(SidebarItem.automations)
                 Label("Activity", systemImage: "clock")
                     .labelStyle(LibrarySidebarLabelStyle(color:
                         colorScheme == .dark || showingActivity ? .white : .black))
