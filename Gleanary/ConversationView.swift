@@ -477,13 +477,19 @@ struct ConversationView: View {
                         progress: task?.progress,
                         agent: task?.owner
                     ) {
+                        // The summary line already names a lone agent and carries the role
+                        // symbols, so headings only tell several agents apart.
+                        let namesAuthors = Set(activity.map(\.author)).count > 1
                         VStack(alignment: .leading, spacing: 20) {
                             ForEach(activity) { message in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(message.author.capitalized)
-                                        .font(.callout.weight(.semibold))
-                                        .help(AgentRole(rawValue: message.author)?
-                                            .responsibility ?? "")
+                                    if namesAuthors {
+                                        Text(AgentRole(rawValue: message.author)?.title
+                                            ?? message.author.capitalized)
+                                            .font(.callout.weight(.semibold))
+                                            .help(AgentRole(rawValue: message.author)?
+                                                .responsibility ?? "")
+                                    }
                                     messageText(message)
                                     references(for: message)
                                 }
@@ -869,7 +875,8 @@ struct ConversationView: View {
                             composing = true
                         } label: {
                             HStack(spacing: 12) {
-                                Text("@\(role.rawValue)").frame(width: 100, alignment: .leading)
+                                Label("@\(role.rawValue)", systemImage: role.symbol)
+                                    .frame(width: 120, alignment: .leading)
                                 Text(role.responsibility).font(.caption)
                                     .foregroundStyle(Color.primary.opacity(0.72))
                             }

@@ -7,6 +7,17 @@ enum AgentRole: String, Codable, Sendable, CaseIterable {
         rawValue.capitalized
     }
 
+    /// An SF Symbol that hints at the role's work wherever it is named.
+    var symbol: String {
+        switch self {
+        case .assistant: "bubble.left"
+        case .researcher: "text.magnifyingglass"
+        case .curator: "point.3.connected.trianglepath.dotted"
+        case .librarian: "books.vertical"
+        case .writer: "pencil.line"
+        }
+    }
+
     var responsibility: String {
         switch self {
         case .assistant: "Questions and coordination"

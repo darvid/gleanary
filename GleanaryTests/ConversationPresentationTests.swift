@@ -169,7 +169,7 @@ import Testing
     @MainActor private func clickActivity(in host: NSView, window: NSWindow) async throws {
         // The native disclosure triangle sits in the fixed header of this synthetic fixture.
         let point = host.convert(
-            NSPoint(x: 52, y: host.isFlipped ? 75 : host.bounds.height - 75),
+            NSPoint(x: 52, y: host.isFlipped ? 64 : host.bounds.height - 64),
             to: nil
         )
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
