@@ -109,6 +109,45 @@ extension AutomationEngine {
         }
     }
 
+    // MARK: Source explorer
+
+    /// Saves the most promising links found in your sources, one page at a time, when Source
+    /// acquisition is set to Explore. Saves skip summaries; probation archives unused ones.
+    func exploreSources(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        guard let queued = try await dependencies.explore(config.batchLimit) else {
+            return run.report.append(
+                "Source acquisition isn't set to Explore in Capture settings, so nothing was followed."
+            )
+        }
+        guard !queued.isEmpty else {
+            return run.report.append("No recorded link qualifies today.")
+        }
+        for (index, candidate) in queued.enumerated() {
+            guard try await proceed(&run), let jobID = candidate.captureJobID else { return }
+            await report("Saving \(index + 1) of \(queued.count): \(candidate.host)")
+            if index > 0 {
+                try await Task.sleep(for: dependencies.politeness)
+            }
+            run.examined += 1
+            let job = try await finishCapture(jobID)
+            switch job?.state {
+            case .ready:
+                run.changed += 1
+                var title = candidate.host
+                if let id = job?.noteID, let note = try await store.document(id: id) {
+                    title = note.name
+                }
+                run.note(.changed, job?.noteID, title, "\(candidate.reason) (\(candidate.host)).")
+            case .failed:
+                run.skipped += 1
+                run.note(.skipped, nil, candidate.host, job?.error ?? "The page couldn't be saved.")
+            default:
+                run.skipped += 1
+                run.note(.skipped, nil, candidate.host, "Still saving; it carries on in Captures.")
+            }
+        }
+    }
+
     /// Starts a capture this automation queued and waits for it, checking for Stop as it
     /// goes. Gives up waiting after a while, returning the capture still running.
     private func finishCapture(_ id: UUID) async throws -> CaptureJob? {

@@ -3,7 +3,7 @@ import Foundation
 /// How eagerly Gleanary follows links inside what you save. Each level sets the score a link
 /// needs before Gleanary acts on it and how much it may do; see `AcquisitionPolicy`.
 enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
-    case off, lazy, suggest, balanced, eager
+    case off, lazy, suggest, balanced, eager, explore
 
     static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -16,6 +16,7 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .suggest: "Suggest"
         case .balanced: "Balanced"
         case .eager: "Eager"
+        case .explore: "Explore"
         }
     }
 
@@ -26,6 +27,7 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .suggest: "The most promising links are offered as suggestions to save with one click."
         case .balanced: "Reading the creator recommends is saved automatically and linked back. Other promising links are suggested."
         case .eager: "Links close to what your library covers are saved too, and very strong ones are followed a second hop."
+        case .explore: "Like Eager, and the Source explorer automation keeps following promising links in the background, up to three hops, within a daily budget."
         }
     }
 
@@ -41,6 +43,11 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .eager: AcquisitionPolicy(
                 records: true, suggests: true, maximumHops: 2,
                 autoSaveScore: 0.55, savesPerSource: 10, savesPerDay: 60,
+                autoSaves: [.creatorRecommendation, .creatorLink, .citation], usesRelevance: true
+            )
+        case .explore: AcquisitionPolicy(
+                records: true, suggests: true, maximumHops: 3,
+                autoSaveScore: 0.45, savesPerSource: 10, savesPerDay: 150,
                 autoSaves: [.creatorRecommendation, .creatorLink, .citation], usesRelevance: true
             )
         }
@@ -151,6 +158,16 @@ struct AcquisitionCandidate: Identifiable, Sendable, Equatable {
         url.host(percentEncoded: false).map {
             $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0
         } ?? url.absoluteString
+    }
+}
+
+extension AcquisitionCandidate {
+    /// The link as it was found, for scoring it again.
+    var foundLink: FoundLink {
+        FoundLink(
+            identity: identity, url: url, title: title, context: context,
+            fromCreator: [.creatorRecommendation, .creatorLink].contains(provenance)
+        )
     }
 }
 

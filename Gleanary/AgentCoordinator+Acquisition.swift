@@ -8,6 +8,8 @@ extension AgentCoordinator {
         noteID: UUID,
         changed: @escaping @Sendable () async -> Void
     ) async throws {
+        // Filing has happened by now, so a category's own level can apply.
+        try await ingestion.replanForCategory(foundIn: noteID)
         let queued = try await ingestion.queueApprovedAcquisitions(foundIn: noteID)
         guard !queued.isEmpty else { return }
         try await store.updateConversationTask(
@@ -39,6 +41,18 @@ extension AgentCoordinator {
             taskID: taskID
         )
         await changed()
+    }
+
+    /// Follows a note's links once with Eager rules and waits for the saves.
+    func exploreFrom(
+        _ noteID: UUID,
+        changed: @escaping @Sendable () async -> Void
+    ) async throws -> Int {
+        let queued = try await ingestion.exploreFrom(noteID)
+        guard !queued.isEmpty else { return 0 }
+        await changed()
+        try await ingestion.settle(queued.compactMap(\.captureJobID), changed: changed)
+        return queued.count
     }
 
     /// Saves a suggested link you chose.

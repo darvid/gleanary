@@ -116,7 +116,8 @@ final class LibraryModel {
                 startCapture: { id in await hooks.library?.runAutomationCapture(id) },
                 filer: { await hooks.filer },
                 writer: { try await hooks.currentWriter() },
-                writingStyle: { WritingStyleChoice.current().defaultStyle }
+                writingStyle: { WritingStyleChoice.current().defaultStyle },
+                explore: { try await ingestion.explore(limit: $0) }
             )),
             schedules: schedulesAutomations
         )

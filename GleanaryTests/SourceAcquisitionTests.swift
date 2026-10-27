@@ -54,6 +54,18 @@ struct EssayFetcher: SourceFetching {
     }
 }
 
+struct ExploreProbe: LinkProbing {
+    func probe(_: URL) async -> LinkProbe {
+        .reachable
+    }
+}
+
+struct ExploreArchive: ArchiveLookup {
+    func snapshot(of _: URL) async -> URL? {
+        nil
+    }
+}
+
 /// A constant closeness, so tests do not depend on the embedding model.
 struct FixedRelevance: LinkRelevanceScoring {
     let value: Double
@@ -293,6 +305,117 @@ struct FixedRelevance: LinkRelevanceScoring {
         ))
         #expect(section.contains("Archived 2 items saved automatically but never opened."))
         #expect(DigestNote.foundForYou([], expired: 0).isEmpty)
+    }
+
+    @Test func categoryOverridesPickTheLevel() {
+        var settings = CaptureSettings(acquisition: .balanced)
+        settings.overrides = ["31": .lazy, "40.02": .eager]
+        #expect(settings.acquisition(forCategory: "31") == .lazy)
+        #expect(settings.acquisition(forCategory: "31.04") == .lazy)
+        #expect(settings.acquisition(forCategory: "40.02") == .eager)
+        #expect(settings.acquisition(forCategory: "40") == .balanced)
+        #expect(settings.acquisition(forCategory: nil) == .balanced)
+    }
+
+    @Test func filingIntoALazyCategoryHoldsBackDeferredSaves() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        try await store.seedExampleCategories()
+        let home = try #require(await store.categories().first { !$0.isInbox })
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+            settings: {
+                var settings = CaptureSettings(
+                    summarize: false,
+                    previews: false,
+                    acquisition: .balanced
+                )
+                settings.overrides = [home.code: .lazy]
+                return settings
+            }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run(deferAcquisition: true)
+        let video = try #require(await store.documents().first)
+        #expect(try await store.approvedAcquisitions(foundIn: video.id).count == 1)
+        try await store.fileNote(video.id, categoryID: home.id)
+        try await engine.replanForCategory(foundIn: video.id)
+        #expect(try await store.approvedAcquisitions(foundIn: video.id).isEmpty)
+        #expect(try await engine.queueApprovedAcquisitions(foundIn: video.id).isEmpty)
+    }
+
+    @Test func exploreQueuesFrontierLinksThatNowQualify() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let origin = try await store.save(MarkdownDocument(name: "Origin", markdown: "Notes."))
+        let posted = try link(CreatorVideoFixture.essay, context: "Slides for the talk")
+        try await store.recordAcquisitions(
+            AcquisitionPlanner.plan(
+                [posted], sourceURL: nil, policy: SourceAcquisitionLevel.suggest.policy,
+                savedToday: 0, saved: []
+            ),
+            foundIn: origin.id, hop: 1
+        )
+        for level in [SourceAcquisitionLevel.eager, .explore] {
+            let engine = IngestionEngine(
+                store: store, fetcher: EssayFetcher(),
+                settings: { CaptureSettings(summarize: false, previews: false, acquisition: level)
+                },
+                relevance: FixedRelevance(value: 0.9)
+            )
+            let queued = try await engine.explore(limit: 5)
+            if level == .eager {
+                #expect(queued == nil)
+                continue
+            }
+            #expect(queued?.map(\.url.absoluteString) == [CreatorVideoFixture.essay])
+            try await engine.run()
+            #expect(try await store.documents().contains { $0.name == "Swarm scaling" })
+            #expect(try await engine.explore(limit: 5)?.isEmpty == true)
+        }
+    }
+
+    @Test func exploreFromHereFollowsANotesLinksWhateverTheLevel() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let note = try await store.save(MarkdownDocument(
+            name: "Reading list",
+            markdown: "I recommend [this essay](\(CreatorVideoFixture.essay)) on agents."
+        ))
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .off) },
+            relevance: FixedRelevance(value: 0.5)
+        )
+        let queued = try await engine.exploreFrom(note.id)
+        #expect(queued.map(\.provenance) == [.citation])
+        try await engine.run()
+        let essay = try #require(await store.documents().first { $0.name == "Swarm scaling" })
+        let links = try await store.linkedItems(for: note.id)
+        #expect(links.map(\.document.id) == [essay.id])
+    }
+
+    @Test func sourceExplorerSaysWhenExploreIsOff() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let automation = AutomationEngine(store: store, dependencies: .init(
+            summarize: { $0 }, summarizerIsLocal: { true },
+            probe: ExploreProbe(), archive: ExploreArchive(), judge: { nil },
+            similar: { _, _ in [] }
+        ))
+        let run = await automation.run(AutomationConfig(kind: .sourceExplorer))
+        #expect(run.status == .succeeded)
+        #expect(run.report.first?.contains("isn't set to Explore") == true)
     }
 
     @Test func creatorTextIsASeparateSectionThatSummariesSkip() async throws {

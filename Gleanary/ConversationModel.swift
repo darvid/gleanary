@@ -24,6 +24,7 @@ final class ConversationModel {
     /// Links found inside referenced sources that are suggested or being saved, by source.
     var acquisitionSuggestions: [UUID: [AcquisitionCandidate]] = [:]
     private(set) var savingAcquisitions = Set<UUID>()
+    private(set) var exploringNotes = Set<UUID>()
     /// Reply text a provider is still generating, by task. Display only; never persisted.
     private(set) var replyDrafts: [UUID: ReplyDraft] = [:]
     var composer = ""
@@ -70,6 +71,18 @@ final class ConversationModel {
         let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
         do {
             try await coordinator.saveAcquisition(candidate.id, changed: changed)
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+        await didMutate?()
+    }
+
+    /// Follows a note's links once with Eager rules, whatever the overall level.
+    func exploreFrom(_ noteID: UUID) async {
+        exploringNotes.insert(noteID)
+        defer { exploringNotes.remove(noteID) }
+        let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+        do {
+            _ = try await coordinator.exploreFrom(noteID, changed: changed)
         } catch { self.error = error.localizedDescription }
         await refresh()
         await didMutate?()

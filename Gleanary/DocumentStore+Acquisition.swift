@@ -181,6 +181,61 @@ extension DocumentStore {
         }
     }
 
+    /// Recorded links not yet saved or ruled out, strongest first, for the Source explorer.
+    func acquisitionFrontier(maximumHop: Int, limit: Int) throws -> [AcquisitionCandidate] {
+        try readyDatabase().read { db in
+            try Self.acquisitionCandidates(
+                sql: """
+                state IN ('noticed','suggested') AND hop <= ? AND foundInNoteID IN (
+                    SELECT id FROM notes WHERE deletedAt IS NULL AND archivedAt IS NULL)
+                """,
+                arguments: [maximumHop], order: "score DESC, createdAt", limit: limit, in: db
+            )
+        }
+    }
+
+    func acquisitionCandidates(foundIn noteID: UUID) throws -> [AcquisitionCandidate] {
+        try readyDatabase().read { db in
+            try Self.acquisitionCandidates(
+                sql: "foundInNoteID = ?", arguments: [noteID.uuidString], in: db
+            )
+        }
+    }
+
+    /// Re-judges candidates that are still open; saved, dismissed and filtered ones stay.
+    func replanAcquisitions(_ plans: [(UUID, AcquisitionPlanner.Plan)]) throws {
+        try readyDatabase().write { db in
+            for (id, plan) in plans {
+                try db.execute(sql: """
+                UPDATE acquisition_candidates SET state = ?, score = ?, reason = ?, automatic = ?,
+                    updatedAt = ?
+                WHERE id = ? AND state IN ('noticed','suggested','approved')
+                """, arguments: [plan.state.rawValue, plan.score.value, plan.reason,
+                                 plan.state == .approved, Date().timeIntervalSince1970,
+                                 id.uuidString])
+            }
+        }
+    }
+
+    /// The primary home's code, which picks a per-category acquisition level.
+    func primaryCategoryCode(of noteID: UUID) throws -> String? {
+        try readyDatabase().read { db in
+            try String.fetchOne(db, sql: """
+            SELECT dc.code FROM note_categories nc JOIN decimal_categories dc ON dc.id = nc.categoryID
+            WHERE nc.noteID = ? ORDER BY nc.isPrimary DESC, dc.code LIMIT 1
+            """, arguments: [noteID.uuidString])
+        }
+    }
+
+    /// How many hops from your own saves this note is: 0 unless Gleanary saved it on its own.
+    func acquisitionHop(of noteID: UUID) throws -> Int {
+        try readyDatabase().read { db in
+            try Int.fetchOne(db, sql: """
+            SELECT max(hop) FROM acquisition_candidates WHERE savedNoteID = ?
+            """, arguments: [noteID.uuidString]) ?? 0
+        }
+    }
+
     /// Opening a saved candidate ends its probation.
     func recordAcquisitionOpened(_ noteID: UUID) throws {
         try readyDatabase().write { db in
@@ -288,10 +343,13 @@ extension DocumentStore {
     private static func acquisitionCandidates(
         sql condition: String,
         arguments: StatementArguments,
+        order: String = "createdAt, rowid",
+        limit: Int? = nil,
         in db: Database
     ) throws -> [AcquisitionCandidate] {
         try Row.fetchAll(db, sql: """
-        SELECT * FROM acquisition_candidates WHERE \(condition) ORDER BY createdAt, rowid
+        SELECT * FROM acquisition_candidates WHERE \(condition) ORDER BY \(order)
+        \(limit.map { "LIMIT \(max(0, $0))" } ?? "")
         """, arguments: arguments).compactMap { row in
             guard let url = URL(string: row["url"]),
                   let provenance = AcquisitionProvenance(rawValue: row["provenance"]),
