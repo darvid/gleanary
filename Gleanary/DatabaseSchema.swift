@@ -445,6 +445,36 @@ enum DatabaseSchema {
         }
         migrator.registerMigration("typed-notes-and-tasks-v1", migrate: NoteWorkspaceSchema.create)
         migrator.registerMigration("source-acquisition-v1", migrate: AcquisitionSchema.create)
+        migrator.registerMigration("agent-category-rename-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE agent_changes_v6 (
+                id TEXT PRIMARY KEY NOT NULL,
+                taskID TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('title','summary','filing','category','rename',
+                    'archive','link','relink','note','revision')),
+                noteID TEXT,
+                targetID TEXT,
+                code TEXT,
+                before TEXT NOT NULL,
+                after TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                baseRevision TEXT,
+                appliedRevision TEXT,
+                snapshot TEXT,
+                status TEXT NOT NULL
+                    CHECK(status IN ('pending','applied','rejected','stale','undone')),
+                createdAt REAL NOT NULL
+            );
+            INSERT INTO agent_changes_v6 SELECT id, taskID, ordinal, kind, noteID, targetID, code,
+                before, after, reason, baseRevision, appliedRevision, snapshot, status, createdAt
+                FROM agent_changes;
+            DROP TABLE agent_changes;
+            ALTER TABLE agent_changes_v6 RENAME TO agent_changes;
+            CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+            CREATE INDEX agent_changes_note ON agent_changes(noteID, kind);
+            """)
+        }
         try migrator.migrate(database)
     }
 

@@ -173,6 +173,45 @@ private func turn(_ calls: AgentCall...) -> AgentTurn {
         #expect(await toolbox.changes.map(\.kind) == [.title, .category, .filing])
     }
 
+    @Test func categoryRenameIsReviewedAppliedAndUndone() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await store.saveCategory(code: "35", name: "Audio gear & buying guides")
+        let other = try #require(await store.categories().first { $0.code != "35" })
+        let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+        let missing = await toolbox.run(call("a", "propose_category_rename", [
+            "code": "99", "name": "Audio gear", "reason": "",
+        ]))
+        #expect(missing.contains("No category uses 99"))
+        let taken = await toolbox.run(call("b", "propose_category_rename", [
+            "code": "35", "name": other.name, "reason": "",
+        ]))
+        #expect(taken.contains("already uses that name"))
+        _ = await toolbox.run(call("c", "propose_category_rename", [
+            "code": "35", "name": "Audio gear", "reason": "Shorter",
+        ]))
+        let drafts = await toolbox.changes
+        #expect(drafts.map(\.kind) == [.rename])
+        #expect(drafts.first?.before == "Audio gear & buying guides")
+
+        let task = try await store.beginConversation("rename it", owner: .assistant)
+        try await store.saveAgentChanges(drafts, taskID: task)
+        let change = try #require(await store.agentChanges(taskID: task).first)
+        #expect(try await store.applyAgentChanges([change.id]).applied == 1)
+        #expect(try await store.categories().first { $0.code == "35" }?.name == "Audio gear")
+        #expect(try await store.undoAgentChanges([change.id]) == 1)
+        #expect(try await store.categories().first { $0.code == "35" }?.name
+            == "Audio gear & buying guides")
+
+        // A category renamed by hand since the proposal is left alone.
+        try await store.saveAgentChanges(drafts, taskID: task)
+        let again = try #require(await store.agentChanges(taskID: task).last)
+        let category = try #require(await store.categories().first { $0.code == "35" })
+        try await store.saveCategory(id: category.id, code: "35", name: "Headphones")
+        #expect(try await store.applyAgentChanges([again.id]).stale == 1)
+        #expect(try await store.categories().first { $0.code == "35" }?.name == "Headphones")
+    }
+
     @Test @MainActor func chatRunsTheAgentAndShowsAReviewableChangeset() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
