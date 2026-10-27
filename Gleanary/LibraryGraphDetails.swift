@@ -114,7 +114,7 @@ struct LibraryGraphDetails: View {
                     }
                 })) {
                     ForEach(items) { node in
-                        HStack(alignment: .top, spacing: 10) {
+                        HStack(spacing: 10) {
                             itemMark(node)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(node.label).font(.body.weight(.medium))
@@ -122,6 +122,12 @@ struct LibraryGraphDetails: View {
                                 HStack(spacing: 12) {
                                     Text(inspector.kind(of: node))
                                     Text(countLabel(inspector.connectionCount(for: node.id)))
+                                        .layoutPriority(1)
+                                    // Names the home behind the mark's filing color.
+                                    if node.kind == .document {
+                                        Text(graph.filings(for: node).first?.label ?? "Unfiled")
+                                            .lineLimit(1).truncationMode(.tail)
+                                    }
                                 }.font(.caption).foregroundStyle(.secondary)
                             }
                         }
