@@ -477,13 +477,19 @@ struct ConversationView: View {
                         progress: task?.progress,
                         agent: task?.owner
                     ) {
+                        // The summary line already names a lone agent and carries the role
+                        // symbols, so headings only tell several agents apart.
+                        let namesAuthors = Set(activity.map(\.author)).count > 1
                         VStack(alignment: .leading, spacing: 20) {
                             ForEach(activity) { message in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    Text(message.author.capitalized)
-                                        .font(.callout.weight(.semibold))
-                                        .help(AgentRole(rawValue: message.author)?
-                                            .responsibility ?? "")
+                                    if namesAuthors {
+                                        Text(AgentRole(rawValue: message.author)?.title
+                                            ?? message.author.capitalized)
+                                            .font(.callout.weight(.semibold))
+                                            .help(AgentRole(rawValue: message.author)?
+                                                .responsibility ?? "")
+                                    }
                                     messageText(message)
                                     references(for: message)
                                 }
@@ -654,7 +660,8 @@ struct ConversationView: View {
             title: title ?? model.titles[id] ?? "Saved document",
             selected: model.selectedSources.contains(id),
             available: model.titles[id] != "Deleted document",
-            open: { open(id) }, toggleSource: { model.select(id) }, symbol: symbol, role: role
+            open: { open(id) }, toggleSource: { model.select(id) }, symbol: symbol, role: role,
+            filing: model.referenceDetails[id]?.filing
         )
     }
 
@@ -676,8 +683,14 @@ struct ConversationView: View {
                     }
                 }
             }
-            Text(message.text).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            // Cards stand in for a message that is only links.
+            if !PastedLinks.isOnlyLinks(message.text) {
+                Text(message.text).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(PastedLinks.urls(in: message.text), id: \.self) { url in
+                linkCard(url)
+            }
         }
         .padding(.horizontal, 14).padding(.vertical, 9)
         .background(
@@ -692,6 +705,58 @@ struct ConversationView: View {
         .accessibilityLabel(
             "You, \(message.createdAt.formatted(date: .omitted, time: .shortened))"
         )
+    }
+
+    /// A pasted link, shown as what the library captured from it once it is saved.
+    private func linkCard(_ url: URL) -> some View {
+        let captured = PastedLinks.identity(of: url).flatMap { model.capturedLinks[$0] }
+        let host = url.host(percentEncoded: false).map {
+            $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0
+        } ?? url.absoluteString
+        return Button {
+            if let captured {
+                open(captured.noteID)
+            } else {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Group {
+                    if let data = captured?.favicon, let icon = NSImage(data: data) {
+                        Image(nsImage: icon).resizable().interpolation(.high)
+                    } else {
+                        Image(systemName: "link").foregroundStyle(.secondary)
+                    }
+                }
+                .frame(width: 16, height: 16)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(captured?.title ?? url.absoluteString)
+                        .font(.callout.weight(.medium)).lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 6) {
+                        Text(host).foregroundStyle(.secondary).lineLimit(1)
+                        if let filing = captured?.filing {
+                            FilingTag(category: filing)
+                        }
+                    }
+                    .font(.caption)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(captured == nil ? "Open \(url.absoluteString) in your browser" :
+            "Open the saved source")
+        .contextMenu {
+            if let captured {
+                Button("Open Saved Source") { open(captured.noteID) }
+            }
+            Button("Open in Browser") { NSWorkspace.shared.open(url) }
+            Button("Copy Link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(url.absoluteString, forType: .string)
+            }
+        }
     }
 
     @ViewBuilder private func sentContext(_ id: UUID) -> some View {
@@ -869,7 +934,8 @@ struct ConversationView: View {
                             composing = true
                         } label: {
                             HStack(spacing: 12) {
-                                Text("@\(role.rawValue)").frame(width: 100, alignment: .leading)
+                                Label("@\(role.rawValue)", systemImage: role.symbol)
+                                    .frame(width: 120, alignment: .leading)
                                 Text(role.responsibility).font(.caption)
                                     .foregroundStyle(Color.primary.opacity(0.72))
                             }
@@ -1175,6 +1241,7 @@ private struct ReferenceChip: View {
     let toggleSource: () -> Void
     var symbol = "doc.text"
     var role: String?
+    var filing: DecimalCategory?
     @State private var hovering = false
 
     var body: some View {
@@ -1184,6 +1251,9 @@ private struct ReferenceChip: View {
             }
             .buttonStyle(.plain).help("Open \(title)")
             .accessibilityLabel(role.map { "\($0): \(title)" } ?? title)
+            if let filing {
+                FilingTag(category: filing)
+            }
             Button(
                 selected ? "Remove from sources" : "Use as source",
                 systemImage: selected ? "checkmark.circle.fill" : "plus.circle",
@@ -1208,6 +1278,26 @@ private struct ReferenceChip: View {
             Button(selected ? "Remove from sources" : "Use as source", action: toggleSource)
                 .disabled(!available)
         }
+    }
+}
+
+/// A note's filing home, tinted with its category color from the library graph. The label
+/// carries the meaning; the color echoes the graph.
+struct FilingTag: View {
+    let category: DecimalCategory
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        let ink = AtlasPalette.ink(
+            AtlasHierarchy.hue(for: category.code),
+            dark: colorScheme == .dark
+        )
+        Text(category.label).font(.caption).lineLimit(1)
+            .foregroundStyle(ink)
+            .padding(.horizontal, 7).padding(.vertical, 1)
+            .background(ink.opacity(0.14), in: Capsule())
+            .help("Filed in \(category.label)")
+            .accessibilityLabel("Filed in \(category.label)")
     }
 }
 

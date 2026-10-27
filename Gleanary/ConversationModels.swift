@@ -7,6 +7,17 @@ enum AgentRole: String, Codable, Sendable, CaseIterable {
         rawValue.capitalized
     }
 
+    /// An SF Symbol that hints at the role's work wherever it is named.
+    var symbol: String {
+        switch self {
+        case .assistant: "bubble.left"
+        case .researcher: "text.magnifyingglass"
+        case .curator: "point.3.connected.trianglepath.dotted"
+        case .librarian: "books.vertical"
+        case .writer: "pencil.line"
+        }
+    }
+
     var responsibility: String {
         switch self {
         case .assistant: "Questions and coordination"
@@ -15,6 +26,47 @@ enum AgentRole: String, Codable, Sendable, CaseIterable {
         case .librarian: "Capture, notes and Johnny Decimal filing"
         case .writer: "Finished documents in your writing style"
         }
+    }
+}
+
+/// What the library holds for a link pasted into chat.
+struct CapturedLink: Sendable, Equatable {
+    let noteID: UUID
+    let title: String
+    let favicon: Data?
+    let filing: DecimalCategory?
+}
+
+enum PastedLinks {
+    /// Web links in a message, in order, each once.
+    static func urls(in text: String) -> [URL] {
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return [] }
+        var seen = Set<URL>()
+        return detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
+            .compactMap(\.url)
+            .filter { ["http", "https"].contains($0.scheme?.lowercased() ?? "") }
+            .filter { seen.insert($0).inserted }
+    }
+
+    /// True when the message is nothing but links, so cards can stand in for its text.
+    static func isOnlyLinks(_ text: String) -> Bool {
+        guard let detector = try? NSDataDetector(
+            types: NSTextCheckingResult.CheckingType.link.rawValue
+        ) else { return false }
+        let matches = detector.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return false }
+        var rest = text as NSString
+        for match in matches.reversed() {
+            rest = rest.replacingCharacters(in: match.range, with: "") as NSString
+        }
+        return (rest as String).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The capture identity, matching how the library deduplicates sources.
+    static func identity(of url: URL) -> String? {
+        try? CaptureRequest.webLink(url).identity
     }
 }
 
@@ -40,6 +92,8 @@ struct ConversationReference: Identifiable, Sendable {
     let artifactKind: String?
     let taskID: UUID?
     var hasCapture = false
+    /// The note's primary filing home, if it has one.
+    var filing: DecimalCategory?
 
     var attachmentKind: String {
         hasCapture ? "Source" : "Note"

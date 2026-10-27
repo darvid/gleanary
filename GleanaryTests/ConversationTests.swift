@@ -3334,6 +3334,78 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(throws: ConversationError.self) { try GroundedResearch.schema(ids: []) }
     }
 
+    @Test func quotesSpanningSourceParagraphsRenderAsOneLine() throws {
+        let evidence = [ResearchEvidence(
+            id: "S1E1",
+            title: "Synthetic talk",
+            quote: "They show no care for the\n\nuser and the  surroundings.",
+            noteID: UUID()
+        )]
+        let research = GroundedResearch(points: [.init(
+            text: "The speaker criticizes careless design.",
+            evidenceID: "S1E1"
+        )])
+        let markdown = try research.markdown(evidence: evidence)
+        #expect(markdown.contains("  > They show no care for the user and the surroundings.\n"))
+    }
+
+    @Test func detectsPastedLinksAndLinkOnlyMessages() {
+        let text = "See https://example.org/a and https://example.org/a or ftp://example.org/b"
+        #expect(PastedLinks.urls(in: text).map(\.absoluteString) == ["https://example.org/a"])
+        #expect(!PastedLinks.isOnlyLinks(text))
+        #expect(PastedLinks.isOnlyLinks("  https://example.org/a\n"))
+        #expect(!PastedLinks.isOnlyLinks("No links here"))
+    }
+
+    @Test @MainActor func pastedLinkShowsItsCapturedSourceAndPrimaryHome() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = try #require(URL(string: "https://www.example.org/pasted"))
+        let ingestion = IngestionEngine(store: store, fetcher: ConversationFetcher())
+        _ = try await ingestion.enqueue(url.absoluteString, summarizeLink: false)
+        try await ingestion.run()
+        let note = try #require(await store.documents().first)
+        try await store.saveCategory(code: "21", name: "Design")
+        let design = try #require(await store.categories().first { $0.code == "21" })
+        try await store.fileNote(note.id, categoryID: design.id)
+        let identity = try #require(PastedLinks.identity(of: url))
+        let links = try await store.capturedLinks(
+            identities: [identity, "url:https://example.org/missing"]
+        )
+        #expect(links.count == 1)
+        #expect(links[identity]?.noteID == note.id)
+        #expect(links[identity]?.filing?.id == design.id)
+        #expect(try await store.conversationReferences([note.id])[note.id]?.filing?.id
+            == design.id)
+
+        let task = try await store.beginConversation(url.absoluteString, owner: .librarian)
+        try await store.postConversation(
+            author: .assistant, text: "Saved the synthetic article as a Source.",
+            references: [note.id], taskID: task
+        )
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Completed")
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(store: store))
+        await model.load()
+        #expect(model.capturedLinks[identity]?.noteID == note.id)
+        let library = LibraryModel(store: store)
+        for dark in [true, false] {
+            let view = NSHostingView(rootView: ConversationView(model: model, library: library)
+                .environment(\.colorScheme, dark ? .dark : .light))
+            view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            view.frame = NSRect(x: 0, y: 0, width: 900, height: 600)
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            #expect(bitmap.pixelsWide >= 900)
+            if let path = ProcessInfo.processInfo.environment["GLEANARY_LINK_SCREENSHOT"],
+               let data = bitmap.representation(using: .png, properties: [:])
+            {
+                try data.write(to: URL(fileURLWithPath: path)
+                    .appendingPathExtension(dark ? "dark.png" : "light.png"))
+            }
+        }
+    }
+
     @Test @MainActor func nativeConversationRendersCompactActivity() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }

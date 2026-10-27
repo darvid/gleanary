@@ -715,8 +715,10 @@ struct GroundedResearch: Codable {
             guard !point.text.isEmpty, point.text.count <= 700, !point.text.contains("\n"),
                   let anchor = evidence.first(where: { $0.id == point.evidenceID })
             else { throw ConversationError.invalidOutput }
-            let quote = anchor.quote.components(separatedBy: "\n").map { "  > " + $0 }
-                .joined(separator: "\n")
+            // Excerpts can span transcript paragraphs mid-sentence; quote them as one line.
+            // Verification uses the excerpt itself, not this display copy.
+            let quote = "  > " + anchor.quote.split(whereSeparator: \.isWhitespace)
+                .joined(separator: " ")
             return "- \(point.text) [\(point.evidenceID)]\n\n\(quote)"
         }.joined(separator: "\n\n") + "\n\nEvidence is a selected excerpt set, not a full-document review."
             + (dropped == 0 ? "" :
