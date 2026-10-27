@@ -48,8 +48,10 @@ extension DocumentStore {
             let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
             let rows = try Row.fetchAll(db, sql: """
             SELECT n.id, n.name, n.sourceURL, a.kind, a.taskID,
-                EXISTS(SELECT 1 FROM captures c WHERE c.noteID = n.id) AS hasCapture
+                EXISTS(SELECT 1 FROM captures c WHERE c.noteID = n.id) AS hasCapture,
+                \(Self.primaryFilingColumns)
             FROM notes n LEFT JOIN authored_artifacts a ON a.noteID = n.id
+            \(Self.primaryFilingJoin)
             WHERE n.deletedAt IS NULL AND n.id IN (\(placeholders))
             """, arguments: StatementArguments(ids.map(\.uuidString)))
             return try Dictionary(uniqueKeysWithValues: rows.map { row in
@@ -59,10 +61,52 @@ extension DocumentStore {
                     id: id, title: row["name"],
                     sourceURL: (row["sourceURL"] as String?).flatMap(URL.init(string:)),
                     artifactKind: row["kind"], taskID: task.map(Self.uuid),
-                    hasCapture: row["hasCapture"]
+                    hasCapture: row["hasCapture"], filing: Self.primaryFiling(row)
                 ))
             })
         }
+    }
+
+    /// The latest live note captured for each source identity, so chat can show what a pasted
+    /// link became.
+    func capturedLinks(identities: Set<String>) throws -> [String: CapturedLink] {
+        guard !identities.isEmpty else { return [:] }
+        return try readyDatabase().read { db in
+            let placeholders = Array(repeating: "?", count: identities.count)
+                .joined(separator: ",")
+            var links: [String: CapturedLink] = [:]
+            // Oldest first, so the latest capture of an identity wins.
+            for row in try Row.fetchAll(db, sql: """
+            SELECT s.identity, n.id, n.name, n.faviconData, \(Self.primaryFilingColumns)
+            FROM sources s JOIN captures c ON c.sourceID = s.id
+            JOIN notes n ON n.id = c.noteID
+            \(Self.primaryFilingJoin)
+            WHERE n.deletedAt IS NULL AND s.identity IN (\(placeholders))
+            ORDER BY c.createdAt
+            """, arguments: StatementArguments(Array(identities))) {
+                links[row["identity"]] = try CapturedLink(
+                    noteID: Self.uuid(row["id"]), title: row["name"],
+                    favicon: row["faviconData"], filing: Self.primaryFiling(row)
+                )
+            }
+            return links
+        }
+    }
+
+    /// Joins a note `n` to its primary home, or its first by code when none is marked primary.
+    private static let primaryFilingJoin = """
+    LEFT JOIN decimal_categories pc ON pc.id = (
+        SELECT nc.categoryID FROM note_categories nc
+        JOIN decimal_categories dc ON dc.id = nc.categoryID
+        WHERE nc.noteID = n.id ORDER BY nc.isPrimary DESC, dc.code LIMIT 1
+    )
+    """
+    private static let primaryFilingColumns =
+        "pc.id AS filingID, pc.code AS filingCode, pc.name AS filingName"
+
+    private static func primaryFiling(_ row: Row) throws -> DecimalCategory? {
+        guard let id: String = row["filingID"] else { return nil }
+        return try DecimalCategory(id: uuid(id), code: row["filingCode"], name: row["filingName"])
     }
 
     /// Resolve the retained source itself, not a generated note that cites it.

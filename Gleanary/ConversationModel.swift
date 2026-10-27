@@ -19,6 +19,8 @@ final class ConversationModel {
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
     var referenceDetails: [UUID: ConversationReference] = [:]
+    /// What pasted links became, by capture identity.
+    var capturedLinks: [String: CapturedLink] = [:]
     /// Reply text a provider is still generating, by task. Display only; never persisted.
     private(set) var replyDrafts: [UUID: ReplyDraft] = [:]
     var composer = ""
@@ -122,6 +124,9 @@ final class ConversationModel {
                 ] } + updatedChanges.values.joined().flatMap { [$0.noteID, $0.targetID] }
                 .compactMap(\.self))
             let updatedReferences = try await store.conversationReferences(referenceIDs)
+            let linkIdentities = Set(updatedMessages.filter { $0.author == "user" }
+                .flatMap { PastedLinks.urls(in: $0.text) }.compactMap(PastedLinks.identity))
+            let updatedLinks = try await store.capturedLinks(identities: linkIdentities)
             for id in referenceIDs {
                 updatedTitles[id] = updatedReferences[id]?.title ?? "Deleted document"
             }
@@ -135,6 +140,7 @@ final class ConversationModel {
             writerScopes = updatedScopes
             titles = updatedTitles
             referenceDetails = updatedReferences
+            capturedLinks = updatedLinks
         } catch { self.error = error.localizedDescription }
     }
 
@@ -425,6 +431,7 @@ final class ConversationModel {
             }
             titles = [:]
             referenceDetails = [:]
+            capturedLinks = [:]
             hasOlderMessages = true
             error = nil
             clearingConversation = false
