@@ -77,6 +77,7 @@ struct LibraryAgent {
     Keep proper nouns and the key subject; drop site names, clickbait and boilerplate such as
     "| Company Blog". Never invent facts.
     Summaries: only rewrite one when asked, using only the item's content, in Markdown.
+    Rename a category with propose_category_rename; it keeps its code and filed items.
     Filing: prefer existing categories. Use propose_category only for a clearly needed new home,
     with an unused code: XY under an existing area, or XY.NN under an existing category.
     Skip changes that would leave an item as it is. If the request is unclear or can't be done
@@ -317,6 +318,11 @@ actor AgentToolbox {
             tool("propose_category", "Propose creating a new category.", [
                 "code": text, "name": text, "reason": reason,
             ]),
+            tool(
+                "propose_category_rename",
+                "Propose renaming an existing category; its code and filed items stay as they are.",
+                ["code": text, "name": text, "reason": reason]
+            ),
         ]
         if includingWorkflows {
             tools.append(ConversationWorkflows.definition)
@@ -663,7 +669,7 @@ actor AgentToolbox {
         // A second proposal for the same thing replaces the first.
         changes.removeAll {
             $0.kind == draft.kind && $0.noteID == draft.noteID
-                && (draft.kind != .category || $0.code == draft.code)
+                && (![.category, .rename].contains(draft.kind) || $0.code == draft.code)
         }
         changes.append(draft)
         progress = "Proposed \(changes.count) change\(changes.count == 1 ? "" : "s")"
@@ -674,6 +680,7 @@ actor AgentToolbox {
         case "propose_title", "propose_summary": try await proposeText(name, arguments)
         case "propose_filing": try await proposeFiling(arguments)
         case "propose_category": try await proposeCategory(arguments)
+        case "propose_category_rename": try await proposeCategoryRename(arguments)
         default: ["error": "Unknown tool."]
         }
     }
@@ -715,6 +722,32 @@ actor AgentToolbox {
         propose(AgentChangeDraft(
             kind: .filing, noteID: id, code: code,
             before: current.first?.label ?? "Unfiled", after: "\(code) \(name)",
+            reason: string(arguments, "reason"), baseRevision: nil
+        ))
+        return ["proposed": true]
+    }
+
+    private func proposeCategoryRename(_ arguments: [String: Any]) async throws -> Any {
+        let code = string(arguments, "code", limit: 10)
+        let name = string(arguments, "name", limit: 100)
+        guard (try? DecimalCategory.validate(code: code, name: name)) != nil else {
+            throw ToolError(message: "Give the category's code and a short new name.")
+        }
+        let categories = try await store.categories()
+        guard let category = categories.first(where: { $0.code == code }) else {
+            throw ToolError(message: "No category uses \(code). Use list_categories to find it.")
+        }
+        guard DecimalCategory.normalized(category.name) != DecimalCategory.normalized(name) else {
+            throw ToolError(message: "\(category.label) already has that name.")
+        }
+        if let match = categories.first(where: {
+            $0.id != category.id && DecimalCategory.normalized($0.name) == DecimalCategory
+                .normalized(name)
+        }) {
+            throw ToolError(message: "\(match.label) already uses that name.")
+        }
+        propose(AgentChangeDraft(
+            kind: .rename, noteID: nil, code: code, before: category.name, after: name,
             reason: string(arguments, "reason"), baseRevision: nil
         ))
         return ["proposed": true]

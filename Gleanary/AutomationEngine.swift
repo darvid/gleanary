@@ -39,6 +39,9 @@ actor AutomationEngine {
         var writer: @Sendable () async throws -> (any ConversationInferring)? = { nil }
         /// The default writing style, read when a digest is written up.
         var writingStyle: @Sendable () -> WritingStyle = { .plain }
+        /// Queues up to this many promising links for the Source explorer, returning them
+        /// with their capture jobs, or nil when Source acquisition isn't set to Explore.
+        var explore: @Sendable (Int) async throws -> [AcquisitionCandidate]? = { _ in nil }
     }
 
     static let accessCheck = "access"
@@ -71,15 +74,7 @@ actor AutomationEngine {
         let runID = await (try? store.beginAutomationRun(config.kind, at: started)) ?? UUID()
         var run = AutomationRun(id: runID, kind: config.kind, startedAt: started)
         do {
-            switch config.kind {
-            case .inboxSummarizer: try await summarizeInbox(config, &run)
-            case .linkChecker: try await checkLinks(config, &run)
-            case .crossLinker: try await crossLink(config, &run)
-            case .bookmarkFetcher: try await fetchBookmarks(config, &run)
-            case .unfiledFiler: try await fileUnfiled(config, &run)
-            case .captureRetry: try await retryCaptures(config, &run)
-            case .weeklyDigest: try await writeDigest(config, &run)
-            }
+            try await perform(config, &run)
             if run.status == .running {
                 run.status = .succeeded
             }
@@ -93,6 +88,19 @@ actor AutomationEngine {
         run.endedAt = dependencies.now()
         try? await store.finishAutomationRun(run)
         return run
+    }
+
+    private func perform(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        switch config.kind {
+        case .inboxSummarizer: try await summarizeInbox(config, &run)
+        case .linkChecker: try await checkLinks(config, &run)
+        case .crossLinker: try await crossLink(config, &run)
+        case .bookmarkFetcher: try await fetchBookmarks(config, &run)
+        case .unfiledFiler: try await fileUnfiled(config, &run)
+        case .captureRetry: try await retryCaptures(config, &run)
+        case .weeklyDigest: try await writeDigest(config, &run)
+        case .sourceExplorer: try await exploreSources(config, &run)
+        }
     }
 
     /// How many items are due now, past this run's batch included. New items are never
@@ -126,6 +134,10 @@ actor AutomationEngine {
             )
         case .weeklyDigest:
             try await store.digestBacklog(from: digestStart(now), to: now)
+        case .sourceExplorer:
+            try await store.acquisitionFrontier(
+                maximumHop: SourceAcquisitionLevel.explore.policy.maximumHops, limit: 1000
+            ).count
         }
     }
 

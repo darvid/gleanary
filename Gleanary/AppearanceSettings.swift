@@ -23,8 +23,14 @@ enum ReadingKind: String, CaseIterable, Identifiable {
     }
 
     var defaultFont: ReadingFont {
-        let serif = NSFont(name: "Athelas", size: 14) != nil ? "Athelas" : "Georgia"
-        return ReadingFont(family: self == .notes ? serif : "", size: 14)
+        ReadingFont(family: self == .notes ? Self.noteSerif : "", size: 14)
+    }
+
+    /// Charter ships with every Mac and was drawn for reading on screens. Athelas, the old
+    /// default, is a font macOS downloads on demand, so it can't be relied on.
+    static var noteSerif: String {
+        let families = Set(NSFontManager.shared.availableFontFamilies)
+        return ["Charter", "Georgia"].first(where: families.contains) ?? "Georgia"
     }
 }
 
@@ -62,8 +68,12 @@ struct ReadingFont: Equatable, Sendable {
         return Font(scaled).weight(weight)
     }
 
+    /// Whether the family renders, which is what `nativeFont` uses. Fonts macOS loads on
+    /// demand render without being listed among installed families.
     @MainActor var available: Bool {
         family.isEmpty || NSFontManager.shared.availableFontFamilies.contains(family)
+            || NSFontManager.shared
+            .font(withFamily: family, traits: [], weight: 5, size: size) != nil
     }
 }
 

@@ -26,7 +26,8 @@ actor AgentCoordinator {
         self.writingStyles = writingStyles
         ingestion = IngestionEngine(
             store: store, fetcher: fetcher, youtube: youtube, screenshotter: screenshotter,
-            settings: captureSettings
+            settings: captureSettings,
+            recommendationJudge: inference as? any RecommendationJudging
         )
         search = SearchEngine(store: store)
     }
@@ -175,6 +176,7 @@ actor AgentCoordinator {
         filingInference = filing
         // Captures made from Chat summarize with the same provider.
         await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
+        await ingestion.useRecommendationJudge(inference as? any RecommendationJudging)
     }
 
     private func toolResponder(forCaptureRetry captureID: UUID?) -> (any AgentResponding)? {

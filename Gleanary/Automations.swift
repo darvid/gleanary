@@ -10,6 +10,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     case unfiledFiler = "unfiled-filer"
     case captureRetry = "capture-retry"
     case weeklyDigest = "weekly-digest"
+    case sourceExplorer = "source-explorer"
 
     var id: String {
         rawValue
@@ -24,6 +25,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .unfiledFiler: "Unfiled filer"
         case .captureRetry: "Failed-capture retry"
         case .weeklyDigest: "Weekly digest"
+        case .sourceExplorer: "Source explorer"
         }
     }
 
@@ -43,6 +45,8 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
             "Tries failed captures again when the problem looked temporary: after an hour, a day, then a week."
         case .weeklyDigest:
             "Writes a new note about what you saved in the last week, with a link to each item: a list grouped by category, or written up by the Writer."
+        case .sourceExplorer:
+            "When Source acquisition is set to Explore, follows the most promising links found in your sources, up to three hops out, within a daily budget."
         }
     }
 
@@ -56,6 +60,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .unfiledFiler: "Proposes filings; you review first"
         case .captureRetry: "Retries captures, never ones that need you to sign in or choose"
         case .weeklyDigest: "Writes a new note, never edits others; you can undo it"
+        case .sourceExplorer: "Saves sources without summaries; unopened ones are archived after 30 days"
         }
     }
 
@@ -68,13 +73,15 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .unfiledFiler: "tray.and.arrow.down"
         case .captureRetry: "arrow.clockwise"
         case .weeklyDigest: "newspaper"
+        case .sourceExplorer: "safari"
         }
     }
 
     var role: AgentRole {
         switch self {
         case .inboxSummarizer: .researcher
-        case .bookmarkFetcher, .linkChecker, .unfiledFiler, .captureRetry: .librarian
+        case .bookmarkFetcher, .linkChecker, .unfiledFiler, .captureRetry, .sourceExplorer:
+            .librarian
         case .crossLinker: .curator
         case .weeklyDigest: .assistant
         }
@@ -85,7 +92,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var followsNewItems: Bool {
         switch self {
         case .inboxSummarizer, .crossLinker, .unfiledFiler: true
-        case .bookmarkFetcher, .linkChecker, .captureRetry, .weeklyDigest: false
+        case .bookmarkFetcher, .linkChecker, .captureRetry, .weeklyDigest, .sourceExplorer: false
         }
     }
 
@@ -94,7 +101,8 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var rechecks: Bool {
         switch self {
         case .linkChecker, .crossLinker, .unfiledFiler: true
-        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest: false
+        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
+            false
         }
     }
 
@@ -102,7 +110,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var undoable: Bool {
         switch self {
         case .inboxSummarizer, .bookmarkFetcher, .linkChecker, .weeklyDigest: true
-        case .crossLinker, .unfiledFiler, .captureRetry: false
+        case .crossLinker, .unfiledFiler, .captureRetry, .sourceExplorer: false
         }
     }
 
@@ -123,7 +131,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var usesModel: Bool {
         switch self {
         case .inboxSummarizer, .bookmarkFetcher, .crossLinker, .unfiledFiler: true
-        case .linkChecker, .captureRetry, .weeklyDigest: false
+        case .linkChecker, .captureRetry, .weeklyDigest, .sourceExplorer: false
         }
     }
 
@@ -138,6 +146,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .inboxSummarizer: 10 * 60
         case .bookmarkFetcher: 30 * 60
         case .captureRetry: 60 * 60
+        case .sourceExplorer: 6 * 60 * 60
         case .linkChecker, .crossLinker, .unfiledFiler: 24 * 60 * 60
         case .weeklyDigest: 7 * 24 * 60 * 60
         }
@@ -155,6 +164,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
                 7 * 24 * 60 * 60,
             ]
         case .weeklyDigest: [7 * 24 * 60 * 60]
+        case .sourceExplorer: [60 * 60, 6 * 60 * 60, 24 * 60 * 60]
         }
     }
 
@@ -169,6 +179,8 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         case .captureRetry: 10
         // The most items one digest lists.
         case .weeklyDigest: 200
+        // Each save loads a page and its preview.
+        case .sourceExplorer: 10
         }
     }
 
@@ -176,7 +188,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var batchRange: ClosedRange<Int> {
         switch self {
         case .inboxSummarizer: 1 ... 200
-        case .bookmarkFetcher, .captureRetry: 1 ... 50
+        case .bookmarkFetcher, .captureRetry, .sourceExplorer: 1 ... 50
         case .weeklyDigest: 10 ... 1000
         case .linkChecker, .crossLinker, .unfiledFiler: 1 ... 1000
         }
@@ -184,7 +196,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var batchStep: Int {
         switch self {
-        case .bookmarkFetcher, .captureRetry: 1
+        case .bookmarkFetcher, .captureRetry, .sourceExplorer: 1
         case .linkChecker, .weeklyDigest: 10
         case .inboxSummarizer, .crossLinker, .unfiledFiler: 5
         }

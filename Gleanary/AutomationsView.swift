@@ -392,6 +392,8 @@ private struct AutomationDetail: View {
             return "One page at a time. Summaries count toward model calls per day."
         case .captureRetry: return "Each is tried at most three times."
         case .weeklyDigest: return "The newest are listed when more were saved."
+        case .sourceExplorer:
+            return "One page at a time, within Source acquisition's daily budget."
         case .linkChecker, .crossLinker, .unfiledFiler: break
         }
         let planned = model.plannedBatch(kind)
@@ -675,6 +677,7 @@ extension AutomationRun {
         case .captureRetry: "Saved \(changed) capture\(changed == 1 ? "" : "s")"
         case .weeklyDigest: "Wrote a digest of \(AutomationEngine.itemCount(examined))"
         case .linkChecker: "Archived \(changed) dead link\(changed == 1 ? "" : "s")"
+        case .sourceExplorer: "Saved \(changed) source\(changed == 1 ? "" : "s")"
         case .crossLinker, .unfiledFiler:
             "Changed \(changed) item\(changed == 1 ? "" : "s")"
         }
@@ -686,7 +689,7 @@ extension AutomationRun {
         case .crossLinker: fine == 1 ? "1 item had nothing to link" : "\(fine) items had nothing to link"
         case .unfiledFiler:
             fine == 1 ? "1 item had no new home to suggest" : "\(fine) items had no new home to suggest"
-        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest:
+        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
             "\(fine) needed nothing"
         }
     }
@@ -746,6 +749,7 @@ private extension AutomationKind {
         case .captureRetry:
             "Failed captures whose next try is due: an hour, a day, then a week after each failure."
         case .weeklyDigest: "Items saved since the last digest, at most a week back."
+        case .sourceExplorer: "Links found in your sources that aren't saved or ruled out yet."
         case .inboxSummarizer, .linkChecker, .crossLinker, .unfiledFiler:
             "New items haven't been checked yet, so they always come first; then the ones checked longest ago."
         }
@@ -771,6 +775,7 @@ private extension AutomationKind {
         case .unfiledFiler: .brown
         case .captureRetry: .pink
         case .weeklyDigest: .indigo
+        case .sourceExplorer: .green
         }
     }
 }

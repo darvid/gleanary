@@ -56,6 +56,7 @@ struct AgentChangesCard: View {
         let labels: [(AgentChange.Kind, String, String)] = [
             (.title, "title", "titles"), (.summary, "summary", "summaries"),
             (.filing, "filing", "filings"), (.category, "new category", "new categories"),
+            (.rename, "renamed category", "renamed categories"),
             (.link, "link", "links"), (.archive, "archive", "archives"),
             (.relink, "moved link", "moved links"), (.note, "new note", "new notes"),
             (.revision, "document revision", "document revisions"),
@@ -141,12 +142,14 @@ struct AgentChangesReview: View {
     /// Every kind, in the order the sheet groups them; a test keeps it complete, since a kind
     /// left out would be applied without ever being shown.
     static let kindOrder: [AgentChange.Kind] = [
-        .revision, .title, .summary, .category, .filing, .link, .relink, .archive, .note,
+        .revision, .title, .summary, .category, .rename, .filing, .link, .relink, .archive,
+        .note,
     ]
 
     private static func heading(_ kind: AgentChange.Kind, count: Int) -> String {
         switch kind {
         case .category: count == 1 ? "New category" : "New categories"
+        case .rename: count == 1 ? "Renamed category" : "Renamed categories"
         case .title: "Titles"
         case .summary: "Summaries"
         case .filing: "Filing"
@@ -187,9 +190,12 @@ struct AgentChangesReview: View {
                     Text("\(change.code ?? "") \(change.after)").fontWeight(.medium)
                     NewCategoryBadge()
                 }
-            case .title:
-                Text(change.after).fontWeight(.medium)
-                Text(change.before).strikethrough().foregroundStyle(.secondary).lineLimit(2)
+            case .title, .rename:
+                // A renamed category keeps its code beside both names.
+                let code = change.kind == .rename ? (change.code ?? "") + " " : ""
+                Text(code + change.after).fontWeight(.medium)
+                Text(code + change.before).strikethrough().foregroundStyle(.secondary)
+                    .lineLimit(2)
             case .filing:
                 Text(itemTitle(change)).fontWeight(.medium).lineLimit(1)
                 HStack(spacing: 6) {

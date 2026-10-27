@@ -109,6 +109,45 @@ extension AutomationEngine {
         }
     }
 
+    // MARK: Source explorer
+
+    /// Saves the most promising links found in your sources, one page at a time, when Source
+    /// acquisition is set to Explore. Saves skip summaries; probation archives unused ones.
+    func exploreSources(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
+        guard let queued = try await dependencies.explore(config.batchLimit) else {
+            return run.report.append(
+                "Source acquisition isn't set to Explore in Capture settings, so nothing was followed."
+            )
+        }
+        guard !queued.isEmpty else {
+            return run.report.append("No recorded link qualifies today.")
+        }
+        for (index, candidate) in queued.enumerated() {
+            guard try await proceed(&run), let jobID = candidate.captureJobID else { return }
+            await report("Saving \(index + 1) of \(queued.count): \(candidate.host)")
+            if index > 0 {
+                try await Task.sleep(for: dependencies.politeness)
+            }
+            run.examined += 1
+            let job = try await finishCapture(jobID)
+            switch job?.state {
+            case .ready:
+                run.changed += 1
+                var title = candidate.host
+                if let id = job?.noteID, let note = try await store.document(id: id) {
+                    title = note.name
+                }
+                run.note(.changed, job?.noteID, title, "\(candidate.reason) (\(candidate.host)).")
+            case .failed:
+                run.skipped += 1
+                run.note(.skipped, nil, candidate.host, job?.error ?? "The page couldn't be saved.")
+            default:
+                run.skipped += 1
+                run.note(.skipped, nil, candidate.host, "Still saving; it carries on in Captures.")
+            }
+        }
+    }
+
     /// Starts a capture this automation queued and waits for it, checking for Stop as it
     /// goes. Gives up waiting after a while, returning the capture still running.
     private func finishCapture(_ id: UUID) async throws -> CaptureJob? {
@@ -311,8 +350,12 @@ extension AutomationEngine {
         let written = config.usesWriter
             ? try await writtenDigest(items, total: total, from: start, to: now, config, &run)
             : nil
+        var document = written?.document
+            ?? DigestNote.document(items, total: total, from: start, to: now)
+        let found = try await store.acquisitionDigest(from: start, to: now)
+        document.markdown += DigestNote.foundForYou(found.saved, expired: found.expired)
         let note = try await store.writeAutomationNote(
-            written?.document ?? DigestNote.document(items, total: total, from: start, to: now),
+            document,
             reason: "Written by the weekly digest.",
             runID: run.id,
             at: now
@@ -440,6 +483,26 @@ enum DigestNote {
             name: "Weekly digest: \(range)",
             markdown: lines.joined(separator: "\n\n")
         )
+    }
+
+    /// Sources saved automatically this period, each with where it was found.
+    static func foundForYou(_ items: [AcquisitionDigestItem], expired: Int) -> String {
+        guard !items.isEmpty || expired > 0 else { return "" }
+        func link(_ title: String, _ id: UUID) -> String {
+            "[\(AgentCoordinator.markdownLabel(title))](gleanary://note/\(id.uuidString))"
+        }
+        var lines = ["\n\n## Found for you"]
+        if !items.isEmpty {
+            lines.append(items.map {
+                "- \(link($0.title, $0.noteID)): \($0.reason.lowercased()) in \(link($0.originTitle, $0.originID))"
+            }.joined(separator: "\n"))
+        }
+        if expired > 0 {
+            lines.append(
+                "Archived \(AutomationEngine.itemCount(expired)) saved automatically but never opened."
+            )
+        }
+        return lines.joined(separator: "\n\n")
     }
 
     static func range(_ start: Date, _ end: Date) -> String {

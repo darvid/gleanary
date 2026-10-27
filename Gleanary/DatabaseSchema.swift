@@ -445,6 +445,52 @@ enum DatabaseSchema {
         }
         migrator.registerMigration("typed-notes-and-tasks-v1", migrate: NoteWorkspaceSchema.create)
         migrator.registerMigration("source-acquisition-v1", migrate: AcquisitionSchema.create)
+        migrator.registerMigration("source-acquisition-v2", migrate: AcquisitionSchema.addProbation)
+        migrator.registerMigration("source-acquisition-v3", migrate: AcquisitionSchema.addIntent)
+        migrator.registerMigration("agent-category-rename-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE agent_changes_v6 (
+                id TEXT PRIMARY KEY NOT NULL,
+                taskID TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK(kind IN ('title','summary','filing','category','rename',
+                    'archive','link','relink','note','revision')),
+                noteID TEXT,
+                targetID TEXT,
+                code TEXT,
+                before TEXT NOT NULL,
+                after TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                baseRevision TEXT,
+                appliedRevision TEXT,
+                snapshot TEXT,
+                status TEXT NOT NULL
+                    CHECK(status IN ('pending','applied','rejected','stale','undone')),
+                createdAt REAL NOT NULL
+            );
+            INSERT INTO agent_changes_v6 SELECT id, taskID, ordinal, kind, noteID, targetID, code,
+                before, after, reason, baseRevision, appliedRevision, snapshot, status, createdAt
+                FROM agent_changes;
+            DROP TABLE agent_changes;
+            ALTER TABLE agent_changes_v6 RENAME TO agent_changes;
+            CREATE INDEX agent_changes_task ON agent_changes(taskID, ordinal);
+            CREATE INDEX agent_changes_note ON agent_changes(noteID, kind);
+            """)
+        }
+        // Rebuilding agent_changes for renames dropped Activity's trigger on it; restore it
+        // unchanged, whether or not that rebuild ran without it.
+        migrator.registerMigration("activity-automation-revision-trigger-v2") { db in
+            try db.execute(sql: """
+            DROP TRIGGER IF EXISTS activity_automation_revision;
+            CREATE TRIGGER activity_automation_revision AFTER INSERT ON agent_changes
+                WHEN new.status = 'applied' AND new.appliedRevision IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM automation_runs WHERE id = new.taskID) BEGIN
+                UPDATE activity_events SET actor = 'automation', groupID = new.taskID,
+                    batchLabel = 'Automation changes'
+                    WHERE revisionID = new.appliedRevision AND noteID = new.noteID;
+            END;
+            """)
+        }
         try migrator.migrate(database)
     }
 

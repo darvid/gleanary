@@ -13,8 +13,11 @@ struct NoteEditorTests {
         let appearance = ReadingAppearance(defaults: defaults)
         #expect(appearance[.notes] == ReadingKind.notes.defaultFont)
         #expect(appearance[.sources] == ReadingKind.sources.defaultFont)
-        let serif = NSFont(name: "Athelas", size: 14) != nil ? "Athelas" : "Georgia"
+        let serif = ReadingKind.noteSerif
+        #expect(["Charter", "Georgia"].contains(serif))
         #expect(appearance[.notes].family == serif)
+        #expect(appearance[.notes].available)
+        #expect(!ReadingFont(family: "No Such Synthetic Serif", size: 14).available)
         #expect(appearance[.notes].nativeFont.familyName == serif)
         #expect(appearance[.sources].family.isEmpty)
         #expect(appearance[.notes].nativeFont.familyName != appearance[.sources].nativeFont

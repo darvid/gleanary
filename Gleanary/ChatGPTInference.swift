@@ -746,6 +746,23 @@ extension ChatGPTConversationInference: LinkJudging {
     }
 }
 
+extension ChatGPTConversationInference: RecommendationJudging {
+    func judgeIntents(_ items: [RecommendationJudgement.Item]) async throws -> [Int: LinkIntent] {
+        let fence = try await session.authorizationFence()
+        let json = try await response(
+            prompt: RecommendationJudgement.prompt(items),
+            instructions: RecommendationJudgement.instructions,
+            name: "link_intents",
+            schema: RecommendationJudgement.jsonSchema,
+            fence: fence
+        ) { _ in }
+        try Task.checkCancellation()
+        try await session.validateFence(fence)
+        do { return try RecommendationJudgement.decode(Data(json.utf8), items: items) }
+        catch { throw ChatGPTError.invalidOutput }
+    }
+}
+
 /// The Writer's gather plan and per-section extraction with ChatGPT. Each call carries one
 /// section of one source.
 extension ChatGPTConversationInference: WriterInferring {

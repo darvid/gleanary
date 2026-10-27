@@ -16,6 +16,15 @@ actor IngestionEngine {
     let screenshotter: (any PageScreenshotting)?
     /// Read at each capture, so Settings changes apply to the next one.
     let settings: @Sendable () -> CaptureSettings
+    /// How close found links are to the library, for the eager acquisition levels.
+    let relevance: any LinkRelevanceScoring
+    /// Reads the wording around found links; cue phrases decide without one.
+    private(set) var recommendationJudge: (any RecommendationJudging)?
+    /// robots.txt for automatic saves.
+    let robots: RobotsPolicy
+    /// The least time between automatic fetches from one site, unless it asks for more.
+    var automaticSpacing: Duration = .seconds(2)
+    private var lastAutomaticFetch: [String: ContinuousClock.Instant] = [:]
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -28,10 +37,15 @@ actor IngestionEngine {
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
         summarizerChosen: Bool = true,
         screenshotter: (any PageScreenshotting)? = nil,
-        settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
+        settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
+        relevance: (any LinkRelevanceScoring)? = nil,
+        recommendationJudge: (any RecommendationJudging)? = nil
     ) {
+        self.recommendationJudge = recommendationJudge
+        robots = RobotsPolicy(fetcher: fetcher)
         self.store = store
         self.settings = settings
+        self.relevance = relevance ?? LibraryRelevance(search: SearchEngine(store: store))
         self.summarizerChosen = summarizerChosen
         self.fetcher = fetcher
         self.youtube = youtube
@@ -45,6 +59,32 @@ actor IngestionEngine {
     /// Whether summaries stay on the Mac.
     var summarizerIsLocal: Bool {
         summarizer is AppleLinkSummarizer
+    }
+
+    func useRecommendationJudge(_ judge: (any RecommendationJudging)?) {
+        recommendationJudge = judge
+    }
+
+    private func spaceAutomaticFetch(_ job: CaptureJob) async {
+        if (job.request.acquisitionHop ?? 0) > 0 {
+            await spaceAutomaticFetch(job.request.url)
+        }
+    }
+
+    /// Waits so automatic fetches from one site are spaced out, as long as its robots.txt
+    /// Crawl-delay asks, up to 30 seconds.
+    func spaceAutomaticFetch(_ url: URL?) async {
+        guard let url, let host = url.host(percentEncoded: false).map(AcquisitionScorer.domain)
+        else { return }
+        let delay = await robots.rules(for: url).crawlDelay.map { Duration.seconds(min(30, $0)) }
+        let spacing = max(automaticSpacing, delay ?? .zero)
+        if let last = lastAutomaticFetch[host] {
+            let wait = spacing - (ContinuousClock.now - last)
+            if wait > .zero {
+                try? await Task.sleep(for: wait)
+            }
+        }
+        lastAutomaticFetch[host] = .now
     }
 
     /// Later summaries use this summarizer, such as ChatGPT once it's enabled.
@@ -117,6 +157,7 @@ actor IngestionEngine {
         running = true
         defer { running = false; active = nil }
         while !Task.isCancelled, let job = try await store.claimCapture() {
+            await spaceAutomaticFetch(job)
             let task = Task { try await self.process(job, changed: changed) }
             active = (job.id, task)
             await changed()
@@ -154,6 +195,10 @@ actor IngestionEngine {
                 )
             }
             active = nil
+            await changed()
+        }
+        // Cheap when nothing is due; keeps automatic saves from piling up unused.
+        if await (try? store.expireUnusedAcquisitions()) ?? 0 > 0 {
             await changed()
         }
     }

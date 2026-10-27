@@ -8,6 +8,8 @@ extension AgentCoordinator {
         noteID: UUID,
         changed: @escaping @Sendable () async -> Void
     ) async throws {
+        // Filing has happened by now, so a category's own level can apply.
+        try await ingestion.replanForCategory(foundIn: noteID)
         let queued = try await ingestion.queueApprovedAcquisitions(foundIn: noteID)
         guard !queued.isEmpty else { return }
         try await store.updateConversationTask(
@@ -26,9 +28,12 @@ extension AgentCoordinator {
         let names = saved.map { "**\($0.title.replacingOccurrences(of: "*", with: ""))**" }
             .formatted(.list(type: .and))
         let missed = queued.count - saved.count
+        // Eager saves also take links the creator posted or the source cites.
+        let why = queued.allSatisfy { $0.provenance == .creatorRecommendation }
+            ? ", which the creator recommends." : " from links in this source."
         try await store.postConversation(
             author: .librarian,
-            text: "Also saved \(names), which the creator recommends."
+            text: "Also saved \(names)\(why)"
                 +
                 (missed == 0 ? "" :
                     " \(missed) more couldn't be saved; the capture queue has details."),
@@ -36,6 +41,18 @@ extension AgentCoordinator {
             taskID: taskID
         )
         await changed()
+    }
+
+    /// Follows a note's links once with Eager rules and waits for the saves.
+    func exploreFrom(
+        _ noteID: UUID,
+        changed: @escaping @Sendable () async -> Void
+    ) async throws -> Int {
+        let queued = try await ingestion.exploreFrom(noteID)
+        guard !queued.isEmpty else { return 0 }
+        await changed()
+        try await ingestion.settle(queued.compactMap(\.captureJobID), changed: changed)
+        return queued.count
     }
 
     /// Saves a suggested link you chose.

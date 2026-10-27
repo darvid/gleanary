@@ -744,6 +744,43 @@ struct GroundedResearch: Codable {
     }
 }
 
+extension AppleConversationInference: RecommendationJudging {
+    func judgeIntents(_ items: [RecommendationJudgement.Item]) async throws -> [Int: LinkIntent] {
+        guard SystemLanguageModel.default.availability == .available
+        else { throw LinkSummaryError.unavailable }
+        let answer = DynamicGenerationSchema(name: "Answer", properties: [
+            .init(name: "item", schema: .init(type: Int.self)),
+            .init(name: "intent", schema: .init(
+                name: "Intent", anyOf: LinkIntent.allCases.map(\.rawValue)
+            )),
+        ])
+        let schema = try GenerationSchema(
+            root: .init(name: "Answers", properties: [
+                .init(name: "answers", schema: .init(arrayOf: .init(referenceTo: "Answer"))),
+            ]),
+            dependencies: [answer]
+        )
+        let session = LanguageModelSession(instructions: RecommendationJudgement.instructions)
+        do {
+            let response = try await session.respond(
+                to: RecommendationJudgement.prompt(items),
+                schema: schema,
+                options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 600)
+            )
+            try Task.checkCancellation()
+            return try RecommendationJudgement.decode(
+                Data(response.content.jsonString.utf8), items: items
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as LinkSummaryError {
+            throw error
+        } catch {
+            throw AppleLinkSummarizer.modelFailure(error)
+        }
+    }
+}
+
 extension AppleConversationInference: LinkJudging {
     var local: Bool {
         true

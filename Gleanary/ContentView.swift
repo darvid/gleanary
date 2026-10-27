@@ -308,6 +308,7 @@ struct ContentView: View {
             guard summarizerKey != "pending" else { return }
             await library.useLinkSummarizer(linkSummarizer())
             library.useLinkJudge(linkJudge())
+            library.useRecommendationJudge(linkJudge() as? any RecommendationJudging)
             library.useFiler(currentInference())
         }
         .task {

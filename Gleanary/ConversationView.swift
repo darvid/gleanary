@@ -662,7 +662,10 @@ struct ConversationView: View {
             selected: model.selectedSources.contains(id),
             available: model.titles[id] != "Deleted document",
             open: { open(id) }, toggleSource: { model.select(id) }, symbol: symbol, role: role,
-            filing: model.referenceDetails[id]?.filing
+            filing: model.referenceDetails[id]?.filing,
+            explore: model.exploringNotes.contains(id) ? nil : {
+                Task { await model.exploreFrom(id) }
+            }
         )
     }
 
@@ -776,6 +779,9 @@ struct ConversationView: View {
         .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
         .contextMenu {
             Button("Open in Browser") { NSWorkspace.shared.open(candidate.url) }
+            Button("Don't Suggest Links from \(candidate.host)") {
+                Task { await model.muteAcquisitionHost(candidate.host) }
+            }
         }
         .accessibilityElement(children: .contain)
     }
@@ -823,6 +829,10 @@ struct ConversationView: View {
         .contextMenu {
             if let captured {
                 Button("Open Saved Source") { open(captured.noteID) }
+                Button("Explore Links from Here") {
+                    Task { await model.exploreFrom(captured.noteID) }
+                }
+                .disabled(model.exploringNotes.contains(captured.noteID))
             }
             Button("Open in Browser") { NSWorkspace.shared.open(url) }
             Button("Copy Link") {
@@ -1281,7 +1291,7 @@ struct ConversationSettings: View {
                 systemImage: KnowledgeSettingsPage.capture.symbol,
                 value: KnowledgeSettingsPage.capture
             ) {
-                CaptureSettingsView()
+                CaptureSettingsView(store: model.store, categories: model.categories)
             }
             Tab(
                 KnowledgeSettingsPage.filing.title,
@@ -1315,6 +1325,8 @@ private struct ReferenceChip: View {
     var symbol = "doc.text"
     var role: String?
     var filing: DecimalCategory?
+    /// Follows this item's links once; nil while that is running.
+    var explore: (() -> Void)?
     @State private var hovering = false
 
     var body: some View {
@@ -1350,6 +1362,9 @@ private struct ReferenceChip: View {
             Button("Open", action: open)
             Button(selected ? "Remove from sources" : "Use as source", action: toggleSource)
                 .disabled(!available)
+            Button("Explore Links from Here", action: explore ?? {})
+                .disabled(explore == nil || !available)
+                .help("Follow this item's links once, as Eager source acquisition would")
         }
     }
 }

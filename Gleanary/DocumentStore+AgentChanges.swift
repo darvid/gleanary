@@ -6,6 +6,8 @@ import GRDB
 struct AgentChange: Identifiable, Sendable, Equatable {
     enum Kind: String, Sendable, CaseIterable {
         case title, summary, filing, category
+        /// Rename the category with `code` from `before` to `after`.
+        case rename
         /// Archive the item; only ever proposed, never applied by an automation itself.
         case archive
         /// Link `noteID` to `targetID`.
@@ -139,6 +141,9 @@ extension DocumentStore {
             for row in rows where row["kind"] as String == "category" {
                 try record(Self.applyCategory(row, in: db), [row])
             }
+            for row in rows where row["kind"] as String == "rename" {
+                try record(Self.applyRename(row, in: db), [row])
+            }
             for batch in Self.textBatches(rows) {
                 try record(Self.applyText(batch, in: db), batch)
             }
@@ -169,7 +174,7 @@ extension DocumentStore {
             for batch in Self.textBatches(rows) where try Self.undoText(batch, in: db) {
                 undone += batch
             }
-            undone += try Self.undoEach(rows, kinds: ["category", "note"], in: db)
+            undone += try Self.undoEach(rows, kinds: ["rename", "category", "note"], in: db)
             for row in undone {
                 try db.execute(
                     sql: "UPDATE agent_changes SET status = 'undone' WHERE id = ?",
@@ -199,6 +204,7 @@ extension DocumentStore {
         case "relink": try swapLink(row, from: row["after"], to: row["before"], in: db)
         case "filing": try undoFiling(row, in: db)
         case "category": try undoCategory(row, in: db)
+        case "rename": try undoRename(row, in: db)
         case "note": try undoNewNote(row, in: db)
         default: false
         }
@@ -309,6 +315,45 @@ extension DocumentStore {
             ]
         )
         return true
+    }
+
+    /// Renames only if the category still has the name the proposal saw and no other category
+    /// took the new one.
+    private static func applyRename(_ row: Row, in db: Database) throws -> Bool {
+        guard let code: String = row["code"] else { return false }
+        let before: String = row["before"]
+        let name: String = row["after"]
+        guard (try? DecimalCategory.validate(code: code, name: name)) != nil,
+              let categoryID = try String.fetchOne(
+                  db,
+                  sql: "SELECT id FROM decimal_categories WHERE code = ? AND name = ?",
+                  arguments: [code, before]
+              ),
+              try !Row.fetchAll(db, sql: "SELECT id, name FROM decimal_categories")
+              .contains(where: {
+                  $0["id"] as String != categoryID
+                      && DecimalCategory.normalized($0["name"]) == DecimalCategory.normalized(name)
+              })
+        else { return false }
+        try db.execute(
+            sql: "UPDATE decimal_categories SET name = ? WHERE id = ?",
+            arguments: [name, categoryID]
+        )
+        try db.execute(
+            sql: "UPDATE agent_changes SET status = 'applied', snapshot = ? WHERE id = ?",
+            arguments: [categoryID, row["id"] as String]
+        )
+        return true
+    }
+
+    /// Restores the old name unless the category was renamed again since.
+    private static func undoRename(_ row: Row, in db: Database) throws -> Bool {
+        guard let categoryID: String = row["snapshot"] else { return false }
+        try db.execute(
+            sql: "UPDATE decimal_categories SET name = ? WHERE id = ? AND name = ?",
+            arguments: [row["before"] as String, categoryID, row["after"] as String]
+        )
+        return db.changesCount > 0
     }
 
     /// Only an unused category goes; anything filed there since keeps it.

@@ -720,8 +720,8 @@ and reviewed AI task extraction remain later slices.
 ### 7.8 Source acquisition
 
 One Capture setting, from lazy to eager, decides how links inside saved
-sources are followed. This first slice ships Off, Lazy, Suggest, and
-Balanced; Balanced is the default.
+sources are followed: Off, Lazy, Suggest, Balanced (the default), Eager,
+and Explore.
 
 - After a capture you made finishes, its links are recorded as
   candidates with the surrounding line, provenance, hop, score, state,
@@ -730,21 +730,44 @@ Balanced; Balanced is the default.
 - YouTube captures keep the description and a pinned comment the channel
   itself wrote as a "From the creator" section. Summaries and research
   read only the transcript. General comments are never fetched.
-- Scoring uses provenance and wording only. Creator recommendations
-  ("I'd recommend reading…") score highest; social profiles, sign-ups,
-  sponsor, storefront, and affiliate links are filtered. Bare domains,
-  same-site links, and shorteners score lower.
-- Lazy records links. Suggest offers up to five per source with one-click
-  Save or Dismiss under the chat reply. Balanced also saves up to three
-  creator recommendations per source and twenty per day, one hop from
-  your own saves, and links each back to its origin with the reason.
-- Automatic saves skip the AI summary. A chat capture replies first, then
-  saves recommendations and says what it saved. Fetched text is untrusted
-  data that only feeds scoring.
-
-Eager and Explore positions, relevance scoring, background crawling,
-per-category overrides, probation expiry, domain muting, and a digest
-remain later slices.
+- Scoring uses provenance and wording. Creator recommendations ("I'd
+  recommend reading…") score highest; social profiles, sign-ups, sponsor,
+  storefront, affiliate, and muted-site links are filtered. Bare domains,
+  same-site links, and shorteners score lower. Each hop multiplies the
+  score by 0.6. Eager and Explore also weigh closeness to the library's
+  indexed passages.
+- Lazy records links. Suggest offers up to five per source with Save,
+  Dismiss, and "Don't suggest links from this site" under the chat reply.
+  Balanced also saves up to three creator recommendations per source and
+  twenty per day, one hop out. Eager also saves creator and cited links
+  close to the library, up to ten per source and sixty per day, two hops
+  out. Explore adds the Source explorer automation, which re-judges the
+  strongest open links against today's library and saves those that
+  qualify, up to three hops and 150 per day.
+- Categories can set their own level; subcategories follow their parent.
+  A chat capture is re-judged after filing, before anything is saved.
+  "Explore Links from Here" follows one item's links once with Eager
+  rules, whatever the level.
+- Automatic saves skip the AI summary and link back to their origin with
+  the reason. A chat capture replies first, then saves and says what it
+  saved. The weekly digest lists the week's automatic saves under "Found
+  for you". Automatic saves left unopened, unfiled, and unlinked for 30
+  days are archived, which is reversible; opening one ends its probation.
+- When the AI provider is available, a model reads the wording around up
+  to 20 of a source's strongest links as recommendation, reference,
+  promotion, or other, and that reading replaces the cue phrases. The
+  reading is stored, so re-judging costs no call; without a model, cue
+  phrases decide.
+- Automatic saves respect each site's robots.txt (RFC 9309): a missing
+  file allows everything, and a file the site can't serve blocks until it
+  can. Saves you choose act for you and skip it. Automatic fetches from
+  one site are at least two seconds apart, longer when Crawl-delay asks,
+  up to 30 seconds. One site may take at most 3, 5, or 10 automatic saves
+  a day at Balanced, Eager, and Explore.
+- Automatic saves appear in the library graph as "Found via" connections
+  from where they were found.
+- Fetched text is untrusted data that only feeds scoring. Muted sites
+  are listed in Capture settings with Unmute.
 
 ## 8. Security, Privacy, Reliability
 
