@@ -30,7 +30,7 @@ private struct FakeMatchJudge: EntityMatchJudging {
     /// Records that a note mentions an entity, as extraction would.
     private func mention(
         _ name: String, kind: GraphNode.Kind, quote: String, in note: MarkdownDocument,
-        store: DocumentStore
+        store: DocumentStore, raw: Bool = false
     ) async throws {
         let revision = try #require(note.revision)
         let job = GraphJob(
@@ -42,7 +42,15 @@ private struct FakeMatchJudge: EntityMatchJudging {
                 id: GraphNode.documentID(note.id), kind: .document, label: note.name,
                 noteID: note.id
             ),
-            target: GraphNode.entity(name, kind: kind, noteID: note.id),
+            // Raw keeps the label as given, the way names were stored before people were put
+            // in reading order.
+            target: raw
+                ? GraphNode(
+                    id: "entity:" + ContentHash
+                        .of([kind.rawValue, name].joined(separator: "\u{0}")),
+                    kind: kind, label: name
+                )
+                : GraphNode.entity(name, kind: kind, noteID: note.id),
             predicate: .mentions, quote: quote, citation: nil, offset: 0, origin: "model"
         )
         try await store.readyDatabase().write { db in
@@ -190,6 +198,40 @@ private struct FakeMatchJudge: EntityMatchJudging {
         let concepts = try await store.entities(kind: .concept).map(\.name)
         #expect(!concepts.contains("RAG"))
         #expect(try await store.entities(kind: .tool).count == 2)
+    }
+
+    @Test func peopleMergeOnlyWhenTheFullNameMatchesInEitherOrder() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = try await store.save(MarkdownDocument(name: "One", markdown: "Notes."))
+        let two = try await store.save(MarkdownDocument(name: "Two", markdown: "Notes."))
+        // Inserted as written, as older libraries stored bylines before names were put in order.
+        try await mention(
+            "barnes, elizabeth",
+            kind: .person,
+            quote: "Barnes, Elizabeth",
+            in: one,
+            store: store,
+            raw: true
+        )
+        try await mention(
+            "Elizabeth Barnes",
+            kind: .person,
+            quote: "Elizabeth Barnes said",
+            in: two,
+            store: store
+        )
+        try await mention(
+            "Elizabeth",
+            kind: .person,
+            quote: "Elizabeth asked",
+            in: two,
+            store: store
+        )
+        #expect(try await EntityResolver(store: store).autoMerge() == 1)
+        let people = try await store.entities(kind: .person)
+        #expect(Set(people.map(\.name)) == ["Elizabeth Barnes", "Elizabeth"])
+        #expect(people.first { $0.name == "Elizabeth Barnes" }?.noteCount == 2)
     }
 
     @Test func mergeAllHandlesOverlappingPairs() async throws {

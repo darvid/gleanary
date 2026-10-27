@@ -151,7 +151,24 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
         #expect(Set(mentions.map(\.noteID)) == [first.id, second.id])
         #expect(mentions.allSatisfy { $0.predicate == .mentions && $0.other == nil })
         #expect(EntitiesView.byNote(mentions).count == 2)
-        #expect(DocumentStore.entityName("toby ord", in: []) == "Toby Ord")
+        #expect(DocumentStore.entityName("toby ord", kind: .person, in: []) == "Toby Ord")
+        // People read in order whichever way a byline wrote them, keeping their own casing.
+        #expect(DocumentStore.entityName(
+            "barnes, elizabeth",
+            kind: .person,
+            in: ["Barnes, Elizabeth"]
+        )
+            == "Elizabeth Barnes")
+        #expect(DocumentStore.entityName("ronald mcdonald", kind: .person, in: ["McDonald, Ronald"])
+            == "Ronald McDonald")
+        #expect(DocumentStore.entityName("apple, inc.", kind: .organization, in: ["Apple, Inc."])
+            == "Apple, Inc.")
+        #expect(PersonName.displayed("King, Martin Luther, Jr.") == "Martin Luther King Jr.")
+        #expect(PersonName.displayed("de la Cruz, Maria") == "Maria de la Cruz")
+        #expect(PersonName.displayed("毛泽东") == "毛泽东")
+        #expect(PersonName.displayed("Synthetic entity 12") == "Synthetic entity 12")
+        #expect(GraphNode.entity("Barnes, Elizabeth", kind: .person, noteID: UUID()).id
+            == GraphNode.entity("Elizabeth Barnes", kind: .person, noteID: UUID()).id)
     }
 
     @Test func capturedAuthorsSurviveTheNoteChangingAndCreatorTextIsNotExtracted() async throws {

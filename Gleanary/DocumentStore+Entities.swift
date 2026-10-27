@@ -147,7 +147,7 @@ extension DocumentStore {
                 let custom: String? = row["customName"]
                 return EntitySummary(
                     id: id, kind: kind,
-                    name: custom ?? Self.entityName(row["label"], in: quotes[id] ?? []),
+                    name: custom ?? Self.entityName(row["label"], kind: kind, in: quotes[id] ?? []),
                     noteCount: row["notes"], aliases: aliases[id] ?? [],
                     hidden: row["hidden"], renamed: custom != nil
                 )
@@ -226,12 +226,15 @@ extension DocumentStore {
         )
         var aliases: [String: [(id: String, name: String)]] = [:]
         for row in try Row.fetchAll(db, sql: """
-        SELECT o.entityID, o.mergedInto, g.label FROM entity_overrides o
+        SELECT o.entityID, o.mergedInto, g.label, g.kind FROM entity_overrides o
         JOIN graph_nodes g ON g.id = o.entityID
         WHERE o.mergedInto IN (SELECT value FROM json_each(?))
         """, arguments: [scope]) {
             aliases[row["mergedInto"], default: []]
-                .append((row["entityID"], entityName(row["label"], in: [])))
+                .append((
+                    row["entityID"],
+                    entityName(row["label"], kind: GraphNode.Kind(rawValue: row["kind"]), in: [])
+                ))
         }
         return aliases
     }
@@ -515,16 +518,17 @@ extension DocumentStore {
         )
     }
 
-    /// The name as a quote wrote it, else each word capitalized.
-    static func entityName(_ label: String, in quotes: [String]) -> String {
-        for quote in quotes {
-            if let range = quote.range(
-                of: label, options: [.caseInsensitive, .diacriticInsensitive]
-            ) {
-                return String(quote[range])
-            }
-        }
-        return label.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
+    /// The name as a quote wrote it, else each word capitalized; people's names in reading
+    /// order.
+    static func entityName(_ label: String, kind: GraphNode.Kind?, in quotes: [String]) -> String {
+        // A byline quote writes the name surname first; read in order, it keeps its own casing,
+        // such as "McDonald".
+        let written = kind == .person ? quotes + quotes.map(PersonName.displayed) : quotes
+        let name = written.lazy.compactMap { quote in
+            quote.range(of: label, options: [.caseInsensitive, .diacriticInsensitive])
+                .map { String(quote[$0]) }
+        }.first ?? label.split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+        return kind == .person ? PersonName.displayed(name) : name
     }
 }

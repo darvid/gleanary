@@ -211,10 +211,17 @@ struct EntityResolver: Sendable {
         let nodes = try await store.entityNodes()
         var groups: [String: [EntityNode]] = [:]
         let tagger = NLTagger(tagSchemes: [.lemma])
-        for node in nodes where Self.autoMergedKinds.contains(node.kind) && !node.keepSeparate
-            && (node.mergedInto == nil || node.automatic)
-        {
-            let key = EntityKey.words(node.label, tagger: tagger).joined(separator: " ")
+        for node in nodes where !node.keepSeparate && (node.mergedInto == nil || node.automatic) {
+            let key: String
+            if node.kind == .person {
+                // Only the same full name in another order, never a looser match: two people
+                // can share a first name or a surname.
+                key = GraphNode.normalize(PersonName.displayed(node.label))
+            } else if Self.autoMergedKinds.contains(node.kind) {
+                key = EntityKey.words(node.label, tagger: tagger).joined(separator: " ")
+            } else {
+                continue
+            }
             groups[node.kind.rawValue + "\u{0}" + key, default: []].append(node)
         }
         var merges: [(id: String, into: String)] = []
@@ -308,8 +315,12 @@ struct EntityResolver: Sendable {
                   seen.insert(first + "|" + second).inserted else { return nil }
             return EntityPair(
                 left: match.left.id, right: match.right.id,
-                leftName: DocumentStore.entityName(match.left.label, in: []),
-                rightName: DocumentStore.entityName(match.right.label, in: []),
+                leftName: DocumentStore.entityName(match.left.label, kind: match.left.kind, in: []),
+                rightName: DocumentStore.entityName(
+                    match.right.label,
+                    kind: match.right.kind,
+                    in: []
+                ),
                 kind: match.left.kind, basis: match.basis
             )
         }
