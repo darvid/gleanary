@@ -35,13 +35,19 @@ struct GraphNode: Identifiable, Codable, Sendable, Equatable {
 /// family-first scripts such as Chinese keep their own conventions.
 enum PersonName {
     static func displayed(_ name: String) -> String {
-        guard let components = PersonNameComponentsFormatter().personNameComponents(from: name)
+        // Only text written as a name is reordered; a handle or anything with digits is not
+        // "family, given" and stays as written.
+        guard name.unicodeScalars.allSatisfy({ nameCharacters.contains($0) }),
+              let components = PersonNameComponentsFormatter().personNameComponents(from: name)
         else { return name }
         let formatted = components.formatted(.name(style: .long))
         // Only a reordering is safe: if the parser dropped or added anything, such as the
         // number in "Agent 7", the name stays as written.
         return characters(formatted) == characters(name) ? formatted : name
     }
+
+    private static let nameCharacters = CharacterSet.letters.union(.nonBaseCharacters)
+        .union(.whitespaces).union(CharacterSet(charactersIn: ".,'’-‐"))
 
     private static func characters(_ text: String) -> [Character] {
         text.lowercased().filter { $0.isLetter || $0.isNumber }.sorted()

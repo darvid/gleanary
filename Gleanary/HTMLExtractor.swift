@@ -91,8 +91,7 @@ enum HTMLExtractor {
                     "Images and diagrams are not interpreted; available text and links are retained."
                 )
         }
-        let authors = try values("citation_author")
-        let fallbackAuthors = try values("author")
+        let authors = try AuthorNames.fromPage(document)
         let published = try values("citation_publication_date").first ?? values("date").first
         let identifier = try values("citation_doi").first ?? values("citation_arxiv_id").first
         let faviconURL = try document.select("link[rel]").array().first { link in
@@ -111,7 +110,7 @@ enum HTMLExtractor {
         return try HTMLAnalysis(
             sanitizedHTML: document.outerHtml(),
             title: title,
-            authors: authors.isEmpty ? fallbackAuthors : authors,
+            authors: authors,
             published: published,
             identifier: identifier,
             pdfURL: unique.count == 1 ? unique.first : nil,
@@ -168,7 +167,9 @@ enum HTMLExtractor {
         guard result.blocks.map(\.text).joined().count >= 80 else { throw CaptureError.noContent }
         return CapturedDocument(
             title: analysis.title.isEmpty ? result.title : analysis.title,
-            authors: analysis.authors.isEmpty ? result.byline
+            // Readability's byline is the page's byline text, which can run into a date; it's
+            // only a fallback when the page publishes no author.
+            authors: analysis.authors.isEmpty ? result.byline.flatMap(AuthorNames.name)
                 .map { [$0] } ?? [] : analysis.authors,
             published: analysis.published,
             identifier: analysis.identifier,

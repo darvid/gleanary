@@ -271,6 +271,71 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
         #expect(unknown.contains("Unknown entity handle"))
     }
 
+    @Test func authorsComeFromStructuredMetadataBeforeTheByline() throws {
+        // Shaped like a Squarespace post: JSON-LD and microdata name the author, while the
+        // visible byline runs the date into the name.
+        let post = try HTMLExtractor.analyze("""
+        <html><head><title>Swarm notes</title>
+        <script type="application/ld+json">{"@type":"WebSite","name":"Dana Reyes"}</script>
+        <script type="application/ld+json">{"@type":"Article","headline":"Swarm notes",
+            "author":"Dana Reyes","publisher":{"@type":"Organization","name":"Northwind"}}</script>
+        </head><body><h2><time>September 21, 2026</time><a class="author">Dana Reyes</a></h2>
+        <p>Body.</p></body></html>
+        """, url: nil)
+        #expect(post.authors == ["Dana Reyes"])
+        let graph = try HTMLExtractor.analyze("""
+        <html><head><script type="application/ld+json">{"@graph":[{"@type":"NewsArticle",
+            "author":[{"@type":"Person","name":"Sam Okafor"},{"@type":"Person","name":"Dana Reyes"}]}]}
+        </script></head><body><p>Body.</p></body></html>
+        """, url: nil)
+        #expect(graph.authors == ["Sam Okafor", "Dana Reyes"])
+        let microdata = try HTMLExtractor.analyze("""
+        <html><body><span itemprop="author" itemscope><span itemprop="name">Sam Okafor</span></span>
+        <p>Body.</p></body></html>
+        """, url: nil)
+        #expect(microdata.authors == ["Sam Okafor"])
+        let handle = try HTMLExtractor.analyze("""
+        <html><head><meta name="author" content="Dana Reyes, @danareyes"></head>
+        <body><p>Body.</p></body></html>
+        """, url: nil)
+        #expect(handle.authors == ["Dana Reyes"])
+        #expect(AuthorNames.name("September 21, 2026Dana Reyes") == nil)
+        #expect(AuthorNames.name("@danareyes") == nil)
+        #expect(PersonName.displayed("Dana Reyes, @danareyes") == "Dana Reyes, @danareyes")
+    }
+
+    @Test func repairingAuthorsCleansEarlierCaptures() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Swarm notes", markdown: "Notes."))
+        let revision = try #require(note.revision)
+        let job = GraphJob(
+            noteID: note.id, revision: revision, token: UUID(), name: note.name,
+            state: "ready", completed: 0, total: 0, error: nil
+        )
+        let document = GraphNode(
+            id: GraphNode.documentID(note.id), kind: .document, label: note.name, noteID: note.id
+        )
+        try await store.readyDatabase().write { db in
+            for (offset, author) in ["September 21, 2026Dana Reyes", "Sam Okafor, @samokafor"]
+                .enumerated()
+            {
+                // As stored before authors were cleaned: the label exactly as written.
+                let target = GraphNode(
+                    id: "entity:" + ContentHash
+                        .of(["person", author.lowercased()].joined(separator: "\u{0}")),
+                    kind: .person, label: author.lowercased()
+                )
+                try DocumentStore.insertGraphClaim(GraphClaim(
+                    source: document, target: target, predicate: .authoredBy, quote: author,
+                    citation: nil, offset: offset, origin: "metadata"
+                ), job: job, chunk: -1, in: db)
+            }
+            try DocumentStore.repairAuthorNames(db)
+        }
+        #expect(try await store.entities(kind: .person).map(\.name) == ["Sam Okafor"])
+    }
+
     @Test func recordedEntitiesSurviveEditsWhileTheirQuoteRemains() async throws {
         let (root, store) = try await store()
         defer { try? FileManager.default.removeItem(at: root) }

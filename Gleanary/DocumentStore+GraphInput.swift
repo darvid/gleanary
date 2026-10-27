@@ -103,7 +103,7 @@ extension DocumentStore {
         ) else { return }
         let captureID = try uuid(capture["id"])
         let metadata = try JSONDecoder().decode(CapturedDocument.self, from: capture["document"])
-        for author in metadata.authors.prefix(50) where !author.isEmpty && author.count <= 200 {
+        for author in metadata.authors.compactMap(AuthorNames.name).prefix(50) {
             let target = GraphNode.entity(author, kind: .person, noteID: note.id)
             let claim = GraphClaim(
                 source: node,
