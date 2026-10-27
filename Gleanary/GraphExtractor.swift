@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import OSLog
 
 enum ExtractedEntityKind: String, Codable, Sendable {
     case concept, person, organization, tool
@@ -1100,9 +1101,34 @@ actor GraphExtractor {
     }
 
     /// `only` reads just these notes, for extraction you asked for.
+    /// Each model call's duration, in Console under the "graph" category.
+    private static let log = Logger(subsystem: "app.gleanary", category: "graph")
+    /// False skips mind maps, the slowest step, when only entities were asked for.
+    private var includesMindMaps = true
+
+    private func timed<T>(_ step: String, _ note: String, _ work: () async throws -> T)
+        async rethrows -> T
+    {
+        let start = ContinuousClock.now
+        defer {
+            let seconds = (ContinuousClock.now - start) / .seconds(1)
+            Self.log
+                .info(
+                    "\(step, privacy: .public) took \(seconds, format: .fixed(precision: 1))s for \(note, privacy: .private)"
+                )
+        }
+        return try await work()
+    }
+
     /// A request for chosen notes finishes each note before starting the next, so progress
     /// shows as notes complete; background reading finds candidates everywhere first.
-    func run(only notes: Set<UUID>? = nil, update: @Sendable () async -> Void) async throws {
+    func run(
+        only notes: Set<UUID>? = nil,
+        mindMaps: Bool = true,
+        update: @Sendable () async -> Void
+    ) async throws {
+        includesMindMaps = mindMaps
+        defer { includesMindMaps = true }
         while !Task.isCancelled {
             if notes != nil, let work = try await store.nextGraphCurationWork(only: notes) {
                 try await processCuration(work, update: update)
@@ -1132,10 +1158,13 @@ actor GraphExtractor {
             if let cached = try await store.cachedGraphProposal(for: work, overview: overview) {
                 proposal = cached
             } else {
+                let text = work.chunk.extractionText
                 proposal = if overview {
-                    try await provider.extractOverview(work.chunk.extractionText)
+                    try await timed("overview", work.job.name) {
+                        try await provider.extractOverview(text)
+                    }
                 } else {
-                    try await provider.extract(work.chunk.extractionText)
+                    try await timed("passage", work.job.name) { try await provider.extract(text) }
                 }
                 try await store.cacheGraphProposal(proposal, for: work, overview: overview)
             }
@@ -1169,7 +1198,9 @@ actor GraphExtractor {
     ) async throws {
         await update()
         do {
-            var proposal = try await provider.curate(work)
+            var proposal = try await timed("curate", work.job.name) {
+                try await provider.curate(work)
+            }
             try Task.checkCancellation()
             let selectedEvidence = DocumentStore.relationEvidence(
                 in: work.sourceChunks,
@@ -1207,18 +1238,19 @@ actor GraphExtractor {
                 sourceChunks: work.sourceChunks,
                 mapEvidence: mapEvidence
             )
-            proposal.relations = try await provider.relate(
-                enrichedWork,
-                entities: proposal.entities
-            )
+            let selected = proposal.entities
+            proposal.relations = try await timed("relate", work.job.name) {
+                try await provider.relate(enrichedWork, entities: selected)
+            }
             proposal.relations += GraphValidation.explicitComponentRelations(
                 entities: proposal.entities,
                 evidence: evidence
             )
-            let mapProposal = try await provider.mindMap(
-                enrichedWork,
-                entities: proposal.entities
-            )
+            let mapProposal = includesMindMaps
+                ? try await timed("mind map", work.job.name) {
+                    try await provider.mindMap(enrichedWork, entities: selected)
+                }
+                : MindMapProposal(nodes: [])
             let mapClaims = GraphValidation.mindMapClaims(
                 mapProposal,
                 evidence: enrichedWork.mapEvidence,
