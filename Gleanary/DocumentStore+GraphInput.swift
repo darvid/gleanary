@@ -39,8 +39,10 @@ extension DocumentStore {
                     from: $0
                 ) }
             segments = blocks.enumerated().compactMap { ordinal, block in
+                // The creator's description and pinned comment are mostly promotion.
                 guard ![.code, .table, .image].contains(block.kind),
-                      !isReferenceSection(block.section) else { return nil }
+                      !isReferenceSection(block.section),
+                      !CreatorText.methods.contains(block.method) else { return nil }
                 return GraphSegment(
                     text: block.text,
                     citation: SourceCitation(
@@ -56,26 +58,8 @@ extension DocumentStore {
                     )
                 )
             }
-            for author in metadata.authors.prefix(50) where !author.isEmpty && author.count <= 200 {
-                let target = GraphNode.entity(author, kind: .person, noteID: note.id)
-                let claim = GraphClaim(
-                    source: node,
-                    target: target,
-                    predicate: .authoredBy,
-                    quote: author,
-                    citation: SourceCitation(
-                        captureID: captureID,
-                        blockOrdinal: 0,
-                        page: nil,
-                        section: "Capture metadata · authors",
-                        url: metadata.sourceURL
-                    ),
-                    offset: 0,
-                    origin: "metadata"
-                )
-                try insertGraphClaim(claim, job: job, chunk: -1, in: db)
-            }
         }
+        try insertAuthorClaims(for: note, node: node, job: job, in: db)
         let detector = try NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
         for match in detector.matches(
             in: note.markdown,
@@ -102,6 +86,42 @@ extension DocumentStore {
             extractionIndices: sourceChunks.isEmpty ? [] : [0],
             selectionComplete: sourceChunks.count <= 1
         )
+    }
+
+    /// "By" relationships from what the capture recorded about its authors or channel. They
+    /// hold however the note's text changed since, as for a saved link replaced by its summary.
+    private static func insertAuthorClaims(
+        for note: MarkdownDocument,
+        node: GraphNode,
+        job: GraphJob,
+        in db: Database
+    ) throws {
+        guard let capture = try Row.fetchOne(
+            db,
+            sql: "SELECT id, document FROM captures WHERE noteID = ? ORDER BY createdAt DESC LIMIT 1",
+            arguments: [note.id.uuidString]
+        ) else { return }
+        let captureID = try uuid(capture["id"])
+        let metadata = try JSONDecoder().decode(CapturedDocument.self, from: capture["document"])
+        for author in metadata.authors.compactMap(AuthorNames.name).prefix(50) {
+            let target = GraphNode.entity(author, kind: .person, noteID: note.id)
+            let claim = GraphClaim(
+                source: node,
+                target: target,
+                predicate: .authoredBy,
+                quote: author,
+                citation: SourceCitation(
+                    captureID: captureID,
+                    blockOrdinal: 0,
+                    page: nil,
+                    section: "Capture metadata · authors",
+                    url: metadata.sourceURL
+                ),
+                offset: 0,
+                origin: "metadata"
+            )
+            try insertGraphClaim(claim, job: job, chunk: -1, in: db)
+        }
     }
 
     static func selectGraphPassages(

@@ -56,8 +56,8 @@ struct ChatGPTSettings: View {
                         .controlSize(.small).disabled(changingAccount)
                     }.padding(.bottom, 16)
                 }
-                InferenceSettingsRow(title: "Filing model") {
-                    Picker("Filing model", selection: Binding(
+                InferenceSettingsRow(title: "Bulk work model") {
+                    Picker("Bulk work model", selection: Binding(
                         get: { connection.filingModel },
                         set: { connection.selectFilingModel($0) }
                     )) {
@@ -66,7 +66,7 @@ struct ChatGPTSettings: View {
                     }.labelsHidden().fixedSize().frame(width: pickerWidth, alignment: .trailing)
                         .disabled(changingAccount)
                         .help(
-                            "Used to categorize unfiled items and plan imported folders. A small, fast model keeps large imports quick and within plan limits."
+                            "Used to categorize unfiled items, plan imported folders and find entities. A small, fast model keeps large batches quick and within plan limits."
                         )
                 }
             } else {

@@ -66,11 +66,15 @@ extension AgentCoordinator {
                 throw error
             }
         }
+        let entityFinder = ConversationEntityFinder { [self] ids in
+            try await findEntities(ids, taskID: taskID, changed: changed)
+        }
         let agent = LibraryAgent(
             model: model,
             toolbox: toolbox,
             workflows: workflows,
-            sourceCaptures: captures
+            sourceCaptures: captures,
+            entityFinder: entityFinder
         )
         let outcome = try await agent.run(
             request: route.text,

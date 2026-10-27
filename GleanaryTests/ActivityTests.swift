@@ -310,6 +310,15 @@ struct ActivityTests {
         ))
         note.markdown = "# Retries\n\nUse a stable request key.\n\nStore the result before acknowledging success."
         note = try await fixture.store.save(note)
+        // A second note edited several times, so a grouped row renders beside single ones.
+        var session = try await fixture.store.save(MarkdownDocument(
+            name: "Draft outline",
+            markdown: "One"
+        ))
+        for value in ["Two", "Three"] {
+            session.markdown = value
+            session = try await fixture.store.save(session)
+        }
         _ = try await fixture.store.save(MarkdownDocument(
             name: "A source worth revisiting",
             markdown: "Saved evidence for another day."

@@ -781,6 +781,44 @@ extension AppleConversationInference: RecommendationJudging {
     }
 }
 
+extension AppleConversationInference: EntityMatchJudging {
+    func judgeMatches(_ items: [EntityMatchJudgement.Item]) async throws
+        -> [Int: EntityMatchJudgement.Verdict]
+    {
+        guard SystemLanguageModel.default.availability == .available
+        else { throw LinkSummaryError.unavailable }
+        let answer = DynamicGenerationSchema(name: "Answer", properties: [
+            .init(name: "item", schema: .init(type: Int.self)),
+            .init(name: "same", schema: .init(type: Bool.self)),
+            .init(name: "reason", schema: .init(type: String.self)),
+        ])
+        let schema = try GenerationSchema(
+            root: .init(name: "Answers", properties: [
+                .init(name: "answers", schema: .init(arrayOf: .init(referenceTo: "Answer"))),
+            ]),
+            dependencies: [answer]
+        )
+        let session = LanguageModelSession(instructions: EntityMatchJudgement.instructions)
+        do {
+            let response = try await session.respond(
+                to: EntityMatchJudgement.prompt(items),
+                schema: schema,
+                options: GenerationOptions(sampling: .greedy, maximumResponseTokens: 1200)
+            )
+            try Task.checkCancellation()
+            return try EntityMatchJudgement.decode(
+                Data(response.content.jsonString.utf8), items: items
+            )
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as LinkSummaryError {
+            throw error
+        } catch {
+            throw AppleLinkSummarizer.modelFailure(error)
+        }
+    }
+}
+
 extension AppleConversationInference: LinkJudging {
     var local: Bool {
         true

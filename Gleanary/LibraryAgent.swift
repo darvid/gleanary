@@ -78,6 +78,10 @@ struct LibraryAgent {
     "| Company Blog". Never invent facts.
     Summaries: only rewrite one when asked, using only the item's content, in Markdown.
     Rename a category with propose_category_rename; it keeps its code and filed items.
+    People, organizations, tools and concepts: list_entities and get_entity read what has been
+    found. When the user asks to find or extract them, use find_entities on the items, category
+    or recent saves they mean; it reads those items and reports what it found, including names
+    merged automatically and possible duplicates waiting for review on the Entities page.
     Filing: prefer existing categories. Use propose_category only for a clearly needed new home,
     with an unused code: XY under an existing area, or XY.NN under an existing category.
     Skip changes that would leave an item as it is. If the request is unclear or can't be done
@@ -87,10 +91,21 @@ struct LibraryAgent {
     Sources, queued captures completed captures, or pending filing proposals applied changes.
     """)
 
+    /// Offered only where the tools fit: the on-device model's context is already full.
+    static let entityEditInstructions = """
+    Keep entities current as part of any request about a specific person, organization, tool or
+    concept, such as researching or saving notes about them: check list_entities for it, then
+    after the workflow returns its saved item, call create_entity with that item (it joins an
+    existing entity with the same name and kind, so reuse that exact name). Use update_entity to
+    correct a name or merge a duplicate, and remove_entity when asked to remove one. Entity
+    tools apply immediately and can be undone on the Entities page; name them in the reply.
+    """
+
     let model: any AgentResponding
     let toolbox: AgentToolbox
     var workflows: ConversationWorkflows?
     var sourceCaptures: ConversationSourceCaptures?
+    var entityFinder: ConversationEntityFinder?
 
     func run(
         request: String,
@@ -118,11 +133,16 @@ struct LibraryAgent {
             "role": "user",
             "content": prompt,
         ]))
+        let editsEntities = !(model is AppleConversationInference)
         let loop = try ToolLoop(
-            model: model, instructions: Self.instructions,
+            model: model,
+            instructions: Self.instructions
+                + (editsEntities ? "\n" + Self.entityEditInstructions : ""),
             tools: AgentToolbox.definitions(
                 includingWorkflows: workflows != nil,
-                includingSourceCaptures: sourceCaptures != nil
+                includingSourceCaptures: sourceCaptures != nil,
+                includingEntityFinder: entityFinder != nil,
+                includingEntityEdits: editsEntities
             )
         )
         let reply = try await loop.run(input: input) { call in
@@ -131,6 +151,9 @@ struct LibraryAgent {
             }
             if call.name == ConversationSourceCaptures.toolName, let sourceCaptures {
                 return try await sourceCaptures.run(call, toolbox: toolbox)
+            }
+            if call.name == ConversationEntityFinder.toolName, let entityFinder {
+                return try await entityFinder.run(call, toolbox: toolbox)
             }
             return await toolbox.run(call)
         } progress: {
@@ -226,6 +249,8 @@ actor AgentToolbox {
     private(set) var changes: [AgentChangeDraft] = []
     private(set) var progress = "Working"
     private var handles: [String: UUID] = [:]
+    private var entityHandles: [String: String] = [:]
+    private var entityOrder: [String: String] = [:]
     private var handleOrder: [UUID: String] = [:]
     private var read: Set<UUID> = []
     private var readOrder: [UUID] = []
@@ -247,7 +272,9 @@ actor AgentToolbox {
     // swiftlint:disable:next function_body_length
     static func definitions(
         includingWorkflows: Bool = false,
-        includingSourceCaptures: Bool = false
+        includingSourceCaptures: Bool = false,
+        includingEntityFinder: Bool = false,
+        includingEntityEdits: Bool = false
     ) throws -> Data {
         func tool(
             _ name: String,
@@ -319,6 +346,22 @@ actor AgentToolbox {
                 "code": text, "name": text, "reason": reason,
             ]),
             tool(
+                "list_entities",
+                "List people, organizations, tools and concepts found in saved items, most mentioned first. Only items already read for entities appear.",
+                [
+                    "kind": [
+                        "type": "string",
+                        "enum": ["any", "person", "organization", "tool", "concept"],
+                    ],
+                    "query": ["type": "string", "description": "Part of a name, or empty for all."],
+                ]
+            ),
+            tool(
+                "get_entity",
+                "Read the passages that mention an entity, with the items they come from.",
+                ["entity": ["type": "string", "description": "An entity handle such as e2."]]
+            ),
+            tool(
                 "propose_category_rename",
                 "Propose renaming an existing category; its code and filed items stay as they are.",
                 ["code": text, "name": text, "reason": reason]
@@ -329,6 +372,48 @@ actor AgentToolbox {
         }
         if includingSourceCaptures {
             tools.append(ConversationSourceCaptures.definition)
+        }
+        if includingEntityFinder {
+            tools.append(ConversationEntityFinder.definition)
+        }
+        if includingEntityEdits {
+            tools += [
+                tool(
+                    "create_entity",
+                    "Record that an item mentions a person, organization, tool or concept, such as the subject of research just saved. Adds the item to an existing entity with the same name and kind, else creates it. Applies immediately.",
+                    [
+                        "name": ["type": "string", "description": "Its usual full name."],
+                        "kind": [
+                            "type": "string", "enum": ["person", "organization", "tool", "concept"],
+                        ],
+                        "item": item,
+                        "quote": [
+                            "type": "string",
+                            "description": "Exact words from the item that name it, or empty to use the name's first mention.",
+                        ],
+                    ]
+                ),
+                tool(
+                    "update_entity",
+                    "Rename an entity, or merge it into another that is the same thing. Applies immediately.",
+                    [
+                        "entity": ["type": "string", "description": "An entity handle such as e2."],
+                        "name": [
+                            "type": "string",
+                            "description": "A new name, or empty to keep it.",
+                        ],
+                        "merge_into": [
+                            "type": "string",
+                            "description": "The handle of the entity it duplicates, or empty.",
+                        ],
+                    ]
+                ),
+                tool(
+                    "remove_entity",
+                    "Remove an entity the user asks to remove: hides it and its recorded mentions so later reading doesn't bring it back. Applies immediately.",
+                    ["entity": ["type": "string", "description": "An entity handle such as e2."]]
+                ),
+            ]
         }
         return try JSONSerialization.data(withJSONObject: tools)
     }
@@ -361,6 +446,11 @@ actor AgentToolbox {
         switch name {
         case "get_item_links": try await getItemLinks(arguments)
         case "read_conversation": try await readConversation(arguments)
+        case "list_entities": try await listEntities(arguments)
+        case "get_entity": try await getEntity(arguments)
+        case "create_entity": try await createEntity(arguments)
+        case "update_entity": try await updateEntity(arguments)
+        case "remove_entity": try await removeEntity(arguments)
         default: try await propose(name, arguments)
         }
     }
@@ -369,7 +459,8 @@ actor AgentToolbox {
         guard call.arguments.utf8.count <= 64000,
               let arguments = try JSONSerialization
               .jsonObject(with: Data(call.arguments.utf8)) as? [String: Any],
-              let tools = try JSONSerialization.jsonObject(with: definitions()) as? [[String: Any]],
+              let tools = try JSONSerialization
+              .jsonObject(with: definitions(includingEntityEdits: true)) as? [[String: Any]],
               let tool = tools.first(where: { $0["name"] as? String == call.name }),
               let schema = tool["parameters"] as? [String: Any],
               let properties = schema["properties"] as? [String: [String: Any]],
@@ -500,6 +591,154 @@ actor AgentToolbox {
             "total": page.total,
             "has_more": offset + page.documents.count < page.total,
         ]
+    }
+
+    // MARK: Entities
+
+    private func listEntities(_ arguments: [String: Any]) async throws -> Any {
+        let kind = GraphNode.Kind(rawValue: string(arguments, "kind", limit: 20))
+        progress = "Listing entities"
+        let found = try await store.entities(
+            kind: kind == .document ? nil : kind,
+            matching: string(arguments, "query", limit: 100),
+            limit: 50
+        )
+        return ["entities": describeEntities(found).map { row in
+            ["entity": row.entity, "name": row.name, "kind": row.kind, "items": row.items]
+        }]
+    }
+
+    private func getEntity(_ arguments: [String: Any]) async throws -> Any {
+        let id = try entity(arguments, "entity")
+        progress = "Reading an entity"
+        return try await ["mentions": store.entityMentions(id, limit: 40).map { mention in
+            [
+                "item": handle(for: mention.noteID),
+                "title": String(mention.noteName.prefix(200)),
+                "relation": EntitiesView.relation(mention) ?? "mentions",
+                "untrusted_quote": String(mention.quote.prefix(300)),
+            ]
+        }]
+    }
+
+    private func createEntity(_ arguments: [String: Any]) async throws -> Any {
+        guard let kind = GraphNode.Kind(rawValue: string(arguments, "kind", limit: 20)),
+              kind != .document
+        else { throw ToolError(message: "Kind is person, organization, tool or concept.") }
+        let name = string(arguments, "name", limit: 200)
+        guard !name.isEmpty else { throw ToolError(message: "Give the entity's name.") }
+        let note = try item(arguments)
+        progress = "Recording an entity"
+        let id = try await store.recordEntity(
+            name, kind: kind, in: note, quote: string(arguments, "quote", limit: 500)
+        )
+        return try await ["entity": entityResult(id)]
+    }
+
+    private func updateEntity(_ arguments: [String: Any]) async throws -> Any {
+        let id = try entity(arguments, "entity")
+        let name = string(arguments, "name", limit: 200)
+        let target = string(arguments, "merge_into", limit: 20)
+        guard !name.isEmpty || !target.isEmpty else {
+            throw ToolError(message: "Give a new name, an entity to merge into, or both.")
+        }
+        progress = "Updating an entity"
+        if !name.isEmpty {
+            try await store.renameEntity(id, to: name)
+        }
+        guard !target.isEmpty else { return try await ["entity": entityResult(id)] }
+        let into = try entity(["entity": target], "entity")
+        guard into != id else { throw ToolError(message: "An entity can't merge into itself.") }
+        try await store.mergeEntity(id, into: into)
+        return try await ["merged_into": entityResult(into)]
+    }
+
+    private func removeEntity(_ arguments: [String: Any]) async throws -> Any {
+        let id = try entity(arguments, "entity")
+        progress = "Removing an entity"
+        try await store.removeEntity(id)
+        return ["removed": true]
+    }
+
+    private func entity(_ arguments: [String: Any], _ key: String) throws -> String {
+        guard let id = entityHandles[string(arguments, key, limit: 20)] else {
+            throw ToolError(message: "Unknown entity handle. Use one from list_entities.")
+        }
+        return id
+    }
+
+    /// The entity as the list shows it after a change, merges and your names applied.
+    private func entityResult(_ id: String) async throws -> [String: Any] {
+        let nodes = try await store.entityNodes()
+        let canonical = nodes.first { $0.id == id }?.mergedInto ?? id
+        guard let node = nodes.first(where: { $0.id == canonical }),
+              let summary = try await store.entities(
+                  kind: node.kind,
+                  matching: node.label,
+                  limit: 50
+              )
+              .first(where: { $0.id == canonical })
+        else { return ["entity": "", "name": "", "kind": "", "items": 0] }
+        let row = describeEntities([summary])[0]
+        return ["entity": row.entity, "name": row.name, "kind": row.kind, "items": row.items]
+    }
+
+    /// Entities these items mention, with handles.
+    func entitiesFound(in ids: [UUID]) async throws -> [EntityRow] {
+        try await describeEntities(store.entities(in: Set(ids), limit: 40))
+    }
+
+    /// Entities with handles the model can pass to get_entity.
+    func describeEntities(_ entities: [EntitySummary]) -> [EntityRow] {
+        entities.map { entity in
+            let handle = entityOrder[entity.id] ?? {
+                let next = "e\(entityHandles.count + 1)"
+                entityHandles[next] = entity.id
+                entityOrder[entity.id] = next
+                return next
+            }()
+            return EntityRow(
+                entity: handle, name: String(entity.name.prefix(200)),
+                kind: entity.kind.rawValue, items: entity.noteCount
+            )
+        }
+    }
+
+    struct EntityRow: Codable, Sendable, Equatable {
+        let entity: String
+        let name: String
+        let kind: String
+        let items: Int
+    }
+
+    /// The items a find_entities request covers, newest first, at most `limit`.
+    func entityScope(
+        _ scope: String,
+        items: [String],
+        categoryCode: String,
+        limit: Int
+    ) async throws -> [UUID] {
+        let limit = min(max(1, limit), ConversationEntityFinder.maximumItems)
+        switch scope {
+        case "items":
+            guard !items.isEmpty else { throw ToolError(message: "Give item handles.") }
+            return try Array(items.prefix(limit)).map { try item(["item": $0]) }
+        case "category":
+            guard let category = try await store.categories()
+                .first(where: { $0.code == categoryCode })
+            else { throw ToolError(message: "No category has code \(categoryCode).") }
+            return try await store.documentPage(
+                offset: 0,
+                limit: limit,
+                scope: .category(category.id)
+            )
+            .documents.map(\.id)
+        case "recent", "all":
+            return try await store.documentPage(offset: 0, limit: limit, scope: .all).documents
+                .map(\.id)
+        default:
+            throw ToolError(message: "Scope is items, category, recent or all.")
+        }
     }
 
     private func readConversation(_ arguments: [String: Any]) async throws -> Any {

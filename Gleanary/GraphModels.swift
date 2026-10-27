@@ -12,7 +12,8 @@ struct GraphNode: Identifiable, Codable, Sendable, Equatable {
     }
 
     static func entity(_ label: String, kind: Kind, noteID _: UUID) -> GraphNode {
-        let normalized = normalize(label)
+        // "Barnes, Elizabeth" from a byline and "Elizabeth Barnes" in prose are one person.
+        let normalized = normalize(kind == .person ? PersonName.displayed(label) : label)
         // Exact normalized names merge within one type. Evidence remains source-specific,
         // while cross-type names stay separate (for example, an organization and a tool).
         return GraphNode(
@@ -26,6 +27,30 @@ struct GraphNode: Identifiable, Codable, Sendable, Equatable {
     static func normalize(_ text: String) -> String {
         text.precomposedStringWithCanonicalMapping.lowercased()
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+/// People's names in the order they're read, by the system's name parser and formatter:
+/// "Barnes, Elizabeth" becomes "Elizabeth Barnes", while particles, middle names, suffixes and
+/// family-first scripts such as Chinese keep their own conventions.
+enum PersonName {
+    static func displayed(_ name: String) -> String {
+        // Only text written as a name is reordered; a handle or anything with digits is not
+        // "family, given" and stays as written.
+        guard name.unicodeScalars.allSatisfy({ nameCharacters.contains($0) }),
+              let components = PersonNameComponentsFormatter().personNameComponents(from: name)
+        else { return name }
+        let formatted = components.formatted(.name(style: .long))
+        // Only a reordering is safe: if the parser dropped or added anything, such as the
+        // number in "Agent 7", the name stays as written.
+        return characters(formatted) == characters(name) ? formatted : name
+    }
+
+    private static let nameCharacters = CharacterSet.letters.union(.nonBaseCharacters)
+        .union(.whitespaces).union(CharacterSet(charactersIn: ".,'’-‐"))
+
+    private static func characters(_ text: String) -> [Character] {
+        text.lowercased().filter { $0.isLetter || $0.isNumber }.sorted()
     }
 }
 

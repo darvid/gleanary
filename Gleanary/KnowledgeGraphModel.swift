@@ -116,6 +116,8 @@ final class KnowledgeGraphModel {
         return "\(snapshot.totalNodes) knowledge nodes"
     }
 
+    @ObservationIgnored private var stopped = false
+
     func load() async throws {
         guard !ready else { return }
         try await store.recoverGraph()
@@ -132,8 +134,23 @@ final class KnowledgeGraphModel {
         startExtraction()
     }
 
+    func useGraphProvider(_ provider: any GraphExtracting) {
+        let extractor = extractor
+        Task { await extractor.useProvider(provider) }
+    }
+
+    /// Stops background reading until `allowExtraction`; requests from chat still read.
+    func stopExtraction() {
+        stopped = true
+        extractionTask?.cancel()
+    }
+
+    func allowExtraction() {
+        stopped = false
+    }
+
     func startExtraction() {
-        guard ready else { return }
+        guard ready, !stopped else { return }
         guard extractionTask == nil else { runAgain = true; return }
         extracting = true
         extractionTask = Task { [weak self] in

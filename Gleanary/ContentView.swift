@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var automating = false
     @State private var showingActivity = false
     @State private var showingTasks = false
+    @State private var showingEntities = false
     @State private var taskView = WorkspaceTaskView.inbox
     @State private var showingTemplates = false
     @State private var editingProfile: NoteProfile?
@@ -24,6 +25,7 @@ struct ContentView: View {
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
     @AppStorage("librarySidebarExpanded") private var librarySidebarExpanded = true
+    @AppStorage(LibraryModel.backgroundEntitiesKey) private var readEntitiesInBackground = false
     @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
     @State private var page = 0
@@ -99,7 +101,9 @@ struct ContentView: View {
             }
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting, !showingActivity, !showingTasks, readerTarget == nil {
+            if showingFiling, !chatting, !showingActivity, !showingTasks, !showingEntities,
+               readerTarget == nil
+            {
                 // One unit, so the edge slides in with the panel instead of appearing first.
                 HStack(spacing: 0) {
                     Divider()
@@ -309,6 +313,9 @@ struct ContentView: View {
             await library.useLinkSummarizer(linkSummarizer())
             library.useLinkJudge(linkJudge())
             library.useRecommendationJudge(linkJudge() as? any RecommendationJudging)
+            library.useGraphExtractor(
+                currentInference() as? any GraphExtracting ?? AppleGraphExtractor()
+            )
             library.useFiler(currentInference())
         }
         .task {
@@ -430,9 +437,26 @@ struct ContentView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readerTarget != nil)
     }
 
-    @ViewBuilder private var browsingMain: some View {
+    private var browsingMain: some View {
+        browsingContent
+            .onChange(of: readEntitiesInBackground) { _, enabled in
+                Task { await library.setBackgroundEntityReading(enabled) }
+            }
+    }
+
+    @ViewBuilder private var browsingContent: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
+        } else if showingEntities {
+            if library.ready {
+                EntitiesView(
+                    store: library.store,
+                    judge: currentInference() as? any EntityMatchJudging,
+                    open: openSavedItem
+                )
+            } else {
+                ProgressView("Opening entities…")
+            }
         } else if showingTasks {
             if library.ready {
                 WorkspaceTasksView(
@@ -480,6 +504,9 @@ struct ContentView: View {
                     showingReader: readerTarget != nil
                 ))
                 .font(.headline).lineLimit(1)
+                // The toolbar keeps the width of the previous title, so a longer one would
+                // otherwise truncate ("Activi…") after switching from a shorter page.
+                .fixedSize()
             }
             .transaction { $0.animation = nil }
         }
@@ -488,7 +515,8 @@ struct ContentView: View {
         if !chatting {
             ToolbarSpacer(.flexible)
         }
-        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
+        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
+           readerTarget == nil,
            scope == .unfiled
         {
             ToolbarItem {
@@ -508,7 +536,8 @@ struct ContentView: View {
                 )
             }
         }
-        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
+        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
+           readerTarget == nil,
            presentation.showsPicker(
                in: scope,
                hasOpenedItem: atlasItem != nil,
@@ -780,6 +809,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         scope = .all
         if kindFilter == .sources {
             kindFilter = .notes
@@ -821,6 +851,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         graph.activate(scope: .all, kind: .all)
         graphFocus = id
         atlasItem = nil
@@ -847,6 +878,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         pendingSelection = id
         if scope == .all {
             revealPendingSelection()
@@ -894,6 +926,7 @@ struct ContentView: View {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
             automations: automating, activity: showingActivity, tasks: showingTasks,
+            entities: showingEntities,
             kindFilter: kindFilter,
             presentation: presentation, graphFocus: graphFocus
         )
@@ -940,6 +973,7 @@ struct ContentView: View {
         automating = target.automations
         showingActivity = target.activity
         showingTasks = target.tasks
+        showingEntities = target.entities
         presentation = target.presentation
         graph.activate(scope: target.scope ?? .all, kind: target.kindFilter)
         graphFocus = target.graphFocus
@@ -999,37 +1033,6 @@ struct ContentView: View {
                 .help(conversation.running ? "Chat is working" : "Chat")
                 .tag(SidebarItem.conversation)
             }
-            // The agents' scheduled work sits with Chat, above the library's content.
-            HStack {
-                let color: Color = colorScheme == .dark || (automating && !chatting)
-                    ? .white : .black
-                Label("Automations", systemImage: "clock.arrow.2.circlepath")
-                    .labelStyle(LibrarySidebarLabelStyle(color: color))
-                Spacer()
-                if library.automations.running != nil {
-                    Image(systemName: "progress.indicator")
-                        .symbolEffect(.variableColor.iterative, options: .repeating)
-                        .font(.caption).foregroundStyle(color.opacity(0.72))
-                        .help("An automation is running")
-                        .accessibilityLabel("An automation is running")
-                }
-                if !library.automations.failed.isEmpty {
-                    Image(systemName: "exclamationmark.circle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                        .help("An automation's last run failed")
-                        .accessibilityLabel("An automation's last run failed")
-                }
-                // Proposals waiting for review, like Captures' count of failures.
-                let waiting = library.automations.pendingCount
-                if waiting > 0 {
-                    Text(waiting.formatted())
-                        .font(.caption.weight(.medium)).monospacedDigit()
-                        .foregroundStyle(color.opacity(0.72))
-                        .countsOnChange(waiting)
-                        .accessibilityLabel(waiting == 1 ? "1 proposal to review"
-                            : "\(waiting) proposals to review")
-                }
-            }.tag(SidebarItem.automations)
             Section {
                 DisclosureGroup(isExpanded: $librarySidebarExpanded) {
                     Label("Notes", systemImage: "note.text")
@@ -1070,6 +1073,15 @@ struct ContentView: View {
                 }
                 .foregroundStyle(sidebarColor(.all))
                 .tag(SidebarItem.library(.all))
+                // What you browse and work on sits with the library; housekeeping follows.
+                Label("Entities", systemImage: "person.2")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingEntities ? .white : .black))
+                    .tag(SidebarItem.entities)
+                Label("Tasks", systemImage: "checklist")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingTasks ? .white : .black))
+                    .tag(SidebarItem.tasks)
             }
             Section {
                 HStack {
@@ -1091,10 +1103,36 @@ struct ContentView: View {
                                 : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
-                Label("Tasks", systemImage: "checklist")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingTasks ? .white : .black))
-                    .tag(SidebarItem.tasks)
+                HStack {
+                    let color: Color = colorScheme == .dark || (automating && !chatting)
+                        ? .white : .black
+                    Label("Automations", systemImage: "clock.arrow.2.circlepath")
+                        .labelStyle(LibrarySidebarLabelStyle(color: color))
+                    Spacer()
+                    if library.automations.running != nil {
+                        Image(systemName: "progress.indicator")
+                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                            .font(.caption).foregroundStyle(color.opacity(0.72))
+                            .help("An automation is running")
+                            .accessibilityLabel("An automation is running")
+                    }
+                    if !library.automations.failed.isEmpty {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                            .help("An automation's last run failed")
+                            .accessibilityLabel("An automation's last run failed")
+                    }
+                    // Proposals waiting for review, like Captures' count of failures.
+                    let waiting = library.automations.pendingCount
+                    if waiting > 0 {
+                        Text(waiting.formatted())
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(color.opacity(0.72))
+                            .countsOnChange(waiting)
+                            .accessibilityLabel(waiting == 1 ? "1 proposal to review"
+                                : "\(waiting) proposals to review")
+                    }
+                }.tag(SidebarItem.automations)
                 Label("Activity", systemImage: "clock")
                     .labelStyle(LibrarySidebarLabelStyle(color:
                         colorScheme == .dark || showingActivity ? .white : .black))
@@ -1177,7 +1215,7 @@ struct ContentView: View {
 
     private var collapsedLibraryFilter: String? {
         guard !librarySidebarExpanded, !chatting, !automating, !showingActivity,
-              !showingTasks else { return nil }
+              !showingTasks, !showingEntities else { return nil }
         switch sidebarScope {
         case .notes?, .sources?, .unfiled?: return scopeTitle
         default: return nil
@@ -1193,6 +1231,7 @@ struct ContentView: View {
         let selected = item
             .map {
                 !chatting && !automating && !showingActivity && !showingTasks &&
+                    !showingEntities &&
                     visibleSidebarScope == $0
             } ??
             chatting
@@ -1201,17 +1240,19 @@ struct ContentView: View {
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
-            chatting ? .conversation : showingTasks ? .tasks : showingActivity ? .activity :
+            chatting ? .conversation : showingTasks ? .tasks : showingEntities ? .entities :
+                showingActivity ? .activity :
                 automating ? .automations :
                 visibleSidebarScope.map(SidebarItem.library)
         } set: { item in
             readerTarget = nil
             showingTasks = item == .tasks
+            showingEntities = item == .entities
             switch item {
             case .conversation: chatting = true; automating = false; showingActivity = false
             case .automations: chatting = false; automating = true; showingActivity = false
             case .activity: chatting = false; automating = false; showingActivity = true
-            case .tasks: chatting = false; automating = false; showingActivity = false
+            case .tasks, .entities: chatting = false; automating = false; showingActivity = false
             case let .library(scope):
                 chatting = false
                 automating = false
@@ -1237,6 +1278,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         chatting = true
         return nil
     }
@@ -1654,6 +1696,7 @@ struct ContentView: View {
                 automating = false
                 showingActivity = false
                 showingTasks = false
+                showingEntities = false
                 scope = .captures
             }
             Button("Try Again") {
@@ -1856,5 +1899,6 @@ private enum SidebarItem: Hashable {
     case automations
     case activity
     case tasks
+    case entities
     case library(LibraryScope)
 }
