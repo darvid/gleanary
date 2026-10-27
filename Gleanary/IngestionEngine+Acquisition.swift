@@ -218,6 +218,30 @@ extension IngestionEngine {
         return closeness
     }
 
+    /// Reads the titles of new suggestions, a few small requests at a time, so they show as
+    /// titles rather than addresses. These fetches are automatic, so they respect robots.txt
+    /// and each site's spacing. Returns how many titles were found.
+    func titleSuggestions(limit: Int = 10) async -> Int {
+        guard let untitled = try? await store.untitledSuggestions(limit: limit) else { return 0 }
+        let reader = (fetcher as? SourceFetcher)?.limitingBytes(to: 262_144) ?? fetcher
+        var found = 0
+        for candidate in untitled {
+            guard !Task.isCancelled else { break }
+            var title: String?
+            if await robots.rules(for: candidate.url).allows(candidate.url) {
+                await spaceAutomaticFetch(candidate.url)
+                if let page = try? await reader.fetch(candidate.url),
+                   page.mime.map({ $0.lowercased().contains("html") }) ?? true
+                {
+                    title = PageTitle.read(html: String(decoding: page.data, as: UTF8.self))
+                }
+            }
+            try? await store.setAcquisitionPageTitle(candidate.id, title)
+            found += title == nil ? 0 : 1
+        }
+        return found
+    }
+
     /// Queues captures for links chosen for saving. The caller runs the queue.
     func queueApprovedAcquisitions(foundIn noteID: UUID?) async throws -> [AcquisitionCandidate] {
         var queued: [AcquisitionCandidate] = []

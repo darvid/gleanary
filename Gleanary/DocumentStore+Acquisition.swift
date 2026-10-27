@@ -29,6 +29,13 @@ enum AcquisitionSchema {
         """)
     }
 
+    static func addPageTitle(_ db: Database) throws {
+        try db.execute(sql: """
+        ALTER TABLE acquisition_candidates ADD COLUMN pageTitle TEXT;
+        ALTER TABLE acquisition_candidates ADD COLUMN pageTitleCheckedAt REAL;
+        """)
+    }
+
     static func addIntent(_ db: Database) throws {
         try db.execute(sql: "ALTER TABLE acquisition_candidates ADD COLUMN intent TEXT")
     }
@@ -156,6 +163,25 @@ extension DocumentStore {
             UPDATE acquisition_candidates SET state = 'queued', captureJobID = ?, updatedAt = ?
             WHERE id = ?
             """, arguments: [jobID.uuidString, Date().timeIntervalSince1970, id.uuidString])
+        }
+    }
+
+    /// Suggestions whose page title hasn't been looked for yet, newest first.
+    func untitledSuggestions(limit: Int) throws -> [AcquisitionCandidate] {
+        try readyDatabase().read { db in
+            try Self.acquisitionCandidates(
+                sql: "state = 'suggested' AND pageTitleCheckedAt IS NULL",
+                arguments: [], order: "createdAt DESC", limit: limit, in: db
+            )
+        }
+    }
+
+    /// Records the page's title, or that none could be read, so it is looked for once.
+    func setAcquisitionPageTitle(_ id: UUID, _ title: String?) throws {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE acquisition_candidates SET pageTitle = ?, pageTitleCheckedAt = ? WHERE id = ?
+            """, arguments: [title, Date().timeIntervalSince1970, id.uuidString])
         }
     }
 
@@ -384,7 +410,7 @@ extension DocumentStore {
                 foundInNoteID: uuid(row["foundInNoteID"]), context: row["context"],
                 provenance: provenance, hop: row["hop"], score: row["score"], state: state,
                 reason: row["reason"], captureJobID: job.map(uuid),
-                intent: intent.flatMap(LinkIntent.init(rawValue:))
+                intent: intent.flatMap(LinkIntent.init(rawValue:)), pageTitle: row["pageTitle"]
             )
         }
     }

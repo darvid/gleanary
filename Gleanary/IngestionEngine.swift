@@ -197,8 +197,14 @@ actor IngestionEngine {
             active = nil
             await changed()
         }
-        // Cheap when nothing is due; keeps automatic saves from piling up unused.
-        if await (try? store.expireUnusedAcquisitions()) ?? 0 > 0 {
+        await upkeep(changed: changed)
+    }
+
+    /// After the queue drains: probation, cheap when nothing is due, and suggestion titles.
+    private func upkeep(changed: @Sendable () async -> Void) async {
+        let expired = await (try? store.expireUnusedAcquisitions()) ?? 0
+        let titled = await titleSuggestions()
+        if expired + titled > 0 {
             await changed()
         }
     }

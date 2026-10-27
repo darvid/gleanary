@@ -537,6 +537,72 @@ struct FixedRelevance: LinkRelevanceScoring {
         #expect(reasons.first?.text.hasPrefix("Recommended by the creator") == true)
     }
 
+    @Test func suggestionsReadAsTitles() throws {
+        func candidate(_ url: String, title: String, pageTitle: String? = nil) throws
+            -> AcquisitionCandidate
+        {
+            try AcquisitionCandidate(
+                id: UUID(), identity: url, url: #require(URL(string: url)), title: title,
+                foundInNoteID: UUID(), context: "", provenance: .citation, hop: 1, score: 0.5,
+                state: .suggested, reason: "", pageTitle: pageTitle
+            )
+        }
+        let slug = "https://blog.example.org/blog/interviewing-ai-researchers-on-automation"
+        #expect(try candidate(slug, title: slug).displayTitle
+            == "Interviewing ai researchers on automation")
+        #expect(try candidate(slug, title: "released", pageTitle: "Interviews on automation")
+            .displayTitle == "Interviews on automation")
+        #expect(try candidate(slug, title: "A study of agent swarms").displayTitle
+            == "A study of agent swarms")
+        let id = "https://papers.example.org/abstract=4814445"
+        #expect(try candidate(id, title: id).displayTitle == "papers.example.org")
+
+        #expect(PageTitle.read(html: """
+        <html><head><title>Plain | Site</title>
+        <meta property="og:title" content="  Shared   title "></head></html>
+        """) == "Shared title")
+        #expect(PageTitle.read(html: "<html><head><title>Only plain</title></head></html>")
+            == "Only plain")
+        #expect(PageTitle.read(html: "<html><body>No title</body></html>") == nil)
+    }
+
+    @Test func oneDOIIsOnePaperWhicheverPageLinksIt() {
+        let document = CapturedDocument(title: "Notes", coverage: .note, blocks: [ContentBlock(
+            kind: .paragraph,
+            markdown: """
+            [Abstract](https://www.science.example.org/doi/abs/10.1126/science.abq1158) and \
+            [PDF](https://www.science.example.org/doi/pdf/10.1126/science.abq1158) and \
+            [Other](https://www.science.example.org/doi/abs/10.1126/science.xyz9999)
+            """,
+            text: ""
+        )])
+        let links = document.foundLinks(excluding: "")
+        #expect(links.map(\.title) == ["Abstract", "Other"])
+    }
+
+    @Test func suggestionsGetTheirPageTitlesInTheBackground() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .suggest) }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        let video = try #require(await store.documents().first)
+        let essay = try #require(await store.acquisitionCandidates(foundIn: video.id)
+            .first { $0.url.absoluteString == CreatorVideoFixture.essay })
+        #expect(essay.state == .suggested)
+        #expect(essay.pageTitle == "Swarm scaling")
+        #expect(essay.displayTitle == "Swarm scaling")
+        // Looked for once only.
+        #expect(try await store.untitledSuggestions(limit: 10).isEmpty)
+    }
+
     @Test func categoryOverridesPickTheLevel() {
         var settings = CaptureSettings(acquisition: .balanced)
         settings.overrides = ["31": .lazy, "40.02": .eager]

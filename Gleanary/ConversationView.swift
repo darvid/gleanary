@@ -745,9 +745,7 @@ struct ConversationView: View {
         let saved = model.capturedLinks[candidate.identity]
         let saving = model.savingAcquisitions.contains(candidate.id)
             || (candidate.state == .queued && saved == nil)
-        let path = candidate.url.path(percentEncoded: false)
-        let title = saved?.title ?? (candidate.title.isEmpty || candidate.title.hasPrefix("http")
-            ? candidate.host + (path == "/" ? "" : path) : candidate.title)
+        let title = saved?.title ?? candidate.displayTitle
         return HStack(spacing: 10) {
             Image(systemName: saved == nil ? "link" : "doc.text").foregroundStyle(.secondary)
                 .frame(width: 16)
