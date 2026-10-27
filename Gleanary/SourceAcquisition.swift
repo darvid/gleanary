@@ -1,4 +1,5 @@
 import Foundation
+import SwiftSoup
 
 /// How eagerly Gleanary follows links inside what you save. Each level sets the score a link
 /// needs before Gleanary acts on it and how much it may do; see `AcquisitionPolicy`.
@@ -157,6 +158,33 @@ struct AcquisitionCandidate: Identifiable, Sendable, Equatable {
     var captureJobID: UUID?
     /// A model's reading of the wording, when one judged it.
     var intent: LinkIntent?
+    /// The linked page's own title, read in the background for suggestions.
+    var pageTitle: String?
+
+    /// The page's title once read; until then link text that reads like a title, else the
+    /// address's last part in words.
+    var displayTitle: String {
+        if let pageTitle, !pageTitle.isEmpty {
+            return pageTitle
+        }
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.lowercased().hasPrefix("http"), text.split(separator: " ").count >= 3 {
+            return text
+        }
+        return Self.slugTitle(url) ?? host
+    }
+
+    /// "interviewing-ai-researchers" becomes "Interviewing ai researchers"; ids, file names
+    /// and short segments don't read as titles.
+    static func slugTitle(_ url: URL) -> String? {
+        let segment = url.deletingPathExtension().lastPathComponent
+        let words = segment.split(whereSeparator: { $0 == "-" || $0 == "_" }).map(String.init)
+        guard words.count >= 3,
+              words.filter({ $0.allSatisfy(\.isLetter) }).count >= words.count - 1
+        else { return nil }
+        let sentence = words.joined(separator: " ")
+        return sentence.prefix(1).uppercased() + sentence.dropFirst()
+    }
 
     var host: String {
         url.host(percentEncoded: false).map {
@@ -182,6 +210,23 @@ struct FoundLink: Sendable, Equatable {
     let title: String
     let context: String
     let fromCreator: Bool
+}
+
+/// A page's own title from its HTML: the share title, else `<title>`.
+enum PageTitle {
+    static func read(html: String) -> String? {
+        guard let document = try? SwiftSoup.parse(html) else { return nil }
+        let share = try? document.select("meta[property=og:title]").first()?.attr("content")
+        let plain = try? document.title()
+        for candidate in [share, plain] {
+            let title = (candidate ?? "").split(whereSeparator: \.isWhitespace)
+                .joined(separator: " ")
+            if !title.isEmpty {
+                return String(title.prefix(200))
+            }
+        }
+        return nil
+    }
 }
 
 /// Text the video's creator wrote beside the transcript. It is untrusted data: it feeds link
@@ -257,6 +302,8 @@ extension CapturedDocument {
     func foundLinks(excluding identity: String) -> [FoundLink] {
         var links: [FoundLink] = []
         var seen: Set<String> = [identity]
+        // The abstract and PDF of one DOI are the same paper.
+        var papers = Set<String>()
         for block in blocks where block.kind != .code {
             let fromCreator = CreatorText.methods.contains(block.method)
             let lines = block.markdown.components(separatedBy: "\n")
@@ -271,7 +318,9 @@ extension CapturedDocument {
                 ]) : ""
                 let context = String(([lead, plain].filter { !$0.isEmpty })
                     .joined(separator: " ").prefix(400))
-                for link in found where seen.insert(link.id).inserted {
+                for link in found where seen.insert(link.id).inserted
+                    && Self.paperKey(link.url).map({ papers.insert($0).inserted }) ?? true
+                {
                     links.append(FoundLink(
                         identity: link.id, url: link.url,
                         title: String(link.title.trimmingCharacters(in: .whitespaces).prefix(200)),
@@ -281,6 +330,14 @@ extension CapturedDocument {
             }
         }
         return links
+    }
+
+    /// A DOI names one paper whatever page of the publisher's site links to it.
+    static func paperKey(_ url: URL) -> String? {
+        let path = url.path(percentEncoded: false).lowercased()
+        guard let range = path.range(of: #"10\.\d{4,9}/[^\s?#]+"#, options: .regularExpression)
+        else { return nil }
+        return "doi:" + path[range]
     }
 
     private static func plain(_ line: String) -> String {
