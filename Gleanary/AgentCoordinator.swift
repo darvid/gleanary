@@ -1,8 +1,10 @@
 import Foundation
 
 actor AgentCoordinator {
-    /// Reads items for entities when you ask in chat.
-    let graphProvider: any GraphExtracting
+    /// Reads items for entities when you ask in chat; follows the AI provider.
+    private(set) var graphProvider: any GraphExtracting
+    /// The provider used when the AI provider can't extract, normally on-device.
+    private let defaultGraphProvider: any GraphExtracting
     let store: DocumentStore
     let ingestion: IngestionEngine
     private(set) var inference: any ConversationInferring
@@ -28,6 +30,7 @@ actor AgentCoordinator {
         self.inference = inference
         self.writingStyles = writingStyles
         self.graphProvider = graphProvider
+        defaultGraphProvider = graphProvider
         ingestion = IngestionEngine(
             store: store, fetcher: fetcher, youtube: youtube, screenshotter: screenshotter,
             settings: captureSettings,
@@ -181,6 +184,7 @@ actor AgentCoordinator {
         // Captures made from Chat summarize with the same provider.
         await ingestion.useSummarizer(inference as? any LinkSummarizing ?? AppleLinkSummarizer())
         await ingestion.useRecommendationJudge(inference as? any RecommendationJudging)
+        graphProvider = inference as? any GraphExtracting ?? defaultGraphProvider
     }
 
     private func toolResponder(forCaptureRetry captureID: UUID?) -> (any AgentResponding)? {

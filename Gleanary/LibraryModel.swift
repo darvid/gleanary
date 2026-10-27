@@ -139,6 +139,11 @@ final class LibraryModel {
     }
 
     /// The model that judges the cross-linker's candidates, following the AI provider.
+    /// Background reading for entities follows the AI provider.
+    func useGraphExtractor(_ provider: any GraphExtracting) {
+        graph.useGraphProvider(provider)
+    }
+
     /// Turns background reading for entities on or off without relaunching.
     func setBackgroundEntityReading(_ enabled: Bool) async {
         graphFeaturesEnabled = enabled

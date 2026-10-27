@@ -19,6 +19,27 @@ private struct OrionGraphProvider: GraphExtracting {
     }
 }
 
+/// Records the order notes are read in: each note's first pass, then its curation.
+private actor OrderRecordingProvider: GraphExtracting {
+    private(set) var steps: [String] = []
+
+    func extract(_ text: String) async throws -> GraphProposal {
+        steps.append("extract " + (text.contains("Alpha") ? "Alpha" : "Beta"))
+        return OrionGraphProvider().extract(text)
+    }
+
+    func curate(_ work: GraphCurationWork) async throws -> GraphProposal {
+        steps.append("curate " + work.job.name)
+        return OrionGraphProvider().extract(work.evidence.text)
+    }
+
+    func relate(_: GraphCurationWork, entities _: [ProposedEntity]) async throws
+        -> [ProposedRelation]
+    {
+        []
+    }
+}
+
 private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
     let data = (try? JSONSerialization.data(withJSONObject: arguments)) ?? Data()
     return AgentCall(
@@ -254,5 +275,122 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
             "scope": "recent", "items": [], "category_code": "", "limit": 5,
         ]), toolbox: toolbox)
         #expect(again.contains("already being found"))
+    }
+
+    @Test func renamingHidingAndMergingFollowLaterExtraction() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try await store.save(MarkdownDocument(name: "First", markdown: "Notes."))
+        let second = try await store.save(MarkdownDocument(name: "Second", markdown: "Notes."))
+        try await mention(
+            "OpenAI",
+            kind: .organization,
+            quote: "OpenAI shipped it.",
+            in: first,
+            store: store
+        )
+        try await mention(
+            "OpenAI, Inc.",
+            kind: .organization,
+            quote: "OpenAI, Inc. said so.",
+            in: second,
+            store: store
+        )
+        try await mention(
+            "Open AI",
+            kind: .organization,
+            quote: "Open AI agreed.",
+            in: second,
+            store: store
+        )
+        let ids = try await Dictionary(uniqueKeysWithValues: store.entities()
+            .map { ($0.name, $0.id) })
+        let openAI = try #require(ids["OpenAI"])
+        let incorporated = try #require(ids["OpenAI, Inc."])
+        let spaced = try #require(ids["Open AI"])
+
+        // A chain folds into one: Open AI into OpenAI, Inc., then that into OpenAI.
+        try await store.mergeEntity(spaced, into: incorporated)
+        try await store.mergeEntity(incorporated, into: openAI)
+        var listed = try await store.entities()
+        #expect(listed.map(\.name) == ["OpenAI"])
+        #expect(listed.first?.noteCount == 2)
+        #expect(Set(listed.first?.aliases.map(\.id) ?? []) == [incorporated, spaced])
+        #expect(try await store.entityMentions(openAI).count == 3)
+
+        // A later mention of a merged name still counts toward the one it was merged into.
+        let third = try await store.save(MarkdownDocument(name: "Third", markdown: "Notes."))
+        try await mention(
+            "OpenAI, Inc.",
+            kind: .organization,
+            quote: "OpenAI, Inc. again.",
+            in: third,
+            store: store
+        )
+        #expect(try await store.entities().first?.noteCount == 3)
+
+        try await store.renameEntity(openAI, to: "OpenAI (company)")
+        listed = try await store.entities(matching: "company")
+        #expect(listed.map(\.name) == ["OpenAI (company)"])
+        #expect(listed.first?.renamed == true)
+        try await store.renameEntity(openAI, to: nil)
+        #expect(try await store.entities().first?.name == "OpenAI")
+
+        try await store.unmergeEntity(spaced)
+        #expect(try await Set(store.entities().map(\.name)) == ["OpenAI", "Open AI"])
+
+        try await store.hideEntity(spaced, hidden: true)
+        #expect(try await store.entities().map(\.name) == ["OpenAI"])
+        #expect(try await store.entities(hidden: true).map(\.name) == ["Open AI"])
+        let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+        let listedToAssistant = await toolbox.run(call(
+            "list_entities",
+            ["kind": "any", "query": ""]
+        ))
+        #expect(!listedToAssistant.contains("Open AI\""))
+    }
+
+    @Test func chatGPTSchemasDecodeIntoTheSharedProposals() throws {
+        for schema in [
+            GraphJSONSchema.graph(maxEntities: 5, maxRelations: 4),
+            GraphJSONSchema.candidates(maxEntities: 20),
+            GraphJSONSchema.relations(maxRelations: 20),
+            GraphJSONSchema.mindMap(maxNodes: 24),
+        ] {
+            #expect(JSONSerialization.isValidJSONObject(schema))
+            #expect(schema["additionalProperties"] as? Bool == false)
+        }
+        let response = """
+        {"entities":[{"name":"Toby Ord","kind":"person","quote":"Toby Ord wrote it."}],
+         "relations":[{"source":"Orion","target":"retrieval","predicate":"partOf","quote":"q"}]}
+        """
+        let proposal = try JSONDecoder().decode(GraphProposal.self, from: Data(response.utf8))
+        #expect(proposal.entities.first?.kind == .person)
+        #expect(proposal.relations.first?.predicate == .partOf)
+        let prompt = GraphPrompts.extraction(overview: true)
+        #expect(prompt.contains("article, transcript"))
+        #expect(prompt.contains("people the source is by, about, or quotes"))
+        #expect(!prompt.contains("citation authors"))
+    }
+
+    @Test func aChatRequestFinishesEachNoteBeforeTheNext() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let alpha = try await store.save(MarkdownDocument(
+            name: "Alpha", markdown: "Alpha. Orion uses retrieval."
+        ))
+        let beta = try await store.save(MarkdownDocument(
+            name: "Beta", markdown: "Beta. Orion uses retrieval."
+        ))
+        try await store.prepareGraphJobs([alpha.id, beta.id])
+        let provider = OrderRecordingProvider()
+        try await GraphExtractor(store: store, provider: provider)
+            .run(only: [alpha.id, beta.id]) {}
+        let steps = await provider.steps
+        #expect(
+            steps == ["extract Alpha", "curate Alpha", "extract Beta", "curate Beta"],
+            "\(steps)"
+        )
+        #expect(try await store.graphProgress([alpha.id, beta.id]).ready == 2)
     }
 }

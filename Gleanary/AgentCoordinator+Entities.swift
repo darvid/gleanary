@@ -18,9 +18,11 @@ extension AgentCoordinator {
         await changed()
         if pending > 0 {
             try await GraphExtractor(store: store, provider: graphProvider).run(only: Set(ids)) {
-                let read = await (try? store.graphProgress(ids))?.ready ?? 0
+                // Notes that couldn't be read are done too, so the count never stalls on them.
+                let state = await (try? store.graphProgress(ids))
+                let done = (state?.ready ?? 0) + (state?.unavailable ?? 0) + (state?.failed ?? 0)
                 try? await store.updateConversationTask(
-                    taskID, progress: "Reading for entities: \(read) of \(total)",
+                    taskID, progress: "Reading for entities: \(done) of \(total)",
                     onlyWhileRunning: true
                 )
                 await changed()

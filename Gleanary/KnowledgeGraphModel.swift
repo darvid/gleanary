@@ -134,6 +134,11 @@ final class KnowledgeGraphModel {
         startExtraction()
     }
 
+    func useGraphProvider(_ provider: any GraphExtracting) {
+        let extractor = extractor
+        Task { await extractor.useProvider(provider) }
+    }
+
     /// Stops background reading until `allowExtraction`; requests from chat still read.
     func stopExtraction() {
         stopped = true

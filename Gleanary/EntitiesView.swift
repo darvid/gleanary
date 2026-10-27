@@ -5,6 +5,7 @@ import SwiftUI
     let store: DocumentStore
     var kind: GraphNode.Kind?
     var query = ""
+    var showHidden = false
     private(set) var entities: [EntitySummary] = []
     var selectedID: String?
     private(set) var mentions: [EntityMention] = []
@@ -20,13 +21,46 @@ import SwiftUI
 
     func load() async {
         do {
-            entities = try await store.entities(kind: kind, matching: query)
+            entities = try await store.entities(kind: kind, matching: query, hidden: showHidden)
             if selectedID.map({ id in !entities.contains { $0.id == id } }) ?? true {
                 selectedID = entities.first?.id
             }
             await loadMentions()
             error = nil
         } catch { self.error = "Entities could not be loaded. Try again." }
+    }
+
+    /// Other entities this one could be merged into, the same kind first.
+    var mergeTargets: [EntitySummary] {
+        guard let selected else { return [] }
+        let others = entities.filter { $0.id != selected.id }
+        return Array((others.filter { $0.kind == selected.kind }
+                + others.filter { $0.kind != selected.kind }).prefix(30))
+    }
+
+    func rename(_ id: String, to name: String?) async {
+        await apply { try await self.store.renameEntity(id, to: name) }
+    }
+
+    func merge(_ id: String, into target: String) async {
+        await apply { try await self.store.mergeEntity(id, into: target) }
+        selectedID = target
+        await loadMentions()
+    }
+
+    func unmerge(_ id: String) async {
+        await apply { try await self.store.unmergeEntity(id) }
+    }
+
+    func setHidden(_ id: String, _ hidden: Bool) async {
+        await apply { try await self.store.hideEntity(id, hidden: hidden) }
+    }
+
+    private func apply(_ change: () async throws -> Void) async {
+        do {
+            try await change()
+            await load()
+        } catch { self.error = "That change couldn't be saved. Try again." }
     }
 
     func loadMentions() async {
@@ -42,6 +76,8 @@ import SwiftUI
 /// mention it. Extraction keeps these current; nothing here edits them.
 struct EntitiesView: View {
     @State private var model: EntitiesModel
+    @State private var renaming = false
+    @State private var draftName = ""
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readingInBackground = false
     var open: (UUID) -> Void
 
@@ -56,7 +92,9 @@ struct EntitiesView: View {
             Divider()
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: "\(model.kind?.rawValue ?? "all")/\(model.query)") { await model.load() }
+        .task(id: "\(model.kind?.rawValue ?? "all")/\(model.query)/\(model.showHidden)") {
+            await model.load()
+        }
         .onChange(of: model.selectedID) { Task { await model.loadMentions() } }
     }
 
@@ -71,6 +109,8 @@ struct EntitiesView: View {
             .pickerStyle(.menu).labelsHidden()
             TextField("Find a person, organization or concept", text: $model.query)
                 .textFieldStyle(.roundedBorder)
+            Toggle("Show hidden", isOn: $model.showHidden).toggleStyle(.checkbox)
+                .font(.callout)
             if model.entities.isEmpty {
                 ContentUnavailableView(
                     model.query.isEmpty ? "No entities yet" : "No matches",
@@ -110,14 +150,21 @@ struct EntitiesView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Label(entity.name, systemImage: Self.symbol(entity.kind))
-                            .font(.title2.weight(.semibold)).textSelection(.enabled)
+                        HStack(alignment: .firstTextBaseline) {
+                            Label(entity.name, systemImage: Self.symbol(entity.kind))
+                                .font(.title2.weight(.semibold)).textSelection(.enabled)
+                            Spacer()
+                            editMenu(entity)
+                        }
                         HStack(spacing: 10) {
                             Text(Self.singular(entity.kind))
                             Text("Mentioned in \(Self.noteCount(entity.noteCount))")
                                 .foregroundStyle(.tertiary)
                         }
                         .foregroundStyle(.secondary)
+                    }
+                    if !entity.aliases.isEmpty {
+                        aliases(entity)
                     }
                     ForEach(Self.byNote(model.mentions), id: \.noteID) { group in
                         VStack(alignment: .leading, spacing: 8) {
@@ -151,6 +198,53 @@ struct EntitiesView: View {
             ContentUnavailableView(error, systemImage: "exclamationmark.triangle")
         } else {
             ContentUnavailableView("Select an entity", systemImage: "person.2")
+        }
+    }
+
+    private func editMenu(_ entity: EntitySummary) -> some View {
+        Menu("Edit") {
+            Button("Rename…") {
+                draftName = entity.name
+                renaming = true
+            }
+            Menu("Merge Into") {
+                ForEach(model.mergeTargets) { target in
+                    Button(target.name) {
+                        Task { await model.merge(entity.id, into: target.id) }
+                    }
+                }
+            }
+            .disabled(model.mergeTargets.isEmpty)
+            Divider()
+            Button(entity.hidden ? "Unhide" : "Hide") {
+                Task { await model.setHidden(entity.id, !entity.hidden) }
+            }
+        }
+        .fixedSize()
+        .help("Fixes here also apply when the same name is found again")
+        .alert("Rename \(entity.name)", isPresented: $renaming) {
+            TextField("Name", text: $draftName)
+            Button("Rename") { Task { await model.rename(entity.id, to: draftName) } }
+            if entity.renamed {
+                Button("Use the Name in the Notes") {
+                    Task { await model.rename(entity.id, to: nil) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Names merged into this entity, each with a way back out.
+    private func aliases(_ entity: EntitySummary) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Also known as").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            ForEach(entity.aliases, id: \.id) { alias in
+                HStack(spacing: 8) {
+                    Text(alias.name)
+                    Button("Unmerge") { Task { await model.unmerge(alias.id) } }
+                        .buttonStyle(.link).font(.caption)
+                }
+            }
         }
     }
 
