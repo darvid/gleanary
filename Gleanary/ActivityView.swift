@@ -264,32 +264,41 @@ private struct ActivityGroupRow: View {
         if group.count == 1 {
             ActivityEventRow(event: group.latest).tag(group.latest.id)
         } else {
-            DisclosureGroup(isExpanded: $expanded) {
-                ForEach(events) { ActivityEventRow(event: $0).tag($0.id) }
-                if loading {
-                    ProgressView().controlSize(.small)
-                }
-                if let error {
-                    Text(error).font(.caption).foregroundStyle(.secondary)
-                }
-                if !loading, events.count < group.count {
-                    Button(error == nil ? "Show more changes" : "Retry") {
-                        Task { await loadMore() }
-                    }
-                }
-            } label: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(group.label).font(.body.weight(.medium)).lineLimit(2)
-                    Text("\(group.count.formatted()) changes · \(group.latest.actorLabel)")
-                        .font(.caption).foregroundStyle(.secondary)
-                }.padding(.vertical, 5)
+            // A row like any single event, so grouped and single changes line up under the day.
+            Button { expanded.toggle() } label: {
+                ActivityEventRow(
+                    event: group.latest,
+                    summary: (group.latest.batchLabel ?? group.latest.kind.label)
+                        + " · \(group.count.formatted()) changes",
+                    expanded: expanded
+                )
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityHint(expanded ? "Hides these changes" : "Shows these changes")
             .task(id: expanded ? generation : -1) {
                 guard expanded else { return }
                 requestToken = UUID()
                 loading = false
                 events = []
                 await loadMore()
+            }
+            if expanded {
+                Group {
+                    ForEach(events) { ActivityEventRow(event: $0).tag($0.id) }
+                    if loading {
+                        ProgressView().controlSize(.small)
+                    }
+                    if let error {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !loading, events.count < group.count {
+                        Button(error == nil ? "Show more changes" : "Retry") {
+                            Task { await loadMore() }
+                        }
+                    }
+                }
+                .padding(.leading, 28)
             }
         }
     }
@@ -321,14 +330,28 @@ private struct ActivityGroupRow: View {
 
 private struct ActivityEventRow: View {
     let event: ActivityEvent
+    /// Replaces the kind and detail line, for a row standing for several changes.
+    var summary: String?
+    /// Whether a group's changes are showing; nil for a single change.
+    var expanded: Bool?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.kind.symbol).foregroundStyle(.secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                Text(event.displayTitle).font(.body.weight(.medium)).lineLimit(2)
-                Text(event.kind.label + (event.detail.map { " · " + $0 } ?? ""))
+                HStack(alignment: .firstTextBaseline) {
+                    Text(event.displayTitle).font(.body.weight(.medium)).lineLimit(2)
+                    if let expanded {
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(expanded ? 90 : 0))
+                            .animation(.snappy(duration: 0.15), value: expanded)
+                            .accessibilityHidden(true)
+                    }
+                }
+                Text(summary ?? event.kind.label + (event.detail.map { " · " + $0 } ?? ""))
                     .font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 HStack {
                     Text(event.actorLabel)

@@ -504,6 +504,9 @@ struct ContentView: View {
                     showingReader: readerTarget != nil
                 ))
                 .font(.headline).lineLimit(1)
+                // The toolbar keeps the width of the previous title, so a longer one would
+                // otherwise truncate ("Activi…") after switching from a shorter page.
+                .fixedSize()
             }
             .transaction { $0.animation = nil }
         }
