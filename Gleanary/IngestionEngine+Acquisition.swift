@@ -26,9 +26,11 @@ extension IngestionEngine {
                     saved: known.saved
                 )
                 : [:]
-            let plans = AcquisitionPlanner.plan(
+            let plans = await AcquisitionPlanner.plan(
                 links, sourceURL: sourceURL, policy: policy, hop: hop + 1, relevance: closeness,
-                savedToday: known.savedToday, saved: known.saved, muted: known.muted
+                savedToday: known.savedToday, saved: known.saved, muted: known.muted,
+                intents: intents(of: links, sourceURL: sourceURL, saved: known.saved),
+                savedTodayBySite: known.bySite
             )
             try await store.recordAcquisitions(plans, foundIn: noteID, hop: hop + 1)
             if !deferred {
@@ -60,7 +62,9 @@ extension IngestionEngine {
         var queued: [AcquisitionCandidate] = []
         for candidate in approved {
             try Task.checkCancellation()
-            try await queued.append(queue(candidate))
+            if let next = try await queue(candidate, automatic: true) {
+                queued.append(next)
+            }
         }
         return queued
     }
@@ -91,7 +95,9 @@ extension IngestionEngine {
             AcquisitionPlanner.plan(
                 links, sourceURL: document.sourceURL, policy: policy, hop: hop,
                 relevance: closeness, savedToday: known.savedToday, saved: known.saved,
-                muted: known.muted
+                muted: known.muted,
+                intents: intents(of: links, sourceURL: document.sourceURL, saved: known.saved),
+                savedTodayBySite: known.bySite
             ),
             foundIn: noteID, hop: hop
         )
@@ -101,7 +107,9 @@ extension IngestionEngine {
         )
         var queued: [AcquisitionCandidate] = []
         for candidate in approved {
-            try await queued.append(queue(candidate))
+            if let next = try await queue(candidate, automatic: true) {
+                queued.append(next)
+            }
         }
         return queued
     }
@@ -132,10 +140,17 @@ extension IngestionEngine {
                 )
                 : [:]
             // Candidates from one source share a hop.
+            // Judged wording is kept, so re-judging costs no model call.
+            var judged = Dictionary(uniqueKeysWithValues: group.compactMap { candidate in
+                candidate.intent.map { (candidate.identity, $0) }
+            })
+            if judged.isEmpty {
+                judged = await intents(of: links, sourceURL: sourceURL, saved: known.saved)
+            }
             let plans = AcquisitionPlanner.plan(
                 links, sourceURL: sourceURL, policy: policy, hop: group[0].hop,
                 relevance: closeness, savedToday: savedToday, saved: known.saved,
-                muted: known.muted
+                muted: known.muted, intents: judged, savedTodayBySite: known.bySite
             )
             for (candidate, var plan) in zip(group, plans) {
                 // Past this run's limit, a qualifying link waits as a suggestion.
@@ -155,6 +170,32 @@ extension IngestionEngine {
         }
         try await store.replanAcquisitions(updates)
         return approved
+    }
+
+    /// A model's reading of the wording around the strongest links, in one call. Empty, so
+    /// cue phrases decide, when no model is set or it fails.
+    private func intents(
+        of links: [FoundLink],
+        sourceURL: URL?,
+        saved: Set<String>
+    ) async -> [String: LinkIntent] {
+        guard let judge = recommendationJudge else { return [:] }
+        let scored: [(link: FoundLink, score: AcquisitionScorer.Score)] = links
+            .filter { !saved.contains($0.identity) }
+            .map { ($0, AcquisitionScorer.score($0, sourceURL: sourceURL)) }
+        // Addresses filtered by site, like social profiles, need no reading.
+        let readable = scored
+            .filter { $0.score.filtered == nil || $0.score.filtered == "Self-promotion" }
+        let ranked = readable.sorted { $0.score.value > $1.score.value }
+        let strongest = ranked.prefix(RecommendationJudgement.batch).map(\.link)
+        guard !strongest.isEmpty else { return [:] }
+        let items = RecommendationJudgement.items(strongest)
+        guard let answers = try? await judge.judgeIntents(items) else { return [:] }
+        var intents: [String: LinkIntent] = [:]
+        for (item, link) in zip(items, strongest) {
+            intents[link.identity] = answers[item.number]
+        }
+        return intents
     }
 
     /// Judges closeness only for the strongest links, since each one is a library search.
@@ -181,7 +222,9 @@ extension IngestionEngine {
     func queueApprovedAcquisitions(foundIn noteID: UUID?) async throws -> [AcquisitionCandidate] {
         var queued: [AcquisitionCandidate] = []
         for candidate in try await store.approvedAcquisitions(foundIn: noteID) {
-            try await queued.append(queue(candidate))
+            if let next = try await queue(candidate, automatic: true) {
+                queued.append(next)
+            }
         }
         return queued
     }
@@ -209,10 +252,20 @@ extension IngestionEngine {
     func saveAcquisition(_ id: UUID) async throws -> AcquisitionCandidate? {
         guard let candidate = try await store.acquisitionCandidate(id: id),
               [.suggested, .approved, .noticed].contains(candidate.state) else { return nil }
-        return try await queue(candidate)
+        return try await queue(candidate, automatic: false)
     }
 
-    private func queue(_ candidate: AcquisitionCandidate) async throws -> AcquisitionCandidate {
+    /// Automatic saves respect the site's robots.txt; one you chose acts for you.
+    private func queue(
+        _ candidate: AcquisitionCandidate,
+        automatic: Bool
+    ) async throws -> AcquisitionCandidate? {
+        if automatic, await !robots.rules(for: candidate.url).allows(candidate.url) {
+            try await store.filterAcquisition(
+                candidate.id, reason: "The site's robots.txt asks not to fetch this"
+            )
+            return nil
+        }
         // The link back carries the candidate's provenance; see `linkAcquiredSource`.
         var request = try CaptureRequest.webLink(candidate.url)
         // Automatic saves cost no AI calls until someone asks for a summary.

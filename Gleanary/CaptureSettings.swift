@@ -82,9 +82,7 @@ struct CaptureSettingsView: View {
             }
             Section {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Follow links in saved sources")
-                        Spacer()
+                    LabeledContent("Follow links in saved sources") {
                         Text(level.title).foregroundStyle(.secondary)
                     }
                     Slider(
@@ -101,6 +99,7 @@ struct CaptureSettingsView: View {
                     } maximumValueLabel: {
                         Image(systemName: "hare").accessibilityLabel("Eager")
                     }
+                    .labelsHidden()
                     .accessibilityValue(level.title)
                     Text(level.explanation)
                         .font(.callout).foregroundStyle(.secondary)
@@ -165,14 +164,19 @@ struct CaptureSettingsView: View {
         }
         let available = categories.filter { overrides[$0.code] == nil }
         if !available.isEmpty {
-            Menu("Set a Level for a Category") {
-                ForEach(available) { category in
-                    Button(category.label) { setOverride(category.code, acquisition) }
+            LabeledContent {
+                Menu("Add Category") {
+                    ForEach(available) { category in
+                        Button(category.label) { setOverride(category.code, acquisition) }
+                    }
                 }
+                .fixedSize()
+            } label: {
+                Text("Levels for categories")
+                Text(
+                    "Sources filed there use their own level; subcategories follow their parent's."
+                )
             }
-            .help(
-                "Sources filed in a category follow its level; subcategories follow their parent's."
-            )
         }
     }
 

@@ -138,6 +138,12 @@ final class LibraryModel {
     }
 
     /// The model that judges the cross-linker's candidates, following the AI provider.
+    /// Reads the wording around links found in captures; follows the AI provider.
+    func useRecommendationJudge(_ judge: (any RecommendationJudging)?) {
+        let ingestion = ingestion
+        Task { await ingestion.useRecommendationJudge(judge) }
+    }
+
     func useLinkJudge(_ judge: (any LinkJudging)?) {
         automationHooks.judge = judge
     }

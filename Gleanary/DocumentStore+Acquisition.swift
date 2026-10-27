@@ -29,6 +29,10 @@ enum AcquisitionSchema {
         """)
     }
 
+    static func addIntent(_ db: Database) throws {
+        try db.execute(sql: "ALTER TABLE acquisition_candidates ADD COLUMN intent TEXT")
+    }
+
     /// What became of a saved candidate, for probation and the digest, and sites you muted.
     static func addProbation(_ db: Database) throws {
         try db.execute(sql: """
@@ -58,12 +62,20 @@ extension DocumentStore {
     /// in the library.
     func acquisitionContext(
         identities: [String]
-    ) throws -> (savedToday: Int, saved: Set<String>, muted: Set<String>) {
+    ) throws -> (savedToday: Int, saved: Set<String>, muted: Set<String>, bySite: [String: Int]) {
         try readyDatabase().read { db in
             let muted = try Set(String.fetchAll(
                 db,
                 sql: "SELECT host FROM acquisition_muted_hosts"
             ))
+            var bySite: [String: Int] = [:]
+            for url in try String.fetchAll(db, sql: """
+            SELECT url FROM acquisition_candidates
+            WHERE automatic = 1 AND state IN ('approved','queued') AND createdAt > ?
+            """, arguments: [Date().timeIntervalSince1970 - 86400]) {
+                let host = URL(string: url)?.host(percentEncoded: false) ?? ""
+                bySite[AcquisitionScorer.domain(host), default: 0] += 1
+            }
             let savedToday = try Int.fetchOne(db, sql: """
             SELECT count(*) FROM acquisition_candidates
             WHERE automatic = 1 AND state IN ('approved','queued') AND createdAt > ?
@@ -74,7 +86,7 @@ extension DocumentStore {
             {
                 saved.insert(identity)
             }
-            return (savedToday, saved, muted)
+            return (savedToday, saved, muted, bySite)
         }
     }
 
@@ -89,14 +101,15 @@ extension DocumentStore {
             for plan in plans {
                 try db.execute(sql: """
                 INSERT INTO acquisition_candidates(id, identity, url, title, foundInNoteID,
-                    context, provenance, hop, score, state, reason, automatic, createdAt, updatedAt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    context, provenance, hop, score, state, reason, automatic, intent, createdAt,
+                    updatedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(foundInNoteID, identity) DO NOTHING
                 """, arguments: [
                     UUID().uuidString, plan.link.identity, plan.link.url.absoluteString,
                     plan.link.title, noteID.uuidString, plan.link.context,
                     plan.score.provenance.rawValue, hop, plan.score.value, plan.state.rawValue,
-                    plan.reason, plan.state == .approved, now, now,
+                    plan.reason, plan.state == .approved, plan.intent?.rawValue, now, now,
                 ])
             }
             return try Self.acquisitionCandidates(
@@ -143,6 +156,15 @@ extension DocumentStore {
             UPDATE acquisition_candidates SET state = 'queued', captureJobID = ?, updatedAt = ?
             WHERE id = ?
             """, arguments: [jobID.uuidString, Date().timeIntervalSince1970, id.uuidString])
+        }
+    }
+
+    func filterAcquisition(_ id: UUID, reason: String) throws {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE acquisition_candidates SET state = 'filtered', reason = ?, updatedAt = ?
+            WHERE id = ?
+            """, arguments: [reason, Date().timeIntervalSince1970, id.uuidString])
         }
     }
 
@@ -208,10 +230,11 @@ extension DocumentStore {
             for (id, plan) in plans {
                 try db.execute(sql: """
                 UPDATE acquisition_candidates SET state = ?, score = ?, reason = ?, automatic = ?,
-                    updatedAt = ?
+                    provenance = ?, intent = coalesce(?, intent), updatedAt = ?
                 WHERE id = ? AND state IN ('noticed','suggested','approved')
                 """, arguments: [plan.state.rawValue, plan.score.value, plan.reason,
-                                 plan.state == .approved, Date().timeIntervalSince1970,
+                                 plan.state == .approved, plan.score.provenance.rawValue,
+                                 plan.intent?.rawValue, Date().timeIntervalSince1970,
                                  id.uuidString])
             }
         }
@@ -355,11 +378,13 @@ extension DocumentStore {
                   let provenance = AcquisitionProvenance(rawValue: row["provenance"]),
                   let state = AcquisitionState(rawValue: row["state"]) else { return nil }
             let job: String? = row["captureJobID"]
+            let intent: String? = row["intent"]
             return try AcquisitionCandidate(
                 id: uuid(row["id"]), identity: row["identity"], url: url, title: row["title"],
                 foundInNoteID: uuid(row["foundInNoteID"]), context: row["context"],
                 provenance: provenance, hop: row["hop"], score: row["score"], state: state,
-                reason: row["reason"], captureJobID: job.map(uuid)
+                reason: row["reason"], captureJobID: job.map(uuid),
+                intent: intent.flatMap(LinkIntent.init(rawValue:))
             )
         }
     }

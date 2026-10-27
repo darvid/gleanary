@@ -184,7 +184,17 @@ extension DocumentStore {
         ), raw_connections(source, target, predicate, reasonID, origin, rationale, evidenceNote, citation) AS MATERIALIZED (
             SELECT 'note:' || l.leftID, 'note:' || l.rightID, 'related_to',
                 'link:' || l.changeID, 'Linked notes', l.rationale, NULL, NULL
-            FROM note_links l
+            FROM note_links l WHERE NOT EXISTS (
+                SELECT 1 FROM acquisition_candidates a WHERE a.captureJobID = l.changeID
+                    AND a.foundInNoteID IN (l.leftID, l.rightID)
+                    AND a.savedNoteID IN (l.leftID, l.rightID))
+            UNION ALL
+            -- Sources Gleanary saved on its own point from where they were found.
+            SELECT 'note:' || a.foundInNoteID, 'note:' || a.savedNoteID, 'related_to',
+                'link:' || l.changeID, 'Found via', l.rationale, NULL, NULL
+            FROM note_links l JOIN acquisition_candidates a ON a.captureJobID = l.changeID
+                AND a.foundInNoteID IN (l.leftID, l.rightID)
+                AND a.savedNoteID IN (l.leftID, l.rightID)
             UNION ALL
             SELECT 'note:' || l.noteID, 'note:' || l.targetID, 'links_to',
                 'property:' || l.noteID || ':' || l.propertyID || ':' || l.targetID,

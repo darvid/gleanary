@@ -753,6 +753,19 @@ and Explore.
   saved. The weekly digest lists the week's automatic saves under "Found
   for you". Automatic saves left unopened, unfiled, and unlinked for 30
   days are archived, which is reversible; opening one ends its probation.
+- When the AI provider is available, a model reads the wording around up
+  to 20 of a source's strongest links as recommendation, reference,
+  promotion, or other, and that reading replaces the cue phrases. The
+  reading is stored, so re-judging costs no call; without a model, cue
+  phrases decide.
+- Automatic saves respect each site's robots.txt (RFC 9309): a missing
+  file allows everything, and a file the site can't serve blocks until it
+  can. Saves you choose act for you and skip it. Automatic fetches from
+  one site are at least two seconds apart, longer when Crawl-delay asks,
+  up to 30 seconds. One site may take at most 3, 5, or 10 automatic saves
+  a day at Balanced, Eager, and Explore.
+- Automatic saves appear in the library graph as "Found via" connections
+  from where they were found.
 - Fetched text is untrusted data that only feeds scoring. Muted sites
   are listed in Capture settings with Unmute.
 

@@ -1,6 +1,8 @@
+import AppKit
 import Foundation
 @testable import Gleanary
 import GRDB
+import SwiftUI
 import Testing
 
 /// A synthetic video whose creator recommends an essay beside self-promotion.
@@ -63,6 +65,35 @@ struct ExploreProbe: LinkProbing {
 struct ExploreArchive: ArchiveLookup {
     func snapshot(of _: URL) async -> URL? {
         nil
+    }
+}
+
+/// Serves the essay and a robots.txt, when given one.
+struct RobotsFetcher: SourceFetching {
+    let robots: String?
+    var robotsStatus = 200
+
+    func fetch(_ url: URL) async throws -> DownloadedContent {
+        if url.path == "/robots.txt" {
+            guard robotsStatus == 200, let robots else { throw CaptureError.http(robotsStatus) }
+            return DownloadedContent(
+                data: Data(robots.utf8),
+                url: url,
+                mime: "text/plain",
+                encoding: "utf-8"
+            )
+        }
+        return try await EssayFetcher().fetch(url)
+    }
+}
+
+/// Reads every link's wording as one fixed intent, or fails.
+struct FixedJudge: RecommendationJudging {
+    let intent: LinkIntent?
+    let local = true
+    func judgeIntents(_ items: [RecommendationJudgement.Item]) async throws -> [Int: LinkIntent] {
+        guard let intent else { throw LinkSummaryError.unavailable }
+        return Dictionary(uniqueKeysWithValues: items.map { ($0.number, intent) })
     }
 }
 
@@ -305,6 +336,205 @@ struct FixedRelevance: LinkRelevanceScoring {
         ))
         #expect(section.contains("Archived 2 items saved automatically but never opened."))
         #expect(DigestNote.foundForYou([], expired: 0).isEmpty)
+    }
+
+    @Test @MainActor func captureSettingsRenderTheDialOnce() throws {
+        let categories = [
+            DecimalCategory(id: UUID(), code: "10", name: "Inbox"),
+            DecimalCategory(id: UUID(), code: "31", name: "Agent architectures"),
+        ]
+        for dark in [false, true] {
+            let view = NSHostingView(rootView: CaptureSettingsView(categories: categories)
+                .frame(width: 620, height: 520)
+                .environment(\.colorScheme, dark ? .dark : .light))
+            view.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            view.frame = NSRect(x: 0, y: 0, width: 620, height: 520)
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            #expect(bitmap.pixelsWide >= 620)
+            if let path = ProcessInfo.processInfo.environment["GLEANARY_SETTINGS_SCREENSHOT"] {
+                try bitmap.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: path + (dark ? ".dark.png" : ".light.png")))
+            }
+        }
+    }
+
+    @Test func timestampedYouTubeLinksShareTheVideosIdentity() throws {
+        let plain = try #require(URL(string: "https://www.youtube.com/watch?v=abcdefghijk"))
+        let identity = try CaptureRequest.webLink(plain).identity
+        for variant in [
+            "https://youtu.be/abcdefghijk?t=42",
+            "https://www.youtube.com/watch?v=abcdefghijk&t=1m30s&si=share",
+            "https://m.youtube.com/watch?t=90&v=abcdefghijk",
+            "https://www.youtube.com/live/abcdefghijk?t=5",
+        ] {
+            let url = try #require(URL(string: variant))
+            let request = try CaptureRequest.webLink(url)
+            #expect(request.identity == identity)
+            #expect(request.url == plain)
+        }
+    }
+
+    @Test func robotsRulesFollowRFC9309() throws {
+        let rules = RobotsRules.parse("""
+        # Synthetic robots.txt
+        User-agent: OtherBot
+        Disallow: /
+
+        User-agent: *
+        Disallow: /private/
+        Allow: /private/open
+        Disallow: /*.pdf$
+        Crawl-delay: 4
+        """)
+        func allows(_ path: String) throws -> Bool {
+            try rules.allows(#require(URL(string: "https://example.org" + path)))
+        }
+        #expect(try allows("/writing/essay"))
+        #expect(try !allows("/private/notes"))
+        #expect(try allows("/private/open-letter"))
+        #expect(try !allows("/files/report.pdf"))
+        #expect(try allows("/files/report.pdf?download=1"))
+        #expect(rules.crawlDelay == 4)
+        let named = RobotsRules
+            .parse("User-agent: *\nDisallow: /\n\nUser-agent: Gleanary\nAllow: /")
+        #expect(try named.allows(#require(URL(string: "https://example.org/a"))))
+        #expect(RobotsRules.parse("User-agent: *\nDisallow:").rules.isEmpty)
+    }
+
+    @Test func robotsPolicyTreatsMissingFilesAsOpenAndFailuresAsClosed() async throws {
+        let url = try #require(URL(string: CreatorVideoFixture.essay))
+        #expect(await RobotsPolicy(fetcher: RobotsFetcher(robots: nil, robotsStatus: 404))
+            .rules(for: url) == .allowAll)
+        #expect(await RobotsPolicy(fetcher: RobotsFetcher(robots: nil, robotsStatus: 503))
+            .rules(for: url) == .disallowAll)
+    }
+
+    @Test func automaticSavesRespectRobotsButYourOwnSavesDoNot() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(
+            store: store, fetcher: RobotsFetcher(robots: "User-agent: *\nDisallow: /writing/"),
+            youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .balanced) }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        #expect(try await store.documents().count == 1)
+        let blocked = try #require(await store.readyDatabase().read { db in
+            try Row.fetchOne(db, sql: """
+            SELECT id, state, reason FROM acquisition_candidates WHERE url = ?
+            """, arguments: [CreatorVideoFixture.essay]).map {
+                (
+                    id: $0["id"] as String,
+                    state: $0["state"] as String,
+                    reason: $0["reason"] as String
+                )
+            }
+        })
+        #expect(blocked.state == "filtered")
+        #expect(blocked.reason == "The site's robots.txt asks not to fetch this")
+        // Choosing to save it yourself is not crawling.
+        let id = try #require(UUID(uuidString: blocked.id))
+        try await store.readyDatabase().write { db in
+            try db.execute(sql: "UPDATE acquisition_candidates SET state = 'suggested'")
+        }
+        _ = try await engine.saveAcquisition(id)
+        try await engine.run()
+        #expect(try await store.documents().contains { $0.name == "Swarm scaling" })
+    }
+
+    @Test func aJudgedIntentOverridesCuePhrases() async throws {
+        let slides = try link("https://notes.example.net/agents", context: "Slides for the talk")
+        let promoted = try link(CreatorVideoFixture.essay, context: "I recommend this")
+        let plans = AcquisitionPlanner.plan(
+            [slides, promoted], sourceURL: nil, policy: SourceAcquisitionLevel.balanced.policy,
+            savedToday: 0, saved: [],
+            intents: [slides.identity: .recommendation, promoted.identity: .promotion]
+        )
+        #expect(plans.map(\.state) == [.approved, .filtered])
+        #expect(plans.first?.intent == .recommendation)
+
+        for judge in [FixedJudge(intent: .other), FixedJudge(intent: nil)] {
+            let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+            _ = try await store.open()
+            let engine = IngestionEngine(
+                store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+                settings: { CaptureSettings(
+                    summarize: false,
+                    previews: false,
+                    acquisition: .balanced
+                ) },
+                recommendationJudge: judge
+            )
+            _ = try await engine.enqueue(
+                "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+            )
+            try await engine.run()
+            let row = try await store.readyDatabase().read { db in
+                try Row.fetchOne(db, sql: """
+                SELECT state, intent FROM acquisition_candidates WHERE url = ?
+                """, arguments: [CreatorVideoFixture.essay]).map {
+                    (state: $0["state"] as String, intent: $0["intent"] as String?)
+                }
+            }
+            if judge.intent == nil {
+                // A failing model leaves the cue phrases to decide.
+                #expect(row?.state == "queued")
+                #expect(row?.intent == nil)
+            } else {
+                // The model read "I'd recommend reading" as not a recommendation this time.
+                #expect(row?.state == "suggested")
+                #expect(row?.intent == "other")
+            }
+        }
+    }
+
+    @Test func oneSiteCannotTakeTheWholeDay() throws {
+        let links = try (1 ... 3).map {
+            try link("https://essays.example.org/\($0)", context: "I recommend reading this")
+        }
+        let plans = AcquisitionPlanner.plan(
+            links, sourceURL: nil, policy: SourceAcquisitionLevel.balanced.policy,
+            savedToday: 2, saved: [], savedTodayBySite: ["essays.example.org": 2]
+        )
+        #expect(plans.map(\.state) == [.approved, .suggested, .suggested])
+    }
+
+    @Test func automaticFetchesFromOneSiteAreSpacedOut() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(store: store, fetcher: RobotsFetcher(robots: ""))
+        let url = try #require(URL(string: CreatorVideoFixture.essay))
+        let clock = ContinuousClock()
+        let start = clock.now
+        await engine.spaceAutomaticFetch(url)
+        await engine.spaceAutomaticFetch(url)
+        #expect(clock.now - start >= .seconds(2))
+    }
+
+    @Test func foundViaLinksShowInTheGraph() async throws {
+        let (root, store, _) = try await balancedLibrary()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let video = try #require(await store.documents()
+            .first { $0.name.contains("Synthetic agents") })
+        let essay = try #require(await store.documents().first { $0.name == "Swarm scaling" })
+        let edge = GraphEdge(
+            source: "note:\(video.id.uuidString)", target: "note:\(essay.id.uuidString)",
+            predicate: .relatedTo
+        )
+        let reasons = try await store.libraryGraphReasons(for: edge, request: LibraryGraphRequest())
+        #expect(reasons.map(\.label) == ["Found via"])
+        #expect(reasons.first?.text.hasPrefix("Recommended by the creator") == true)
     }
 
     @Test func categoryOverridesPickTheLevel() {
