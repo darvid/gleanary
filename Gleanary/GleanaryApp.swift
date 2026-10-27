@@ -14,11 +14,14 @@ struct GleanaryApp: App {
                 return LibraryModel(store: DocumentStore(url: url))
             }
         #endif
-        return LibraryModel(
+        let library = LibraryModel(
             followsProvider: true, screenshotter: WebPageScreenshotter(),
             captureSettings: CaptureSettings.current,
             schedulesAutomations: true
         )
+        library.graphFeaturesEnabled = UserDefaults.standard
+            .bool(forKey: LibraryModel.backgroundEntitiesKey)
+        return library
     }
 
     /// The main window and the Settings window can both ask first; only one model is made.

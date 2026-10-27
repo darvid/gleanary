@@ -54,6 +54,7 @@ struct CaptureSettingsView: View {
     @State private var overrides: [String: Int] = [:]
     @AppStorage(CaptureSettings.summarizeKey) private var summarize = true
     @AppStorage(CaptureSettings.previewsKey) private var previews = true
+    @AppStorage(LibraryModel.backgroundEntitiesKey) private var readEntities = false
     @AppStorage(CaptureSettings.acquisitionKey) private var acquisition =
         SourceAcquisitionLevel.balanced.rawValue
 
@@ -79,6 +80,16 @@ struct CaptureSettingsView: View {
             } footer: {
                 Text("Changes apply to the next capture.")
                     .font(.callout).foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle(isOn: $readEntities) {
+                    Text("Read notes for entities in the background")
+                    Text(
+                        "Find people, organizations, tools and concepts in every note as it's saved, with Apple Intelligence on this Mac. When off, ask in chat to find them in the items you choose."
+                    )
+                }
+            } header: {
+                Text("Entities")
             }
             Section {
                 VStack(alignment: .leading, spacing: 10) {

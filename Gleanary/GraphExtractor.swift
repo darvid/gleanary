@@ -1054,13 +1054,14 @@ actor GraphExtractor {
         self.store = store; self.provider = provider
     }
 
-    func run(update: @Sendable () async -> Void) async throws {
+    /// `only` reads just these notes, for extraction you asked for.
+    func run(only notes: Set<UUID>? = nil, update: @Sendable () async -> Void) async throws {
         while !Task.isCancelled {
-            if let work = try await store.nextGraphWork() {
+            if let work = try await store.nextGraphWork(only: notes) {
                 try await processCandidates(work, update: update)
                 continue
             }
-            if let work = try await store.nextGraphCurationWork() {
+            if let work = try await store.nextGraphCurationWork(only: notes) {
                 try await processCuration(work, update: update)
                 continue
             }

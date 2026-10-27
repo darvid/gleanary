@@ -25,6 +25,7 @@ struct ContentView: View {
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
     @AppStorage("librarySidebarExpanded") private var librarySidebarExpanded = true
+    @AppStorage(LibraryModel.backgroundEntitiesKey) private var readEntitiesInBackground = false
     @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
     @State private var page = 0
@@ -433,7 +434,14 @@ struct ContentView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readerTarget != nil)
     }
 
-    @ViewBuilder private var browsingMain: some View {
+    private var browsingMain: some View {
+        browsingContent
+            .onChange(of: readEntitiesInBackground) { _, enabled in
+                Task { await library.setBackgroundEntityReading(enabled) }
+            }
+    }
+
+    @ViewBuilder private var browsingContent: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
         } else if showingEntities {

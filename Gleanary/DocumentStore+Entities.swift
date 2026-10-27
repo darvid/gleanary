@@ -24,12 +24,20 @@ struct EntityMention: Identifiable, Sendable, Equatable {
 
 extension DocumentStore {
     /// Entities with current evidence in live, unarchived notes, most mentioned first.
+    /// `notes` limits the count to entities those notes mention.
     func entities(
         kind: GraphNode.Kind? = nil,
         matching query: String = "",
+        in notes: Set<UUID>? = nil,
         limit: Int = 500
     ) throws -> [EntitySummary] {
         let search = GraphNode.normalize(query)
+        let scope = notes.map { ids in
+            String(
+                decoding: (try? JSONEncoder().encode(ids.map(\.uuidString))) ?? Data("[]".utf8),
+                as: UTF8.self
+            )
+        }
         return try readyDatabase().read { db in
             let rows = try Row.fetchAll(db, sql: """
             SELECT g.id, g.kind, g.label, count(DISTINCT v.noteID) AS notes,
@@ -42,8 +50,10 @@ extension DocumentStore {
             JOIN notes n ON n.id = v.noteID AND n.revision = v.revision
             WHERE g.kind != 'document' AND n.deletedAt IS NULL AND n.archivedAt IS NULL
                 AND (? IS NULL OR g.kind = ?) AND (? = '' OR g.label LIKE '%' || ? || '%')
+                AND (? IS NULL OR v.noteID IN (SELECT value FROM json_each(?)))
             GROUP BY g.id ORDER BY notes DESC, g.label LIMIT ?
-            """, arguments: [kind?.rawValue, kind?.rawValue, search, search, max(1, limit)])
+            """, arguments: [kind?.rawValue, kind?.rawValue, search, search, scope, scope,
+                             max(1, limit)])
             return rows.compactMap { row in
                 guard let kind = GraphNode.Kind(rawValue: row["kind"]) else { return nil }
                 let label: String = row["label"]

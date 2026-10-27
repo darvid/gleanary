@@ -1,6 +1,8 @@
 import Foundation
 
 actor AgentCoordinator {
+    /// Reads items for entities when you ask in chat.
+    let graphProvider: any GraphExtracting
     let store: DocumentStore
     let ingestion: IngestionEngine
     private(set) var inference: any ConversationInferring
@@ -17,6 +19,7 @@ actor AgentCoordinator {
         inference: any ConversationInferring = AppleConversationInference(),
         screenshotter: (any PageScreenshotting)? = nil,
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
+        graphProvider: any GraphExtracting = AppleGraphExtractor(),
         captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
         writingStyles: @escaping @Sendable () -> WritingStyleChoice = { WritingStyleChoice() }
     ) {
@@ -24,6 +27,7 @@ actor AgentCoordinator {
         researchFetcher = fetcher
         self.inference = inference
         self.writingStyles = writingStyles
+        self.graphProvider = graphProvider
         ingestion = IngestionEngine(
             store: store, fetcher: fetcher, youtube: youtube, screenshotter: screenshotter,
             settings: captureSettings,

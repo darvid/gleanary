@@ -42,6 +42,7 @@ import SwiftUI
 /// mention it. Extraction keeps these current; nothing here edits them.
 struct EntitiesView: View {
     @State private var model: EntitiesModel
+    @AppStorage(LibraryModel.backgroundEntitiesKey) private var readingInBackground = false
     var open: (UUID) -> Void
 
     init(store: DocumentStore, open: @escaping (UUID) -> Void) {
@@ -74,9 +75,7 @@ struct EntitiesView: View {
                 ContentUnavailableView(
                     model.query.isEmpty ? "No entities yet" : "No matches",
                     systemImage: "person.2",
-                    description: Text(model.query.isEmpty
-                        ? "People, organizations and concepts appear as your notes are read for the graph."
-                        : "Try another name.")
+                    description: Text(model.query.isEmpty ? emptyHint : "Try another name.")
                 )
             } else {
                 List(model.entities, selection: $model.selectedID) { entity in
@@ -97,6 +96,13 @@ struct EntitiesView: View {
             }
         }
         .padding(.top, 12).padding(.horizontal, 12)
+    }
+
+    /// Says how entities get found, since nothing reads notes unless asked or turned on.
+    private var emptyHint: String {
+        readingInBackground
+            ? "Notes are being read for people, organizations and concepts. They appear here as each note is done."
+            : "Ask in chat, for example “Find the people and organizations in my recent saves”, or turn on background reading in Settings › Capture."
     }
 
     @ViewBuilder private var detail: some View {

@@ -139,6 +139,69 @@ extension DocumentStore {
         )
     }
 
+    /// A JSON array of note IDs for `json_each`, or nil for every note.
+    private static func graphScope(_ notes: Set<UUID>?) -> String? {
+        notes.map { ids in
+            String(
+                decoding: (try? JSONEncoder().encode(ids.map(\.uuidString).sorted())) ??
+                    Data("[]".utf8),
+                as: UTF8.self
+            )
+        }
+    }
+
+    /// Makes sure each note has current extraction work queued, without redoing notes already
+    /// read at their current revision. Returns how many need reading.
+    @discardableResult
+    func prepareGraphJobs(_ ids: [UUID]) throws -> Int {
+        try readyDatabase().write { db in
+            var pending = 0
+            for id in ids {
+                guard let row = try Row.fetchOne(
+                    db, sql: "SELECT * FROM notes WHERE id = ? AND deletedAt IS NULL",
+                    arguments: [id.uuidString]
+                ) else { continue }
+                let note = try Self.document(row)
+                let job = try Row.fetchOne(
+                    db, sql: "SELECT state, revision, version FROM graph_jobs WHERE noteID = ?",
+                    arguments: [id.uuidString]
+                )
+                let state: String? = job?["state"]
+                let current = job?["revision"] as String? == note.revision?.uuidString
+                    && job?["version"] as String? == GraphExtractor.version
+                if job == nil || !current {
+                    try Self.enqueueGraph(note, in: db)
+                    pending += 1
+                } else if ["paused", "failed", "unavailable"].contains(state ?? "") {
+                    try db.execute(sql: """
+                    UPDATE graph_jobs SET state = CASE WHEN completed >= total AND total > 0
+                        THEN 'curating' ELSE 'queued' END, token = ?, error = NULL WHERE noteID = ?
+                    """, arguments: [UUID().uuidString, id.uuidString])
+                    pending += 1
+                } else if state != "ready" {
+                    pending += 1
+                }
+            }
+            return pending
+        }
+    }
+
+    /// How many of these notes are read, and whether any couldn't be read on this Mac.
+    func graphProgress(_ ids: [UUID]) throws -> (ready: Int, unavailable: Int, failed: Int) {
+        let scope = Self.graphScope(Set(ids))
+        return try readyDatabase().read { db in
+            let rows = try Row.fetchAll(db, sql: """
+            SELECT state, count(*) AS n FROM graph_jobs
+            WHERE noteID IN (SELECT value FROM json_each(?)) GROUP BY state
+            """, arguments: [scope])
+            var counts: [String: Int] = [:]
+            for row in rows {
+                counts[row["state"]] = row["n"]
+            }
+            return (counts["ready"] ?? 0, counts["unavailable"] ?? 0, counts["failed"] ?? 0)
+        }
+    }
+
     func pauseGraph(_ noteID: UUID, token: UUID? = nil) throws {
         try readyDatabase().write { db in
             try db.execute(
@@ -184,12 +247,16 @@ extension DocumentStore {
         }
     }
 
-    func nextGraphWork() throws -> GraphWork? {
-        try readyDatabase().write { db in
+    /// `only` limits the work to these notes, for extraction you asked for.
+    func nextGraphWork(only notes: Set<UUID>? = nil) throws -> GraphWork? {
+        let scope = Self.graphScope(notes)
+        return try readyDatabase().write { db in
             while let row = try Row.fetchOne(db, sql: """
             SELECT graph_jobs.*, notes.name FROM graph_jobs JOIN notes ON notes.id = graph_jobs.noteID
-            WHERE graph_jobs.state = 'queued' AND notes.deletedAt IS NULL ORDER BY notes.createdAt LIMIT 1
-            """) {
+            WHERE graph_jobs.state = 'queued' AND notes.deletedAt IS NULL
+                AND (? IS NULL OR graph_jobs.noteID IN (SELECT value FROM json_each(?)))
+            ORDER BY notes.createdAt LIMIT 1
+            """, arguments: [scope, scope]) {
                 let job = try Self.graphJob(row)
                 var data: Data? = row["chunks"]
                 if data == nil {
@@ -299,13 +366,15 @@ extension DocumentStore {
         }
     }
 
-    func nextGraphCurationWork() throws -> GraphCurationWork? {
-        try readyDatabase().read { db in
+    func nextGraphCurationWork(only notes: Set<UUID>? = nil) throws -> GraphCurationWork? {
+        let scope = Self.graphScope(notes)
+        return try readyDatabase().read { db in
             guard let row = try Row.fetchOne(db, sql: """
             SELECT graph_jobs.*, notes.name FROM graph_jobs JOIN notes ON notes.id = graph_jobs.noteID
             WHERE graph_jobs.state = 'curating' AND notes.deletedAt IS NULL
+                AND (? IS NULL OR graph_jobs.noteID IN (SELECT value FROM json_each(?)))
             ORDER BY notes.createdAt LIMIT 1
-            """) else { return nil }
+            """, arguments: [scope, scope]) else { return nil }
             let job = try Self.graphJob(row)
             let candidateRows = try Row.fetchAll(db, sql: """
             SELECT target.id, target.kind, target.label,

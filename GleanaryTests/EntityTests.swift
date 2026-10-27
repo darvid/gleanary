@@ -5,6 +5,29 @@ import GRDB
 import SwiftUI
 import Testing
 
+/// Finds Orion and retrieval wherever a note says "Orion uses retrieval."
+private struct OrionGraphProvider: GraphExtracting {
+    func extract(_ text: String) -> GraphProposal {
+        let quote = "Orion uses retrieval."
+        guard text.contains(quote) else { return GraphProposal(entities: [], relations: []) }
+        return GraphProposal(entities: [
+            ProposedEntity(name: "Orion", kind: .tool, quote: quote),
+            ProposedEntity(name: "retrieval", kind: .concept, quote: quote),
+        ], relations: [ProposedRelation(
+            source: "Orion", target: "retrieval", predicate: .uses, quote: quote
+        )])
+    }
+}
+
+private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
+    let data = (try? JSONSerialization.data(withJSONObject: arguments)) ?? Data()
+    return AgentCall(
+        id: UUID().uuidString,
+        name: name,
+        arguments: String(decoding: data, as: UTF8.self)
+    )
+}
+
 @Suite(.serialized) struct EntityTests {
     private func store() async throws -> (URL, DocumentStore) {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
@@ -157,5 +180,79 @@ import Testing
                     .write(to: URL(fileURLWithPath: path + (dark ? ".dark.png" : ".light.png")))
             }
         }
+    }
+
+    @Test func theAssistantReadsEntitiesByHandle() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Swarm notes", markdown: "Notes."))
+        try await mention(
+            "Toby Ord",
+            kind: .person,
+            quote: "Toby Ord wrote about swarms.",
+            in: note,
+            store: store
+        )
+        let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+        let listed = await toolbox.run(call("list_entities", ["kind": "person", "query": "ord"]))
+        #expect(listed.contains(#""entity":"e1""#))
+        #expect(listed.contains("Toby Ord"))
+        let read = await toolbox.run(call("get_entity", ["entity": "e1"]))
+        #expect(read.contains(#""item":"i1""#))
+        #expect(read.contains("Toby Ord wrote about swarms."))
+        let unknown = await toolbox.run(call("get_entity", ["entity": "e9"]))
+        #expect(unknown.contains("Unknown entity handle"))
+    }
+
+    @Test func askingInChatReadsOnlyTheChosenItems() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let chosen = try await store.save(MarkdownDocument(
+            name: "Orion paper", markdown: "Orion uses retrieval. More detail follows here."
+        ))
+        let other = try await store.save(MarkdownDocument(
+            name: "Other paper", markdown: "Orion uses retrieval. Unchosen."
+        ))
+        let task = try await store.beginConversation("find entities", owner: .assistant)
+        let coordinator = AgentCoordinator(store: store, graphProvider: OrionGraphProvider())
+        let report = try await coordinator.findEntities([chosen.id], taskID: task, changed: {})
+        #expect(report.read == 1)
+        #expect(report.unavailable == 0)
+        let found = try await store.entities(in: [chosen.id])
+        #expect(Set(found.map(\.name)) == ["Orion", "retrieval"])
+        #expect(try await store.graphProgress([other.id]).ready == 0)
+        // Already read at this version, so asking again reads nothing new.
+        #expect(try await store.prepareGraphJobs([chosen.id]) == 0)
+    }
+
+    @Test func findEntitiesValidatesItsScopeAndReportsWhatItFound() async throws {
+        let (root, store) = try await store()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(name: "Swarm notes", markdown: "Notes."))
+        let toolbox = AgentToolbox(store: store, search: SearchEngine(store: store))
+        _ = await toolbox.describe([note.id])
+        let finder = ConversationEntityFinder { ids in
+            try await mention(
+                "Toby Ord",
+                kind: .person,
+                quote: "Toby Ord wrote it.",
+                in: #require(await store.document(id: ids[0])),
+                store: store
+            )
+            return ConversationEntityFinder.Report(read: ids.count, unavailable: 0, failed: 0)
+        }
+        let badScope = try await finder.run(call("find_entities", [
+            "scope": "galaxy", "items": [], "category_code": "", "limit": 5,
+        ]), toolbox: toolbox)
+        #expect(badScope.contains("Scope is items, category, recent or all."))
+        let result = try await finder.run(call("find_entities", [
+            "scope": "items", "items": ["i1"], "category_code": "", "limit": 5,
+        ]), toolbox: toolbox)
+        #expect(result.contains(#""read":1"#))
+        #expect(result.contains("Toby Ord"))
+        let again = try await finder.run(call("find_entities", [
+            "scope": "recent", "items": [], "category_code": "", "limit": 5,
+        ]), toolbox: toolbox)
+        #expect(again.contains("already being found"))
     }
 }

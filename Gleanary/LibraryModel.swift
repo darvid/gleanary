@@ -58,9 +58,10 @@ final class LibraryModel {
     var intelligenceAvailable = false
     private let engine: SearchEngine
     let store: DocumentStore
-    // Legacy concept extraction stays opt-in. Library graphs read saved relationships without
-    // starting this model-backed pipeline.
+    // Reading notes for entities in the background stays opt-in; chat can still read chosen
+    // items on request. Library graphs read saved relationships without it.
     var graphFeaturesEnabled = false
+    static let backgroundEntitiesKey = "readEntitiesInBackground"
     private var indexAgain = false
     private var resultToken = UUID()
     @ObservationIgnored private(set) var indexingTask: Task<Void, Never>?
@@ -138,6 +139,20 @@ final class LibraryModel {
     }
 
     /// The model that judges the cross-linker's candidates, following the AI provider.
+    /// Turns background reading for entities on or off without relaunching.
+    func setBackgroundEntityReading(_ enabled: Bool) async {
+        graphFeaturesEnabled = enabled
+        guard enabled else {
+            graph.stopExtraction()
+            return
+        }
+        graph.allowExtraction()
+        do {
+            try await graph.load()
+            graph.startExtraction()
+        } catch { self.error = error.localizedDescription }
+    }
+
     /// Reads the wording around links found in captures; follows the AI provider.
     func useRecommendationJudge(_ judge: (any RecommendationJudging)?) {
         let ingestion = ingestion
