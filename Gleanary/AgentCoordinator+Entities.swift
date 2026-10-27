@@ -46,13 +46,21 @@ extension AgentCoordinator {
             }
         }
         try Task.checkCancellation()
+        // Same-key names merge now; likely duplicates wait for you on the Entities page.
+        let resolver = EntityResolver(
+            store: store,
+            judge: (filingInference ?? inference) as? any EntityMatchJudging
+        )
+        let merged = await (try? resolver.autoMerge()) ?? 0
+        let duplicates = await (try? resolver.findDuplicates()) ?? 0
         let state = try await store.graphProgress(ids)
         try? await store.updateConversationTask(
             taskID, progress: "Thinking", owner: .assistant, onlyWhileRunning: true
         )
         await changed()
         return ConversationEntityFinder.Report(
-            read: state.ready, unavailable: state.unavailable, failed: state.failed
+            read: state.ready, unavailable: state.unavailable, failed: state.failed,
+            merged: merged, possibleDuplicates: duplicates
         )
     }
 }

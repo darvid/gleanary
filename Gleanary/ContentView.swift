@@ -449,7 +449,11 @@ struct ContentView: View {
             ConversationView(model: conversation, library: library)
         } else if showingEntities {
             if library.ready {
-                EntitiesView(store: library.store, open: openSavedItem)
+                EntitiesView(
+                    store: library.store,
+                    judge: currentInference() as? any EntityMatchJudging,
+                    open: openSavedItem
+                )
             } else {
                 ProgressView("Opening entities…")
             }

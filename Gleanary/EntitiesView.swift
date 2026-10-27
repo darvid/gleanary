@@ -2,17 +2,28 @@ import Observation
 import SwiftUI
 
 @MainActor @Observable final class EntitiesModel {
+    /// Rows fetched at a time; the list asks for more as you near the end.
+    static let pageSize = 200
+
     let store: DocumentStore
+    let resolver: EntityResolver
     var kind: GraphNode.Kind?
     var query = ""
     var showHidden = false
+    var sort = EntitySort.mentions
     private(set) var entities: [EntitySummary] = []
+    private(set) var total = 0
     var selectedID: String?
     private(set) var mentions: [EntityMention] = []
+    private(set) var suggestions: [EntitySuggestion] = []
+    private(set) var findingDuplicates = false
     private(set) var error: String?
+    @ObservationIgnored private var loadingMore = false
+    @ObservationIgnored private var merged = false
 
-    init(store: DocumentStore) {
+    init(store: DocumentStore, judge: (any EntityMatchJudging)? = nil) {
         self.store = store
+        resolver = EntityResolver(store: store, judge: judge)
     }
 
     var selected: EntitySummary? {
@@ -21,13 +32,50 @@ import SwiftUI
 
     func load() async {
         do {
-            entities = try await store.entities(kind: kind, matching: query, hidden: showHidden)
+            // Names that share a match key merge on the first visit; it needs no model.
+            if !merged {
+                merged = true
+                try await resolver.autoMerge()
+            }
+            entities = try await store.entities(
+                kind: kind, matching: query, hidden: showHidden, sort: sort, limit: Self.pageSize
+            )
+            total = try await store.entityCount(kind: kind, matching: query, hidden: showHidden)
+            suggestions = try await store.entitySuggestions()
             if selectedID.map({ id in !entities.contains { $0.id == id } }) ?? true {
                 selectedID = entities.first?.id
             }
             await loadMentions()
             error = nil
         } catch { self.error = "Entities could not be loaded. Try again." }
+    }
+
+    /// The next page, when the list has scrolled near the end of what's loaded.
+    func loadMore() async {
+        guard !loadingMore, entities.count < total else { return }
+        loadingMore = true
+        defer { loadingMore = false }
+        let next = await (try? store.entities(
+            kind: kind, matching: query, hidden: showHidden, sort: sort,
+            offset: entities.count, limit: Self.pageSize
+        )) ?? []
+        let known = Set(entities.map(\.id))
+        entities += next.filter { !known.contains($0.id) }
+    }
+
+    /// Merges same-key names, then asks the model about likely duplicates.
+    func findDuplicates() async {
+        findingDuplicates = true
+        defer { findingDuplicates = false }
+        do {
+            try await resolver.autoMerge()
+            try await resolver.findDuplicates()
+        } catch { self.error = "Duplicates couldn't be checked. Try again." }
+        await load()
+    }
+
+    func resolve(_ suggestion: EntitySuggestion, merge: Bool) async {
+        await apply { try await self.store.resolveEntitySuggestion(suggestion, merge: merge) }
     }
 
     /// Other entities this one could be merged into, the same kind first.
@@ -76,13 +124,18 @@ import SwiftUI
 /// mention it. Extraction finds them; here you can rename, merge or hide them.
 struct EntitiesView: View {
     @State private var model: EntitiesModel
+    @State private var reviewingDuplicates = false
     @State private var renaming = false
     @State private var draftName = ""
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readingInBackground = false
     var open: (UUID) -> Void
 
-    init(store: DocumentStore, open: @escaping (UUID) -> Void) {
-        _model = State(initialValue: EntitiesModel(store: store))
+    init(
+        store: DocumentStore,
+        judge: (any EntityMatchJudging)? = nil,
+        open: @escaping (UUID) -> Void
+    ) {
+        _model = State(initialValue: EntitiesModel(store: store, judge: judge))
         self.open = open
     }
 
@@ -92,8 +145,13 @@ struct EntitiesView: View {
             Divider()
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task(id: "\(model.kind?.rawValue ?? "all")/\(model.query)/\(model.showHidden)") {
+        .task(
+            id: "\(model.kind?.rawValue ?? "all")/\(model.query)/\(model.showHidden)/\(model.sort)"
+        ) {
             await model.load()
+        }
+        .sheet(isPresented: $reviewingDuplicates) {
+            DuplicateReview(model: model)
         }
         .onChange(of: model.selectedID) { Task { await model.loadMentions() } }
     }
@@ -117,17 +175,47 @@ struct EntitiesView: View {
 
     private var filters: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Picker("Kind", selection: $model.kind) {
-                Text("All").tag(GraphNode.Kind?.none)
-                ForEach(Self.kinds, id: \.self) { kind in
-                    Text(Self.plural(kind)).tag(Optional(kind))
+            HStack {
+                Picker("Kind", selection: $model.kind) {
+                    Text("All").tag(GraphNode.Kind?.none)
+                    ForEach(Self.kinds, id: \.self) { kind in
+                        Text(Self.plural(kind)).tag(Optional(kind))
+                    }
                 }
+                .pickerStyle(.menu).labelsHidden()
+                Menu {
+                    Picker("Sort by", selection: $model.sort) {
+                        ForEach(EntitySort.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Sort by \(model.sort.title)", systemImage: "arrow.up.arrow.down")
+                        .labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton).fixedSize()
+                .help("Sorted by \(model.sort.title)")
             }
-            .pickerStyle(.menu).labelsHidden()
             TextField("Find a person, organization or concept", text: $model.query)
                 .textFieldStyle(.roundedBorder)
-            Toggle("Show hidden", isOn: $model.showHidden).toggleStyle(.checkbox)
-                .font(.callout)
+            HStack {
+                Toggle("Show hidden", isOn: $model.showHidden).toggleStyle(.checkbox)
+                Spacer()
+                Text(model.total == 1 ? "1 entity" : "\(model.total.formatted()) entities")
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            .font(.callout)
+            HStack(spacing: 8) {
+                Button("Find Duplicates") { Task { await model.findDuplicates() } }
+                    .disabled(model.findingDuplicates)
+                    .help("Merge names written differently and suggest likely duplicates")
+                if model.findingDuplicates {
+                    ProgressView().controlSize(.small)
+                } else if !model.suggestions.isEmpty {
+                    Button("Review \(model.suggestions.count)") { reviewingDuplicates = true }
+                        .help("Possible duplicates for you to confirm")
+                }
+            }
+            .controlSize(.small)
         }
     }
 
@@ -143,6 +231,12 @@ struct EntitiesView: View {
             }
             .padding(.horizontal, 4)
             .tag(entity.id)
+            .onAppear {
+                // Rows are built as they scroll into view, so the last one asks for more.
+                if entity.id == model.entities.last?.id {
+                    Task { await model.loadMore() }
+                }
+            }
             .accessibilityLabel(
                 "\(entity.name), \(Self.singular(entity.kind)), \(Self.noteCount(entity.noteCount))"
             )
@@ -327,5 +421,56 @@ struct EntitiesView: View {
 private extension String {
     var capitalizedFirstWord: String {
         prefix(1).uppercased() + dropFirst()
+    }
+}
+
+/// Possible duplicates, each merged or kept apart by you.
+private struct DuplicateReview: View {
+    let model: EntitiesModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Possible Duplicates").font(.title3.weight(.semibold))
+                Text(
+                    "Merging keeps the more mentioned name and shows the other under Also known as."
+                )
+                .font(.callout).foregroundStyle(.secondary)
+            }
+            .padding(20)
+            Divider()
+            if model.suggestions.isEmpty {
+                ContentUnavailableView("All reviewed", systemImage: "checkmark.circle")
+            } else {
+                List(model.suggestions) { suggestion in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text(suggestion.left.name).fontWeight(.medium)
+                            Image(systemName: "arrow.left.and.right").foregroundStyle(.secondary)
+                                .accessibilityLabel("and")
+                            Text(suggestion.right.name).fontWeight(.medium)
+                            Spacer()
+                            Button("Not the Same") {
+                                Task { await model.resolve(suggestion, merge: false) }
+                            }
+                            Button("Merge") { Task { await model.resolve(suggestion, merge: true) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        Text(suggestion.reason).font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .listStyle(.inset)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+        }
+        .frame(width: 560, height: 480)
     }
 }

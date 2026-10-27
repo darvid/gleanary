@@ -80,6 +80,23 @@ extension ChatGPTConversationInference: GraphExtracting {
     }
 }
 
+extension ChatGPTConversationInference: EntityMatchJudging {
+    func judgeMatches(_ items: [EntityMatchJudgement.Item]) async throws
+        -> [Int: EntityMatchJudgement.Verdict]
+    {
+        let fence = try await session.authorizationFence()
+        let answers: EntityMatchJudgement.Answers = try await structured(
+            prompt: EntityMatchJudgement.prompt(items),
+            instructions: EntityMatchJudgement.instructions,
+            name: "entity_matches",
+            schema: EntityMatchJudgement.jsonSchema,
+            fence: fence
+        )
+        try await session.validateFence(fence)
+        return EntityMatchJudgement.verdicts(answers, items: items)
+    }
+}
+
 /// JSON schemas matching the on-device generation schemas, for strict structured output.
 enum GraphJSONSchema {
     static func object(_ properties: [String: Any]) -> [String: Any] {

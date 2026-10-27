@@ -11,6 +11,8 @@ actor ConversationEntityFinder {
         let read: Int
         let unavailable: Int
         let failed: Int
+        var merged = 0
+        var possibleDuplicates = 0
     }
 
     private let execute: @Sendable ([UUID]) async throws -> Report
@@ -69,6 +71,8 @@ actor ConversationEntityFinder {
             let result = EntityFinderResult(
                 items: ids.count, read: report.read,
                 couldNotRead: report.unavailable + report.failed,
+                mergedAutomatically: report.merged,
+                possibleDuplicates: report.possibleDuplicates,
                 reason: report.unavailable > 0
                     ?
                     "Apple Intelligence isn't available on this Mac, so some items weren't read." :
@@ -89,11 +93,15 @@ private struct EntityFinderResult: Encodable {
     let items: Int
     let read: Int
     let couldNotRead: Int
+    let mergedAutomatically: Int
+    let possibleDuplicates: Int
     let reason: String
     let entities: [AgentToolbox.EntityRow]
 
     enum CodingKeys: String, CodingKey {
         case items, read, reason, entities
         case couldNotRead = "could_not_read"
+        case mergedAutomatically = "merged_automatically"
+        case possibleDuplicates = "possible_duplicates_to_review"
     }
 }

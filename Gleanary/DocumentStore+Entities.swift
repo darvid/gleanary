@@ -31,6 +31,52 @@ struct EntityMention: Identifiable, Sendable, Equatable {
     let citation: SourceCitation?
 }
 
+/// How the entity list is ordered.
+enum EntitySort: String, CaseIterable, Sendable {
+    case mentions, name, recent, kind
+
+    var title: String {
+        switch self {
+        case .mentions: "Most Mentioned"
+        case .name: "Name"
+        case .recent: "Recently Mentioned"
+        case .kind: "Kind"
+        }
+    }
+
+    var orderBy: String {
+        switch self {
+        case .mentions: "notes DESC, sortName"
+        case .name: "sortName"
+        case .recent: "latest DESC, sortName"
+        case .kind: "kindOrder, notes DESC, sortName"
+        }
+    }
+}
+
+/// An entity as resolution sees it: its own node, before merges.
+struct EntityNode: Sendable, Equatable {
+    let id: String
+    let kind: GraphNode.Kind
+    let label: String
+    let notes: Int
+    let mergedInto: String?
+    let automatic: Bool
+    let keepSeparate: Bool
+    let hidden: Bool
+}
+
+/// A pair proposed as the same thing, waiting for you.
+struct EntitySuggestion: Identifiable, Sendable, Equatable {
+    let left: EntitySummary
+    let right: EntitySummary
+    let reason: String
+
+    var id: String {
+        left.id + "|" + right.id
+    }
+}
+
 /// Your fixes to entities, kept by entity ID so later extraction of the same name follows
 /// them: a name, a merge into another entity, or hiding it.
 enum EntitySchema {
@@ -46,33 +92,99 @@ enum EntitySchema {
         CREATE INDEX entity_overrides_merged ON entity_overrides(mergedInto);
         """)
     }
+
+    /// Automatic merges, names you kept apart, and pairs proposed as the same thing.
+    static func addResolution(_ db: Database) throws {
+        try db.execute(sql: """
+        ALTER TABLE entity_overrides ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE entity_overrides ADD COLUMN keepSeparate INTEGER NOT NULL DEFAULT 0;
+        CREATE TABLE entity_merge_suggestions (
+            leftID TEXT NOT NULL,
+            rightID TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            state TEXT NOT NULL,
+            createdAt REAL NOT NULL,
+            PRIMARY KEY(leftID, rightID), CHECK(leftID < rightID)
+        );
+        """)
+    }
 }
 
 extension DocumentStore {
-    /// Entities with current evidence in live, unarchived notes, most mentioned first. Merged
+    /// Entities with current evidence in live, unarchived notes, a page at a time. Merged
     /// entities count toward the one they were merged into; hidden ones only list when asked.
     func entities(
         kind: GraphNode.Kind? = nil,
         matching query: String = "",
         in notes: Set<UUID>? = nil,
         hidden: Bool = false,
+        sort: EntitySort = .mentions,
+        offset: Int = 0,
         limit: Int = 500
     ) throws -> [EntitySummary] {
+        try readyDatabase().read { db in
+            let filter = Self.entityFilter(kind: kind, query: query, notes: notes, hidden: hidden)
+            let rows = try Row.fetchAll(db, sql: filter.sql + """
+            SELECT m.canonID AS id, cg.kind, cg.label, co.name AS customName,
+                coalesce(co.hidden, 0) AS hidden, count(DISTINCT m.noteID) AS notes,
+                max(m.updatedAt) AS latest, lower(coalesce(co.name, cg.label)) AS sortName,
+                CASE cg.kind WHEN 'person' THEN 0 WHEN 'organization' THEN 1 WHEN 'tool' THEN 2
+                    ELSE 3 END AS kindOrder
+            FROM matching m JOIN graph_nodes cg ON cg.id = m.canonID
+            LEFT JOIN entity_overrides co ON co.entityID = m.canonID
+            GROUP BY m.canonID ORDER BY \(sort.orderBy) LIMIT ? OFFSET ?
+            """, arguments: filter.arguments + [max(1, limit), max(0, offset)])
+            let ids = rows.map { $0["id"] as String }
+            // Names come from quotes for this page only; reading them in the grouped query
+            // would read quotes for every entity before sorting.
+            let quotes = try Self.entityQuotes(ids, in: db)
+            let aliases = try Self.entityAliases(ids, in: db)
+            return rows.compactMap { row in
+                guard let kind = GraphNode.Kind(rawValue: row["kind"]) else { return nil }
+                let id: String = row["id"]
+                let custom: String? = row["customName"]
+                return EntitySummary(
+                    id: id, kind: kind,
+                    name: custom ?? Self.entityName(row["label"], in: quotes[id] ?? []),
+                    noteCount: row["notes"], aliases: aliases[id] ?? [],
+                    hidden: row["hidden"], renamed: custom != nil
+                )
+            }
+        }
+    }
+
+    /// How many entities the same filters list.
+    func entityCount(
+        kind: GraphNode.Kind? = nil,
+        matching query: String = "",
+        hidden: Bool = false
+    ) throws -> Int {
+        try readyDatabase().read { db in
+            let filter = Self.entityFilter(kind: kind, query: query, notes: nil, hidden: hidden)
+            return try Int.fetchOne(
+                db, sql: filter.sql + "SELECT count(DISTINCT canonID) FROM matching",
+                arguments: filter.arguments
+            ) ?? 0
+        }
+    }
+
+    /// A `matching` table of entity evidence in live notes, with merges folded in.
+    private static func entityFilter(
+        kind: GraphNode.Kind?,
+        query: String,
+        notes: Set<UUID>?,
+        hidden: Bool
+    ) -> (sql: String, arguments: StatementArguments) {
         let search = GraphNode.normalize(query)
-        let scope = notes.map(Self.noteScope)
-        return try readyDatabase().read { db in
-            let rows = try Row.fetchAll(db, sql: """
-            WITH canon AS (
-                SELECT g.id AS nodeID, coalesce(o.mergedInto, g.id) AS canonID
-                FROM graph_nodes g LEFT JOIN entity_overrides o ON o.entityID = g.id
-                WHERE g.kind != 'document'
-            )
-            SELECT c.canonID AS id, cg.kind, cg.label, co.name AS customName,
-                coalesce(co.hidden, 0) AS hidden, count(DISTINCT v.noteID) AS notes,
-                (SELECT group_concat(quote, char(31)) FROM (
-                    SELECT v2.quote FROM graph_edges e2 JOIN graph_evidence v2 ON v2.edgeID = e2.id
-                    WHERE e2.source = cg.id OR e2.target = cg.id LIMIT 8)) AS quotes
-            FROM canon c JOIN graph_nodes cg ON cg.id = c.canonID
+        let scope = notes.map(noteScope)
+        return ("""
+        WITH canon AS (
+            SELECT g.id AS nodeID, coalesce(o.mergedInto, g.id) AS canonID
+            FROM graph_nodes g LEFT JOIN entity_overrides o ON o.entityID = g.id
+            WHERE g.kind != 'document'
+        ), matching AS (
+            SELECT c.canonID, v.noteID, n.updatedAt FROM canon c
+            JOIN graph_nodes cg ON cg.id = c.canonID
             LEFT JOIN entity_overrides co ON co.entityID = c.canonID
             JOIN graph_edges e ON e.source = c.nodeID OR e.target = c.nodeID
             JOIN graph_evidence v ON v.edgeID = e.id
@@ -82,32 +194,44 @@ extension DocumentStore {
                 AND (? = '' OR cg.label LIKE '%' || ? || '%' OR co.name LIKE '%' || ? || '%')
                 AND (? IS NULL OR v.noteID IN (SELECT value FROM json_each(?)))
                 AND coalesce(co.hidden, 0) = ?
-            GROUP BY c.canonID ORDER BY notes DESC, cg.label LIMIT ?
-            """, arguments: [kind?.rawValue, kind?.rawValue, search, search, search, scope, scope,
-                             hidden, max(1, limit)])
-            let aliasRows = try Row.fetchAll(db, sql: """
-            SELECT o.entityID, o.mergedInto, g.label FROM entity_overrides o
-            JOIN graph_nodes g ON g.id = o.entityID WHERE o.mergedInto IS NOT NULL
-            """)
-            var aliases: [String: [(id: String, name: String)]] = [:]
-            for row in aliasRows {
-                aliases[row["mergedInto"], default: []]
-                    .append((row["entityID"], Self.entityName(row["label"], in: [])))
-            }
-            return rows.compactMap { row in
-                guard let kind = GraphNode.Kind(rawValue: row["kind"]) else { return nil }
-                let label: String = row["label"]
-                let custom: String? = row["customName"]
-                let quotes = (row["quotes"] as String?)?.components(separatedBy: "\u{1F}") ?? []
-                let id: String = row["id"]
-                return EntitySummary(
-                    id: id, kind: kind,
-                    name: custom ?? Self.entityName(label, in: quotes),
-                    noteCount: row["notes"], aliases: aliases[id] ?? [],
-                    hidden: row["hidden"], renamed: custom != nil
-                )
-            }
+        )
+
+        """, [kind?.rawValue, kind?.rawValue, search, search, search, scope, scope, hidden])
+    }
+
+    private static func entityQuotes(
+        _ ids: [String],
+        in db: Database
+    ) throws -> [String: [String]] {
+        var quotes: [String: [String]] = [:]
+        for id in ids {
+            quotes[id] = try String.fetchAll(db, sql: """
+            SELECT v.quote FROM graph_edges e JOIN graph_evidence v ON v.edgeID = e.id
+            WHERE e.source = ?1 OR e.target = ?1 LIMIT 8
+            """, arguments: [id])
         }
+        return quotes
+    }
+
+    private static func entityAliases(
+        _ ids: [String],
+        in db: Database
+    ) throws -> [String: [(id: String, name: String)]] {
+        guard !ids.isEmpty else { return [:] }
+        let scope = String(
+            decoding: (try? JSONEncoder().encode(ids)) ?? Data("[]".utf8),
+            as: UTF8.self
+        )
+        var aliases: [String: [(id: String, name: String)]] = [:]
+        for row in try Row.fetchAll(db, sql: """
+        SELECT o.entityID, o.mergedInto, g.label FROM entity_overrides o
+        JOIN graph_nodes g ON g.id = o.entityID
+        WHERE o.mergedInto IN (SELECT value FROM json_each(?))
+        """, arguments: [scope]) {
+            aliases[row["mergedInto"], default: []]
+                .append((row["entityID"], entityName(row["label"], in: [])))
+        }
+        return aliases
     }
 
     /// Every current passage that mentions the entity or one merged into it, newest notes
@@ -185,17 +309,145 @@ extension DocumentStore {
             try db.execute(sql: """
             INSERT INTO entity_overrides(entityID, mergedInto, updatedAt) VALUES (?, ?, ?)
             ON CONFLICT(entityID) DO UPDATE SET mergedInto = excluded.mergedInto,
-                updatedAt = excluded.updatedAt
+                automatic = 0, keepSeparate = 0, updatedAt = excluded.updatedAt
             """, arguments: [id, canonical, now])
         }
     }
 
+    /// Splits an entity back out; automatic merging leaves it apart from then on.
     func unmergeEntity(_ id: String) throws {
         try updateEntityOverride(id) { db in
-            try db.execute(
-                sql: "UPDATE entity_overrides SET mergedInto = NULL WHERE entityID = ?",
-                arguments: [id]
-            )
+            try db.execute(sql: """
+            UPDATE entity_overrides SET mergedInto = NULL, automatic = 0, keepSeparate = 1
+            WHERE entityID = ?
+            """, arguments: [id])
+        }
+    }
+
+    // MARK: Resolution
+
+    /// Every entity node with live evidence, for finding duplicates.
+    func entityNodes() throws -> [EntityNode] {
+        try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT g.id, g.kind, g.label, count(DISTINCT v.noteID) AS notes, o.mergedInto,
+                coalesce(o.automatic, 0) AS automatic, coalesce(o.keepSeparate, 0) AS keepSeparate,
+                coalesce(o.hidden, 0) AS hidden
+            FROM graph_nodes g LEFT JOIN entity_overrides o ON o.entityID = g.id
+            JOIN graph_edges e ON e.source = g.id OR e.target = g.id
+            JOIN graph_evidence v ON v.edgeID = e.id
+            JOIN notes n ON n.id = v.noteID AND n.revision = v.revision
+            WHERE g.kind != 'document' AND n.deletedAt IS NULL AND n.archivedAt IS NULL
+            GROUP BY g.id
+            """).compactMap { row in
+                guard let kind = GraphNode.Kind(rawValue: row["kind"]) else { return nil }
+                return EntityNode(
+                    id: row["id"], kind: kind, label: row["label"], notes: row["notes"],
+                    mergedInto: row["mergedInto"], automatic: row["automatic"],
+                    keepSeparate: row["keepSeparate"], hidden: row["hidden"]
+                )
+            }
+        }
+    }
+
+    /// Merges names that share a match key, marked automatic. Entities you kept apart, or
+    /// merged yourself, are left alone.
+    func autoMergeEntities(_ merges: [(id: String, into: String)]) throws {
+        try readyDatabase().write { db in
+            let now = Date().timeIntervalSince1970
+            for merge in merges where merge.id != merge.into {
+                try db.execute(sql: """
+                UPDATE entity_overrides SET mergedInto = ?, updatedAt = ?
+                WHERE mergedInto = ? AND automatic = 1
+                """, arguments: [merge.into, now, merge.id])
+                try db.execute(sql: """
+                INSERT INTO entity_overrides(entityID, mergedInto, automatic, updatedAt)
+                VALUES (?, ?, 1, ?)
+                ON CONFLICT(entityID) DO UPDATE SET mergedInto = excluded.mergedInto,
+                    automatic = 1, updatedAt = excluded.updatedAt
+                WHERE entity_overrides.keepSeparate = 0
+                    AND (entity_overrides.mergedInto IS NULL OR entity_overrides.automatic = 1)
+                """, arguments: [merge.id, merge.into, now])
+            }
+        }
+    }
+
+    /// Recent passages, for "long form (ABBR)" pairs.
+    func entityEvidenceQuotes(limit: Int = 3000) throws -> [String] {
+        try readyDatabase().read { db in
+            try String.fetchAll(db, sql: """
+            SELECT v.quote FROM graph_evidence v JOIN notes n ON n.id = v.noteID
+            WHERE n.deletedAt IS NULL GROUP BY v.quote ORDER BY max(n.updatedAt) DESC LIMIT ?
+            """, arguments: [limit])
+        }
+    }
+
+    static func pairKey(_ left: String, _ right: String) -> (String, String) {
+        left < right ? (left, right) : (right, left)
+    }
+
+    /// Pairs already proposed, judged or decided, so none is asked about twice.
+    func knownEntityPairs() throws -> Set<String> {
+        try readyDatabase().read { db in
+            try Set(Row.fetchAll(db, sql: "SELECT leftID, rightID FROM entity_merge_suggestions")
+                .map { ($0["leftID"] as String) + "|" + ($0["rightID"] as String) })
+        }
+    }
+
+    /// `state` is pending for you to review, or rejected when a model judged them different.
+    func recordEntityPairs(
+        _ pairs: [(left: String, right: String, reason: String, state: String)]
+    ) throws {
+        try readyDatabase().write { db in
+            for pair in pairs {
+                let (left, right) = Self.pairKey(pair.left, pair.right)
+                try db.execute(sql: """
+                INSERT OR IGNORE INTO entity_merge_suggestions(leftID, rightID, reason, state,
+                    createdAt) VALUES (?, ?, ?, ?, ?)
+                """, arguments: [
+                    left,
+                    right,
+                    pair.reason,
+                    pair.state,
+                    Date().timeIntervalSince1970,
+                ])
+            }
+        }
+    }
+
+    /// Pending pairs whose two sides are still separate, visible entities.
+    func entitySuggestions() throws -> [EntitySuggestion] {
+        let rows: [(String, String, String)] = try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT leftID, rightID, reason FROM entity_merge_suggestions WHERE state = 'pending'
+            ORDER BY createdAt
+            """).map { ($0["leftID"], $0["rightID"], $0["reason"]) }
+        }
+        guard !rows.isEmpty else { return [] }
+        let byID = try Dictionary(
+            entities(limit: 100_000).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        return rows.compactMap { left, right, reason in
+            guard let leftEntity = byID[left], let rightEntity = byID[right] else { return nil }
+            return EntitySuggestion(left: leftEntity, right: rightEntity, reason: reason)
+        }
+    }
+
+    /// Merging folds the less mentioned side into the other; a tie keeps the longer, more
+    /// descriptive name, such as the spelled-out form of an abbreviation.
+    func resolveEntitySuggestion(_ suggestion: EntitySuggestion, merge: Bool) throws {
+        if merge {
+            let leftFirst = (suggestion.left.noteCount, suggestion.left.name.count)
+                >= (suggestion.right.noteCount, suggestion.right.name.count)
+            let (keep, fold) = leftFirst
+                ? (suggestion.left, suggestion.right) : (suggestion.right, suggestion.left)
+            try mergeEntity(fold.id, into: keep.id)
+        }
+        let (left, right) = Self.pairKey(suggestion.left.id, suggestion.right.id)
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE entity_merge_suggestions SET state = ? WHERE leftID = ? AND rightID = ?
+            """, arguments: [merge ? "merged" : "dismissed", left, right])
         }
     }
 

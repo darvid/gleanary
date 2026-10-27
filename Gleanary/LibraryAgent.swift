@@ -80,7 +80,8 @@ struct LibraryAgent {
     Rename a category with propose_category_rename; it keeps its code and filed items.
     People, organizations, tools and concepts: list_entities and get_entity read what has been
     found. When the user asks to find or extract them, use find_entities on the items, category
-    or recent saves they mean; it reads those items on this Mac and reports what it found.
+    or recent saves they mean; it reads those items and reports what it found, including names
+    merged automatically and possible duplicates waiting for review on the Entities page.
     Filing: prefer existing categories. Use propose_category only for a clearly needed new home,
     with an unused code: XY under an existing area, or XY.NN under an existing category.
     Skip changes that would leave an item as it is. If the request is unclear or can't be done
