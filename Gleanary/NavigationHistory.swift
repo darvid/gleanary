@@ -11,6 +11,7 @@ struct NavigationLocation: Equatable {
     var automations = false
     var activity = false
     var tasks = false
+    var entities = false
     var kindFilter = LibraryKindFilter.all
     var presentation = LibraryPresentation.map
     var graphFocus: UUID?
@@ -24,6 +25,9 @@ struct NavigationLocation: Equatable {
         }
         if tasks {
             return "Tasks"
+        }
+        if entities {
+            return "Entities"
         }
         if activity {
             return "Activity"

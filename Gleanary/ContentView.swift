@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var automating = false
     @State private var showingActivity = false
     @State private var showingTasks = false
+    @State private var showingEntities = false
     @State private var taskView = WorkspaceTaskView.inbox
     @State private var showingTemplates = false
     @State private var editingProfile: NoteProfile?
@@ -99,7 +100,9 @@ struct ContentView: View {
             }
             // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
             // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting, !showingActivity, !showingTasks, readerTarget == nil {
+            if showingFiling, !chatting, !showingActivity, !showingTasks, !showingEntities,
+               readerTarget == nil
+            {
                 // One unit, so the edge slides in with the panel instead of appearing first.
                 HStack(spacing: 0) {
                     Divider()
@@ -433,6 +436,12 @@ struct ContentView: View {
     @ViewBuilder private var browsingMain: some View {
         if chatting, let conversation {
             ConversationView(model: conversation, library: library)
+        } else if showingEntities {
+            if library.ready {
+                EntitiesView(store: library.store, open: openSavedItem)
+            } else {
+                ProgressView("Opening entities…")
+            }
         } else if showingTasks {
             if library.ready {
                 WorkspaceTasksView(
@@ -488,7 +497,8 @@ struct ContentView: View {
         if !chatting {
             ToolbarSpacer(.flexible)
         }
-        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
+        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
+           readerTarget == nil,
            scope == .unfiled
         {
             ToolbarItem {
@@ -508,7 +518,8 @@ struct ContentView: View {
                 )
             }
         }
-        if !chatting, !automating, !showingActivity, !showingTasks, readerTarget == nil,
+        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
+           readerTarget == nil,
            presentation.showsPicker(
                in: scope,
                hasOpenedItem: atlasItem != nil,
@@ -780,6 +791,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         scope = .all
         if kindFilter == .sources {
             kindFilter = .notes
@@ -821,6 +833,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         graph.activate(scope: .all, kind: .all)
         graphFocus = id
         atlasItem = nil
@@ -847,6 +860,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         pendingSelection = id
         if scope == .all {
             revealPendingSelection()
@@ -894,6 +908,7 @@ struct ContentView: View {
         NavigationLocation(
             chatting: chatting, scope: scope, atlasFocus: atlas.focusID, atlasItem: atlasItem,
             automations: automating, activity: showingActivity, tasks: showingTasks,
+            entities: showingEntities,
             kindFilter: kindFilter,
             presentation: presentation, graphFocus: graphFocus
         )
@@ -940,6 +955,7 @@ struct ContentView: View {
         automating = target.automations
         showingActivity = target.activity
         showingTasks = target.tasks
+        showingEntities = target.entities
         presentation = target.presentation
         graph.activate(scope: target.scope ?? .all, kind: target.kindFilter)
         graphFocus = target.graphFocus
@@ -1095,6 +1111,10 @@ struct ContentView: View {
                     .labelStyle(LibrarySidebarLabelStyle(color:
                         colorScheme == .dark || showingTasks ? .white : .black))
                     .tag(SidebarItem.tasks)
+                Label("Entities", systemImage: "person.2")
+                    .labelStyle(LibrarySidebarLabelStyle(color:
+                        colorScheme == .dark || showingEntities ? .white : .black))
+                    .tag(SidebarItem.entities)
                 Label("Activity", systemImage: "clock")
                     .labelStyle(LibrarySidebarLabelStyle(color:
                         colorScheme == .dark || showingActivity ? .white : .black))
@@ -1177,7 +1197,7 @@ struct ContentView: View {
 
     private var collapsedLibraryFilter: String? {
         guard !librarySidebarExpanded, !chatting, !automating, !showingActivity,
-              !showingTasks else { return nil }
+              !showingTasks, !showingEntities else { return nil }
         switch sidebarScope {
         case .notes?, .sources?, .unfiled?: return scopeTitle
         default: return nil
@@ -1193,6 +1213,7 @@ struct ContentView: View {
         let selected = item
             .map {
                 !chatting && !automating && !showingActivity && !showingTasks &&
+                    !showingEntities &&
                     visibleSidebarScope == $0
             } ??
             chatting
@@ -1201,17 +1222,19 @@ struct ContentView: View {
 
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding {
-            chatting ? .conversation : showingTasks ? .tasks : showingActivity ? .activity :
+            chatting ? .conversation : showingTasks ? .tasks : showingEntities ? .entities :
+                showingActivity ? .activity :
                 automating ? .automations :
                 visibleSidebarScope.map(SidebarItem.library)
         } set: { item in
             readerTarget = nil
             showingTasks = item == .tasks
+            showingEntities = item == .entities
             switch item {
             case .conversation: chatting = true; automating = false; showingActivity = false
             case .automations: chatting = false; automating = true; showingActivity = false
             case .activity: chatting = false; automating = false; showingActivity = true
-            case .tasks: chatting = false; automating = false; showingActivity = false
+            case .tasks, .entities: chatting = false; automating = false; showingActivity = false
             case let .library(scope):
                 chatting = false
                 automating = false
@@ -1237,6 +1260,7 @@ struct ContentView: View {
         automating = false
         showingActivity = false
         showingTasks = false
+        showingEntities = false
         chatting = true
         return nil
     }
@@ -1654,6 +1678,7 @@ struct ContentView: View {
                 automating = false
                 showingActivity = false
                 showingTasks = false
+                showingEntities = false
                 scope = .captures
             }
             Button("Try Again") {
@@ -1856,5 +1881,6 @@ private enum SidebarItem: Hashable {
     case automations
     case activity
     case tasks
+    case entities
     case library(LibraryScope)
 }

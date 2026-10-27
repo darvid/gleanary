@@ -797,7 +797,13 @@ private struct GraphFixture {
     _ = try await fixture.store.save(note)
     try await fixture.run()
     let edited = try await fixture.store.graphEvidence(nodeID: GraphNode.documentID(id))
-    #expect(edited.allSatisfy { $0.citation == nil && $0.inferred })
+    // Extracted passages no longer cite the capture once the text changed, but who wrote the
+    // source still comes from the capture's own metadata.
+    #expect(edited.filter(\.inferred).allSatisfy { $0.citation == nil })
+    #expect(edited.filter { !$0.inferred }.map(\.edge.predicate) == [.authoredBy])
+    #expect(edited.filter { !$0.inferred }.allSatisfy {
+        $0.citation?.section == "Capture metadata · authors"
+    })
 }
 
 @Test func unavailableModelStillPublishesExplicitLinksIncludingLateTargets() async throws {
