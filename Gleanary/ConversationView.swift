@@ -511,6 +511,7 @@ struct ConversationView: View {
                 ForEach(entry.referenceIDs, id: \.self) { id in
                     reference(id)
                 }
+                acquisitionSuggestions(entry)
                 // Approvals remain reachable while activity is collapsed.
                 ForEach(entry.messages) { message in
                     messageActions(message)
@@ -705,6 +706,78 @@ struct ConversationView: View {
         .accessibilityLabel(
             "You, \(message.createdAt.formatted(date: .omitted, time: .shortened))"
         )
+    }
+
+    /// Links found inside this reply's sources that are worth saving, from Source acquisition.
+    /// Automatic saves already show as reference chips, so they are left out.
+    @ViewBuilder private func acquisitionSuggestions(_ entry: ConversationFeedEntry) -> some View {
+        var seen = Set<String>()
+        // A source's suggestions sit under the latest reply that mentions it.
+        let candidates = entry.referenceIDs
+            .filter { id in
+                model.messages.last { $0.author != "user" && $0.references.contains(id) }?
+                    .taskID == entry.taskID
+            }
+            .flatMap { model.acquisitionSuggestions[$0] ?? [] }
+            .filter { seen.insert($0.identity).inserted }
+            .filter { candidate in
+                guard candidate.state != .suggested else { return true }
+                guard candidate.state == .queued else { return false }
+                let saved = model.capturedLinks[candidate.identity]?.noteID
+                return saved.map { !entry.referenceIDs.contains($0) } ?? true
+            }
+        if !candidates.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Suggested reading").font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
+                ForEach(candidates) { candidate in
+                    suggestionRow(candidate)
+                }
+            }
+            .frame(maxWidth: 560, alignment: .leading)
+        }
+    }
+
+    private func suggestionRow(_ candidate: AcquisitionCandidate) -> some View {
+        let saved = model.capturedLinks[candidate.identity]
+        let saving = model.savingAcquisitions.contains(candidate.id)
+            || (candidate.state == .queued && saved == nil)
+        let path = candidate.url.path(percentEncoded: false)
+        let title = saved?.title ?? (candidate.title.isEmpty || candidate.title.hasPrefix("http")
+            ? candidate.host + (path == "/" ? "" : path) : candidate.title)
+        return HStack(spacing: 10) {
+            Image(systemName: saved == nil ? "link" : "doc.text").foregroundStyle(.secondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(candidate.host)
+                    Text(candidate.provenance.label).foregroundStyle(.tertiary)
+                }
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .help(candidate.context)
+            Spacer(minLength: 8)
+            if let saved {
+                Button("Open") { open(saved.noteID) }.buttonStyle(.link)
+            } else if saving {
+                ProgressView().controlSize(.small).accessibilityLabel("Saving")
+            } else {
+                Button("Save") { Task { await model.saveAcquisition(candidate) } }
+                    .controlSize(.small)
+                Button("Dismiss", systemImage: "xmark") {
+                    Task { await model.dismissAcquisition(candidate) }
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless).foregroundStyle(.secondary)
+                .help("Don't suggest this link again")
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        .contextMenu {
+            Button("Open in Browser") { NSWorkspace.shared.open(candidate.url) }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     /// A pasted link, shown as what the library captured from it once it is saved.

@@ -211,7 +211,7 @@ extension DocumentStore {
     func writerSource(_ id: UUID) throws -> WriterSourceText? {
         guard try document(id: id) != nil else { return nil }
         let source = try researchSource(noteID: id)
-        let text = source.document.blocks.map(\.text).joined(separator: "\n\n")
+        let text = source.document.evidenceBlocks.map(\.text).joined(separator: "\n\n")
         return WriterSourceText(
             id: id, title: source.note.name,
             text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

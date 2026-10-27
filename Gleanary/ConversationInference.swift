@@ -490,7 +490,7 @@ struct AppleConversationInference: ConversationInferring {
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
             .filter { $0.count >= 3 }.map(String.init))
         return sources.enumerated().flatMap { index, source in
-            let items = SummaryEvidence(source.document.blocks.map(\.text)
+            let items = SummaryEvidence(source.document.evidenceBlocks.map(\.text)
                 .joined(separator: "\n\n")).items
             return excerptPositions(items.map(\.text), terms: terms).enumerated()
                 .map { offset, position in

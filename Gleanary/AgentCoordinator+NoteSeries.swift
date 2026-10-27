@@ -1226,7 +1226,7 @@ extension AgentCoordinator {
                 url: downloaded.url
             )
         }
-        let full = document.blocks.map(\.text).joined(separator: "\n\n")
+        let full = document.evidenceBlocks.map(\.text).joined(separator: "\n\n")
         let text = String(full.prefix(NoteSeries.sourceCharacters))
         guard text.count >= 80 else { throw CaptureError.noContent }
         return NoteSeries.Source(

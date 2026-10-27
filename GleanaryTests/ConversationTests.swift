@@ -2665,6 +2665,80 @@ private struct NoTranscriptProvider: YouTubeProviding {
             .history(store.conversationMessages(), before: next).isEmpty)
     }
 
+    @Test func chatCaptureSavesTheCreatorsRecommendationAfterItsReply() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let request = "@librarian save https://www.youtube.com/watch?v=abcdefghijk"
+        let task = try await store.beginConversation(request, owner: .librarian)
+        try await AgentCoordinator(
+            store: store,
+            fetcher: EssayFetcher(),
+            inference: ConversationFixtureInference(),
+            youtube: CreatorVideoFixture(),
+            captureSettings: { CaptureSettings(previews: false, acquisition: .balanced) }
+        ).execute(taskID: task, request: request, selected: [], changed: {})
+        let messages = try await store.conversationMessages()
+        let report = try #require(messages.last { $0.text.hasPrefix("Also saved") })
+        #expect(report.author == "librarian")
+        #expect(report.text == "Also saved **Swarm scaling**, which the creator recommends.")
+        let essay = try #require(await store.documents().first { $0.name == "Swarm scaling" })
+        #expect(report.references == [essay.id])
+        // The capture's own acknowledgement comes first.
+        let acknowledgement = try #require(messages.firstIndex {
+            $0.taskID == task && $0.author != "user"
+        })
+        #expect(acknowledgement < (messages.firstIndex { $0.id == report.id } ?? 0))
+    }
+
+    @Test @MainActor func suggestedReadingSavesOnRequestAndDismissalSticks() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let coordinator = AgentCoordinator(
+            store: store,
+            fetcher: EssayFetcher(),
+            inference: ConversationFixtureInference(),
+            youtube: CreatorVideoFixture(),
+            captureSettings: { CaptureSettings(previews: false, acquisition: .suggest) }
+        )
+        let model = ConversationModel(store: store, coordinator: coordinator)
+        await model.load()
+        model.composer = "@librarian save https://www.youtube.com/watch?v=abcdefghijk"
+        await model.send()
+        for _ in 0 ..< 200 where model.running {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(try await !store.documents().contains { $0.name == "Swarm scaling" })
+        let suggestions = model.acquisitionSuggestions.values.joined()
+        let essay = try #require(suggestions
+            .first { $0.url.absoluteString == CreatorVideoFixture.essay })
+        #expect(essay.state == .suggested)
+        #expect(essay.provenance == .creatorRecommendation)
+        if let path = ProcessInfo.processInfo.environment["GLEANARY_ACQUISITION_SCREENSHOT"] {
+            // Only the response: the full view would start the library's own capture engine.
+            let entry = try #require(ConversationFeedEntry.entries(in: model.messages).last)
+            let conversation = ConversationView(model: model, library: LibraryModel(store: store))
+            let view = NSHostingView(rootView: conversation.response(entry).padding(24)
+                .frame(width: 760, alignment: .leading)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.colorScheme, .dark))
+            view.appearance = NSAppearance(named: .darkAqua)
+            view.frame = NSRect(x: 0, y: 0, width: 760, height: 520)
+            view.layoutSubtreeIfNeeded()
+            let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try bitmap.representation(using: .png, properties: [:])?
+                .write(to: URL(fileURLWithPath: path))
+        }
+        await model.saveAcquisition(essay)
+        let saved = try #require(await store.documents().first { $0.name == "Swarm scaling" })
+        #expect(model.capturedLinks[essay.identity]?.noteID == saved.id)
+        let others = model.acquisitionSuggestions.values.joined().filter { $0.state == .suggested }
+        for other in others {
+            await model.dismissAcquisition(other)
+        }
+        #expect(!model.acquisitionSuggestions.values.joined().contains { $0.state == .suggested })
+    }
+
     @Test func clearingConversationPreservesSourcesArtifactsFilingAndAppliedLinks() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }

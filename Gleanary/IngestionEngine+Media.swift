@@ -54,7 +54,7 @@ extension IngestionEngine {
             guard job.request.summarizeLink == false else { throw error }
             // A user-requested chat capture can retain a known video identity without inventing
             // content.
-            return try await retainSnapshot(CapturedDocument(
+            return try await retainSnapshot(withCreatorText(target, CapturedDocument(
                 title: "YouTube · \(target.id)", identifier: target.id, sourceURL: target.url,
                 coverage: .partial,
                 warnings: [
@@ -66,7 +66,7 @@ extension IngestionEngine {
                     text: "Source: \(target.url.absoluteString). Transcript unavailable.",
                     method: "metadata-only"
                 )]
-            ), originals: [])
+            )), originals: [])
         }
         let raw = try await artifacts.retain(
             JSONEncoder().encode(transcript),
@@ -74,7 +74,22 @@ extension IngestionEngine {
             name: "Fetched transcript.json",
             sourceURL: target.url
         )
-        return try await retainSnapshot(transcript.document(for: target), originals: [raw])
+        return try await retainSnapshot(
+            withCreatorText(target, transcript.document(for: target)),
+            originals: [raw]
+        )
+    }
+
+    /// Adds the creator's description and pinned comment after the transcript, when YouTube
+    /// provides them.
+    func withCreatorText(
+        _ target: MediaTarget,
+        _ document: CapturedDocument
+    ) async -> CapturedDocument {
+        guard let creator = await youtube.creatorText(for: target) else { return document }
+        var document = document
+        document.blocks += creator.blocks
+        return document
     }
 
     func transcribeAudio(
@@ -122,7 +137,7 @@ extension IngestionEngine {
             sourceURL: target.url
         )
         let retained = try await retainSnapshot(
-            transcript.document(for: target),
+            withCreatorText(target, transcript.document(for: target)),
             originals: acquired + [raw]
         )
         try await store.checkpoint(job, acquired: retained, progress: "Transcript retained locally")

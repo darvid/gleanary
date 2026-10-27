@@ -35,6 +35,9 @@ struct CaptureRequest: Codable, Sendable {
     var replacingNoteID: UUID? = nil
     /// Explicit capture requests from notes; retained across retries and shared jobs.
     var referencingNoteIDs: [UUID]? = nil
+    /// Hops from something you saved yourself, for links Gleanary followed on its own; nil
+    /// for your own captures.
+    var acquisitionHop: Int? = nil
 
     static func webLink(_ url: URL, referencing noteID: UUID? = nil) throws -> CaptureRequest {
         let media = try MediaTarget.parse(url)

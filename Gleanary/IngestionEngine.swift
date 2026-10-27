@@ -106,7 +106,13 @@ actor IngestionEngine {
         ))
     }
 
-    func run(changed: @escaping @Sendable () async -> Void = {}) async throws {
+    /// `deferAcquisition` leaves links chosen for automatic saving approved but unqueued, so
+    /// a caller waiting on this capture can save them after replying; see
+    /// `queueApprovedAcquisitions`.
+    func run(
+        changed: @escaping @Sendable () async -> Void = {},
+        deferAcquisition: Bool = false
+    ) async throws {
         guard !running else { return }
         running = true
         defer { running = false; active = nil }
@@ -115,9 +121,12 @@ actor IngestionEngine {
             active = (job.id, task)
             await changed()
             do {
-                _ = try await withTaskCancellationHandler { try await task.value } onCancel: {
+                let noteID = try await withTaskCancellationHandler {
+                    try await task.value
+                } onCancel: {
                     task.cancel()
                 }
+                await followLinks(from: job, noteID: noteID, deferred: deferAcquisition)
             } catch is CancellationError {
                 try await store.cancelCapture(job.id, token: job.token)
             } catch let error as MediaError {

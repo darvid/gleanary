@@ -444,6 +444,7 @@ enum DatabaseSchema {
             """)
         }
         migrator.registerMigration("typed-notes-and-tasks-v1", migrate: NoteWorkspaceSchema.create)
+        migrator.registerMigration("source-acquisition-v1", migrate: AcquisitionSchema.create)
         try migrator.migrate(database)
     }
 

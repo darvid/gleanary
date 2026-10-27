@@ -1,5 +1,7 @@
 import Foundation
 import SwiftSoup
+import YouTubeChannel
+import YouTubeComments
 @preconcurrency import YouTubeKit
 import YouTubeTranscript
 
@@ -18,9 +20,43 @@ struct ResolvedAudio: Sendable {
 protocol YouTubeProviding: Sendable {
     func transcript(for target: MediaTarget) async throws -> VideoTranscript
     func audio(for target: MediaTarget) async throws -> ResolvedAudio
+    /// The description and the creator's own pinned comment. Optional: nil never fails a
+    /// capture.
+    func creatorText(for target: MediaTarget) async -> CreatorText?
+}
+
+extension YouTubeProviding {
+    func creatorText(for _: MediaTarget) async -> CreatorText? {
+        nil
+    }
 }
 
 struct NativeYouTubeProvider: YouTubeProviding {
+    func creatorText(for target: MediaTarget) async -> CreatorText? {
+        // Short timeouts and no retries: this is extra context, never worth stalling a capture.
+        let channel = YouTubeChannel.Configuration(
+            requestTimeout: 10, resourceTimeout: 15, maxRetries: 0
+        )
+        async let fetchedDetails = try? YouTubeChannel.details(
+            for: target.id, configuration: channel
+        )
+        async let fetchedComments = try? YouTubeComments.fetch(
+            target.id, sortBy: .top, includeReplies: false, limit: 5,
+            configuration: .init(requestTimeout: 10, resourceTimeout: 15, maxRetries: 0)
+        )
+        guard let details = await fetchedDetails else { return nil }
+        // Only a pinned comment the channel itself wrote counts as the creator's text.
+        let pinned = await fetchedComments?.first {
+            $0.isPinned && $0.authorChannelId == details.channelId
+        }
+        guard !details.description.isEmpty || pinned != nil else { return nil }
+        return CreatorText(
+            description: details.description,
+            pinnedComment: pinned?.text,
+            author: details.author
+        )
+    }
+
     func transcript(for target: MediaTarget) async throws -> VideoTranscript {
         do {
             let result: FetchedTranscript
