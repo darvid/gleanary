@@ -4,13 +4,15 @@ import Foundation
 struct ConversationFeedEntry: Identifiable {
     let id: UUID
     var messages: [ConversationMessage]
+    /// Set on a response whose reply is still being drafted and has no messages yet.
+    var draftingTaskID: UUID?
 
     var userMessage: ConversationMessage? {
         messages.first.flatMap { $0.author == "user" ? $0 : nil }
     }
 
     var taskID: UUID? {
-        messages.first?.taskID
+        messages.first?.taskID ?? draftingTaskID
     }
 
     var referenceIDs: [UUID] {
@@ -43,16 +45,28 @@ struct ConversationFeedEntry: Identifiable {
         return specialistMessages.filter { !visible.contains($0.id) }
     }
 
-    static func entries(in messages: [ConversationMessage]) -> [Self] {
+    /// `drafting` lists tasks whose reply is being generated; each gets a response place even
+    /// before any of its messages are saved.
+    static func entries(in messages: [ConversationMessage], drafting: Set<UUID> = []) -> [Self] {
         var entries: [Self] = []
+        var responseTasks = Set<UUID>()
         for message in messages {
             if message.author != "user", let taskID = message.taskID,
                let last = entries.last, last.userMessage == nil, last.taskID == taskID
             {
                 entries[entries.count - 1].messages.append(message)
             } else {
-                entries.append(Self(id: message.id, messages: [message]))
+                // A response takes its task's identity, so a drafted reply keeps one view as
+                // its messages arrive.
+                let taskID = message.author == "user" ? nil : message.taskID
+                let id = taskID.flatMap { responseTasks.insert($0).inserted ? $0 : nil }
+                entries.append(Self(id: id ?? message.id, messages: [message]))
             }
+        }
+        for task in drafting.subtracting(responseTasks) {
+            guard let request = entries.lastIndex(where: { $0.userMessage?.taskID == task })
+            else { continue }
+            entries.insert(Self(id: task, messages: [], draftingTaskID: task), at: request + 1)
         }
         return entries
     }

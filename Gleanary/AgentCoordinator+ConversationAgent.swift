@@ -8,7 +8,8 @@ extension AgentCoordinator {
         request: String,
         selected: [UUID],
         model: any AgentResponding,
-        changed: @escaping @Sendable () async -> Void
+        changed: @escaping @Sendable () async -> Void,
+        streamed: @escaping @Sendable (String) async -> Void = { _ in }
     ) async throws {
         guard selected.count <= 4, Set(selected).count == selected.count else {
             throw ConversationError.invalidPlan
@@ -83,7 +84,7 @@ extension AgentCoordinator {
                 onlyWhileRunning: true
             )
             await changed()
-        }
+        } text: { await streamed($0) }
         try Task.checkCancellation()
         try await store.saveAgentChanges(outcome.changes, taskID: taskID)
         try await store.postConversation(

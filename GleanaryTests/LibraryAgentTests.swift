@@ -247,6 +247,14 @@ private func turn(_ calls: AgentCall...) -> AgentTurn {
         #expect(replayed["id"] == nil)
         #expect(replayed["call_id"] as? String == "call_1")
 
+        var streaming = ChatGPTAgentDecoder()
+        for delta in ["Hel", "lo"] {
+            _ = try streaming
+                .consume(#"data: {"type":"response.output_text.delta","delta":"\#(delta)"}"#)
+            #expect(try streaming.consume("") == nil)
+        }
+        #expect(streaming.streamedText == "Hello")
+
         var failing = ChatGPTAgentDecoder()
         _ = try failing
             .consume(

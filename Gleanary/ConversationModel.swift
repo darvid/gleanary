@@ -19,6 +19,8 @@ final class ConversationModel {
     var selectedSources: [UUID] = []
     var titles: [UUID: String] = [:]
     var referenceDetails: [UUID: ConversationReference] = [:]
+    /// Reply text a provider is still generating, by task. Display only; never persisted.
+    private(set) var replyDrafts: [UUID: ReplyDraft] = [:]
     var composer = ""
     private(set) var composerFocusRequest = UUID()
     var error: String?
@@ -55,6 +57,16 @@ final class ConversationModel {
 
     func isWorking(on taskID: UUID) -> Bool {
         running && activeID == taskID
+    }
+
+    /// Empty text withdraws the draft, as when the model turns to tools instead of replying.
+    func streamReply(_ text: String, taskID: UUID) {
+        guard isWorking(on: taskID) else { return }
+        guard !text.isEmpty else {
+            replyDrafts[taskID] = nil
+            return
+        }
+        replyDrafts[taskID, default: ReplyDraft(after: messages.last?.sequence ?? 0)].text = text
     }
 
     private var connectionReady: Bool {
@@ -222,7 +234,8 @@ final class ConversationModel {
                     selected: context,
                     userSelected: userSelected,
                     existingCaptureID: captureID ?? retry?.captureID,
-                    changed: changed
+                    changed: changed,
+                    streamed: { [weak self] text in await self?.streamReply(text, taskID: id) }
                 )
             }
         } catch { self.error = error.localizedDescription }
@@ -246,6 +259,7 @@ final class ConversationModel {
             worker = nil
             activeID = nil
             running = false
+            replyDrafts[id] = nil
         }
     }
 
@@ -538,4 +552,10 @@ final class ConversationModel {
         catch { self.error = error.localizedDescription }
         await refresh()
     }
+}
+
+/// A reply still being generated. Messages after `after` belong to the finished turn.
+struct ReplyDraft: Equatable {
+    let after: Int64
+    var text = ""
 }
