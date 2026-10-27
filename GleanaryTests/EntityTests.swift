@@ -201,6 +201,11 @@ private func call(_ name: String, _ arguments: [String: Any]) -> AgentCall {
             in: note,
             store: store
         )
+        try await store.saveCategory(code: "31", name: "Agent research")
+        let home = try #require(await store.categories().first { $0.code == "31" })
+        try await store.fileNote(note.id, categoryID: home.id)
+        let labs = try #require(await store.entities(kind: .organization).first)
+        #expect(try await store.entityMentions(labs.id).first?.filing?.code == "31")
         for dark in [false, true] {
             let view = NSHostingView(rootView: EntitiesView(store: store, open: { _ in })
                 .background(Color(nsColor: .windowBackgroundColor))

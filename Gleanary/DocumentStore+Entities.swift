@@ -29,6 +29,8 @@ struct EntityMention: Identifiable, Sendable, Equatable {
     /// The other end of a relationship that isn't between the note and the entity.
     let other: String?
     let citation: SourceCitation?
+    /// The note's primary home, shown in its category color.
+    var filing: DecimalCategory?
 }
 
 /// How the entity list is ordered.
@@ -244,9 +246,11 @@ extension DocumentStore {
             )
             SELECT v.id, v.noteID, n.name, v.quote, v.citation, e.predicate,
                 CASE WHEN e.source IN (SELECT id FROM ids) THEN t.label ELSE s.label END AS otherLabel,
-                CASE WHEN e.source IN (SELECT id FROM ids) THEN t.kind ELSE s.kind END AS otherKind
+                CASE WHEN e.source IN (SELECT id FROM ids) THEN t.kind ELSE s.kind END AS otherKind,
+                \(Self.primaryFilingColumns)
             FROM graph_edges e JOIN graph_evidence v ON v.edgeID = e.id
             JOIN notes n ON n.id = v.noteID AND n.revision = v.revision
+            \(Self.primaryFilingJoin)
             JOIN graph_nodes s ON s.id = e.source JOIN graph_nodes t ON t.id = e.target
             WHERE (e.source IN (SELECT id FROM ids) OR e.target IN (SELECT id FROM ids))
                 AND n.deletedAt IS NULL AND n.archivedAt IS NULL
@@ -260,7 +264,8 @@ extension DocumentStore {
                     quote: row["quote"], predicate: predicate,
                     other: otherKind == "document" ? nil : row["otherLabel"],
                     citation: data
-                        .flatMap { try? JSONDecoder().decode(SourceCitation.self, from: $0) }
+                        .flatMap { try? JSONDecoder().decode(SourceCitation.self, from: $0) },
+                    filing: Self.primaryFiling(row)
                 )
             }
         }

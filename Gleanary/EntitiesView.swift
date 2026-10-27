@@ -275,13 +275,18 @@ struct EntitiesView: View {
                     }
                     ForEach(Self.byNote(model.mentions), id: \.noteID) { group in
                         VStack(alignment: .leading, spacing: 8) {
-                            Button {
-                                open(group.noteID)
-                            } label: {
-                                Label(group.noteName, systemImage: "doc.text")
-                                    .font(.headline)
+                            HStack(spacing: 8) {
+                                Button {
+                                    open(group.noteID)
+                                } label: {
+                                    Label(group.noteName, systemImage: "doc.text")
+                                        .font(.headline)
+                                }
+                                .buttonStyle(.link)
+                                if let filing = group.mentions.first?.filing {
+                                    FilingTag(category: filing)
+                                }
                             }
-                            .buttonStyle(.link)
                             ForEach(group.mentions) { mention in
                                 VStack(alignment: .leading, spacing: 3) {
                                     if let relation = Self.relation(mention) {

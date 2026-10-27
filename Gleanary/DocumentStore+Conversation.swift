@@ -94,17 +94,17 @@ extension DocumentStore {
     }
 
     /// Joins a note `n` to its primary home, or its first by code when none is marked primary.
-    private static let primaryFilingJoin = """
+    static let primaryFilingJoin = """
     LEFT JOIN decimal_categories pc ON pc.id = (
         SELECT nc.categoryID FROM note_categories nc
         JOIN decimal_categories dc ON dc.id = nc.categoryID
         WHERE nc.noteID = n.id ORDER BY nc.isPrimary DESC, dc.code LIMIT 1
     )
     """
-    private static let primaryFilingColumns =
+    static let primaryFilingColumns =
         "pc.id AS filingID, pc.code AS filingCode, pc.name AS filingName"
 
-    private static func primaryFiling(_ row: Row) throws -> DecimalCategory? {
+    static func primaryFiling(_ row: Row) throws -> DecimalCategory? {
         guard let id: String = row["filingID"] else { return nil }
         return try DecimalCategory(id: uuid(id), code: row["filingCode"], name: row["filingName"])
     }
