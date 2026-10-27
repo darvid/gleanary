@@ -54,6 +54,14 @@ struct EssayFetcher: SourceFetching {
     }
 }
 
+/// A constant closeness, so tests do not depend on the embedding model.
+struct FixedRelevance: LinkRelevanceScoring {
+    let value: Double
+    func relevance(of _: FoundLink, excluding _: UUID) async -> Double? {
+        value
+    }
+}
+
 @Suite(.serialized) struct SourceAcquisitionTests {
     private func link(
         _ url: String, context: String, creator: Bool = true
@@ -122,6 +130,71 @@ struct EssayFetcher: SourceFetching {
             savedToday: 0, saved: []
         )
         #expect(lazy.allSatisfy { $0.state == .noticed })
+    }
+
+    @Test func eagerWeighsRelevanceAndDecaysWithHops() throws {
+        let posted = try link("https://notes.example.net/agents", context: "Slides for the talk")
+        let cited = try link(
+            "https://papers.example.net/swarms", context: "The paper behind this", creator: false
+        )
+        let policy = SourceAcquisitionLevel.eager.policy
+        let close = AcquisitionPlanner.plan(
+            [posted, cited], sourceURL: nil, policy: policy,
+            relevance: [posted.identity: 0.8, cited.identity: 0.8], savedToday: 0, saved: []
+        )
+        #expect(close.map(\.state) == [.approved, .approved])
+        #expect(close.map(\.score.value) == [0.6, 0.6])
+        let far = AcquisitionPlanner.plan(
+            [posted, cited], sourceURL: nil, policy: policy,
+            relevance: [posted.identity: 0.1, cited.identity: 0.1], savedToday: 0, saved: []
+        )
+        #expect(far.map(\.state) == [.noticed, .noticed])
+        // Balanced ignores relevance and only saves creator recommendations.
+        let balanced = AcquisitionPlanner.plan(
+            [posted, cited], sourceURL: nil, policy: SourceAcquisitionLevel.balanced.policy,
+            relevance: [posted.identity: 0.8, cited.identity: 0.8], savedToday: 0, saved: []
+        )
+        #expect(!balanced.contains { $0.state == .approved })
+        let recommended = try link("https://essays.example.org/x", context: "I recommend this")
+        let secondHop = AcquisitionPlanner.plan(
+            [recommended], sourceURL: nil, policy: policy, hop: 2, savedToday: 0, saved: []
+        )
+        #expect(secondHop.first?.score.value == 0.6)
+        #expect(secondHop.first?.state == .approved)
+        let thirdHop = AcquisitionPlanner.plan(
+            [recommended], sourceURL: nil, policy: policy, hop: 3, savedToday: 0, saved: []
+        )
+        #expect(thirdHop.first?.state == .suggested)
+    }
+
+    @Test func eagerFollowsASecondHopFromAutoSavedSources() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(
+            store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .eager) },
+            relevance: FixedRelevance(value: 0.5)
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        let companion = try await store.readyDatabase().read { db in
+            try Row.fetchOne(db, sql: """
+            SELECT state, hop, score FROM acquisition_candidates WHERE url LIKE '%companion'
+            """).map { (
+                state: $0["state"] as String,
+                hop: $0["hop"] as Int,
+                score: $0["score"] as Double
+            ) }
+        }
+        // The essay's own recommendation is found two hops out. Being on the essay's own site
+        // and a hop further, it scores 0.7 × 0.5 × 0.9 × 0.6 and is only noted.
+        #expect(companion?.hop == 2)
+        #expect(companion?.state == "noticed")
+        #expect(companion?.score == 0.19)
     }
 
     @Test func creatorTextIsASeparateSectionThatSummariesSkip() async throws {

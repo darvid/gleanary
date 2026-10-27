@@ -26,9 +26,12 @@ extension AgentCoordinator {
         let names = saved.map { "**\($0.title.replacingOccurrences(of: "*", with: ""))**" }
             .formatted(.list(type: .and))
         let missed = queued.count - saved.count
+        // Eager saves also take links the creator posted or the source cites.
+        let why = queued.allSatisfy { $0.provenance == .creatorRecommendation }
+            ? ", which the creator recommends." : " from links in this source."
         try await store.postConversation(
             author: .librarian,
-            text: "Also saved \(names), which the creator recommends."
+            text: "Also saved \(names)\(why)"
                 +
                 (missed == 0 ? "" :
                     " \(missed) more couldn't be saved; the capture queue has details."),

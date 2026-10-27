@@ -3,7 +3,7 @@ import Foundation
 /// How eagerly Gleanary follows links inside what you save. Each level sets the score a link
 /// needs before Gleanary acts on it and how much it may do; see `AcquisitionPolicy`.
 enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
-    case off, lazy, suggest, balanced
+    case off, lazy, suggest, balanced, eager
 
     static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.rawValue < rhs.rawValue
@@ -15,6 +15,7 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .lazy: "Lazy"
         case .suggest: "Suggest"
         case .balanced: "Balanced"
+        case .eager: "Eager"
         }
     }
 
@@ -24,6 +25,7 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .lazy: "Links inside saved sources are noted. Nothing is fetched."
         case .suggest: "The most promising links are offered as suggestions to save with one click."
         case .balanced: "Reading the creator recommends is saved automatically and linked back. Other promising links are suggested."
+        case .eager: "Links close to what your library covers are saved too, and very strong ones are followed a second hop."
         }
     }
 
@@ -35,6 +37,11 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         case .balanced: AcquisitionPolicy(
                 records: true, suggests: true, maximumHops: 1,
                 autoSaveScore: 0.8, savesPerSource: 3, savesPerDay: 20
+            )
+        case .eager: AcquisitionPolicy(
+                records: true, suggests: true, maximumHops: 2,
+                autoSaveScore: 0.55, savesPerSource: 10, savesPerDay: 60,
+                autoSaves: [.creatorRecommendation, .creatorLink, .citation], usesRelevance: true
             )
         }
     }
@@ -53,6 +60,39 @@ struct AcquisitionPolicy: Sendable, Equatable {
     var autoSaveScore: Double?
     var savesPerSource = 0
     var savesPerDay = 0
+    /// Which kinds of link may be saved without asking.
+    var autoSaves: Set<AcquisitionProvenance> = [.creatorRecommendation]
+    /// Whether closeness to the library raises or lowers scores.
+    var usesRelevance = false
+
+    /// Each hop further from your own saves counts for less.
+    static let hopDecay = 0.6
+
+    /// How closeness to the library scales a score: unrelated links drop, close ones rise.
+    static func relevanceFactor(_ similarity: Double?) -> Double {
+        guard let similarity else { return 1 }
+        return min(1.2, max(0.6, 0.4 + similarity))
+    }
+}
+
+/// How close a found link is to what the library already holds, from 0 to 1, or nil when
+/// that can't be judged yet.
+protocol LinkRelevanceScoring: Sendable {
+    func relevance(of link: FoundLink, excluding noteID: UUID) async -> Double?
+}
+
+/// Compares a link's title and surrounding line with the library's indexed passages.
+struct LibraryRelevance: LinkRelevanceScoring {
+    let search: SearchEngine
+
+    func relevance(of link: FoundLink, excluding noteID: UUID) async -> Double? {
+        let query = [link.title.hasPrefix("http") ? "" : link.title, link.context]
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        guard let response = try? await search.search(query, limit: 10) else { return nil }
+        let scores = response.matches.filter { $0.passage.documentID != noteID }
+            .compactMap(\.semanticScore)
+        return scores.max().map { Double(max(0, $0)) }
+    }
 }
 
 /// Where a link was found, which says most about whether it is worth reading.
@@ -362,10 +402,22 @@ enum AcquisitionPlanner {
         _ links: [FoundLink],
         sourceURL: URL?,
         policy: AcquisitionPolicy,
+        hop: Int = 1,
+        relevance: [String: Double] = [:],
         savedToday: Int,
         saved: Set<String>
     ) -> [Plan] {
-        let scored = links.map { ($0, AcquisitionScorer.score($0, sourceURL: sourceURL)) }
+        let decay = pow(AcquisitionPolicy.hopDecay, Double(max(0, hop - 1)))
+        let scored = links.map { link in
+            let base = AcquisitionScorer.score(link, sourceURL: sourceURL)
+            let factor = policy.usesRelevance
+                ? AcquisitionPolicy.relevanceFactor(relevance[link.identity]) : 1
+            let value = min(1, base.value * factor * decay)
+            return (link, AcquisitionScorer.Score(
+                value: (value * 100).rounded() / 100, provenance: base.provenance,
+                filtered: base.filtered
+            ))
+        }
         let ranked = scored.enumerated().sorted {
             $0.element.1.value != $1.element.1.value
                 ? $0.element.1.value > $1.element.1.value : $0.offset < $1.offset
@@ -381,7 +433,7 @@ enum AcquisitionPlanner {
             } else if saved.contains(link.identity) {
                 (state, reason) = (.noticed, "Already in your library")
             } else if let threshold = policy.autoSaveScore,
-                      score.provenance == .creatorRecommendation, score.value >= threshold,
+                      policy.autoSaves.contains(score.provenance), score.value >= threshold,
                       autoSaves < policy.savesPerSource, savedToday + autoSaves < policy.savesPerDay
             {
                 autoSaves += 1

@@ -16,6 +16,8 @@ actor IngestionEngine {
     let screenshotter: (any PageScreenshotting)?
     /// Read at each capture, so Settings changes apply to the next one.
     let settings: @Sendable () -> CaptureSettings
+    /// How close found links are to the library, for the eager acquisition levels.
+    let relevance: any LinkRelevanceScoring
     private let pdf = PDFExtractor()
     private var running = false
     private var active: (UUID, Task<UUID, any Error>)?
@@ -28,10 +30,12 @@ actor IngestionEngine {
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
         summarizerChosen: Bool = true,
         screenshotter: (any PageScreenshotting)? = nil,
-        settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() }
+        settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
+        relevance: (any LinkRelevanceScoring)? = nil
     ) {
         self.store = store
         self.settings = settings
+        self.relevance = relevance ?? LibraryRelevance(search: SearchEngine(store: store))
         self.summarizerChosen = summarizerChosen
         self.fetcher = fetcher
         self.youtube = youtube

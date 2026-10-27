@@ -16,8 +16,17 @@ extension IngestionEngine {
             let links = document.foundLinks(excluding: job.request.identity)
             guard !links.isEmpty else { return }
             let known = try await store.acquisitionContext(identities: links.map(\.identity))
+            let sourceURL = document.sourceURL ?? job.request.url
+            let closeness = policy.usesRelevance
+                ? await relevance(
+                    of: links,
+                    sourceURL: sourceURL,
+                    noteID: noteID,
+                    saved: known.saved
+                )
+                : [:]
             let plans = AcquisitionPlanner.plan(
-                links, sourceURL: document.sourceURL ?? job.request.url, policy: policy,
+                links, sourceURL: sourceURL, policy: policy, hop: hop + 1, relevance: closeness,
                 savedToday: known.savedToday, saved: known.saved
             )
             try await store.recordAcquisitions(plans, foundIn: noteID, hop: hop + 1)
@@ -25,6 +34,26 @@ extension IngestionEngine {
                 _ = try await queueApprovedAcquisitions(foundIn: noteID)
             }
         } catch {}
+    }
+
+    /// Judges closeness only for the strongest links, since each one is a library search.
+    private func relevance(
+        of links: [FoundLink],
+        sourceURL: URL?,
+        noteID: UUID,
+        saved: Set<String>
+    ) async -> [String: Double] {
+        let strongest = links
+            .filter { !saved.contains($0.identity) }
+            .map { ($0, AcquisitionScorer.score($0, sourceURL: sourceURL)) }
+            .filter { $0.1.filtered == nil }
+            .sorted { $0.1.value > $1.1.value }
+            .prefix(15)
+        var closeness: [String: Double] = [:]
+        for (link, _) in strongest {
+            closeness[link.identity] = await relevance.relevance(of: link, excluding: noteID)
+        }
+        return closeness
     }
 
     /// Queues captures for links chosen for saving. The caller runs the queue.
