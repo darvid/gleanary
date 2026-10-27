@@ -194,7 +194,7 @@ actor AppleLinkSummarizer: LinkSummarizing {
             throw LinkSummaryError.unavailable
         }
         do {
-            let source = document.blocks.map(\.text).joined(separator: "\n\n")
+            let source = document.evidenceBlocks.map(\.text).joined(separator: "\n\n")
             let context = "Title: \(document.title)\nCaptured coverage: \(document.coverage.label)"
             let summary = try await reduce(source, context: context, final: true)
             return Self.withCaptureLimits(summary, coverage: document.coverage)

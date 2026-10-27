@@ -562,7 +562,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
     func summarize(_ document: CapturedDocument) async throws -> String {
         let fence = try await session.authorizationFence()
         let context = "Title: \(document.title)\nCaptured coverage: \(document.coverage.label)"
-        var text = document.blocks.map(\.text).joined(separator: "\n\n")
+        var text = document.evidenceBlocks.map(\.text).joined(separator: "\n\n")
         while text.count > Self.summarySection {
             let sections = AppleLinkSummarizer.chunks(text, limit: Self.summarySection)
             var selected: [String] = []

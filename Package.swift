@@ -30,6 +30,8 @@ let package = Package(
                 .product(name: "ForceSimulation", package: "Grape"),
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
                 .product(name: "YouTubeTranscript", package: "swift-youtube-metadata"),
+                .product(name: "YouTubeChannel", package: "swift-youtube-metadata"),
+                .product(name: "YouTubeComments", package: "swift-youtube-metadata"),
                 .product(name: "YouTubeKit", package: "YouTubeKit"),
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
             ],

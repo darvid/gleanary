@@ -5,6 +5,7 @@ import SwiftUI
 struct CaptureSettings: Sendable, Equatable {
     static let summarizeKey = "captureSummaries"
     static let previewsKey = "capturePreviews"
+    static let acquisitionKey = "sourceAcquisition"
 
     /// Writes a brief summary of each saved link. Off keeps the full text; Generate Summary
     /// still works on demand.
@@ -12,13 +13,18 @@ struct CaptureSettings: Sendable, Equatable {
     /// Fetches page screenshots, share images and video stills for previews. Off makes no
     /// requests for them at all.
     var previews = true
+    /// How eagerly links inside saved sources are followed. Off unless chosen; the app's
+    /// own default, Balanced, comes from `current()`.
+    var acquisition = SourceAcquisitionLevel.off
 
-    /// The person's choices; both default to on.
+    /// The person's choices; summaries and previews default to on, acquisition to Balanced.
     static func current() -> CaptureSettings {
         let defaults = UserDefaults.standard
         return CaptureSettings(
             summarize: defaults.object(forKey: summarizeKey) as? Bool ?? true,
-            previews: defaults.object(forKey: previewsKey) as? Bool ?? true
+            previews: defaults.object(forKey: previewsKey) as? Bool ?? true,
+            acquisition: (defaults.object(forKey: acquisitionKey) as? Int)
+                .flatMap(SourceAcquisitionLevel.init(rawValue:)) ?? .balanced
         )
     }
 }
@@ -26,6 +32,12 @@ struct CaptureSettings: Sendable, Equatable {
 struct CaptureSettingsView: View {
     @AppStorage(CaptureSettings.summarizeKey) private var summarize = true
     @AppStorage(CaptureSettings.previewsKey) private var previews = true
+    @AppStorage(CaptureSettings.acquisitionKey) private var acquisition =
+        SourceAcquisitionLevel.balanced.rawValue
+
+    private var level: SourceAcquisitionLevel {
+        SourceAcquisitionLevel(rawValue: acquisition) ?? .balanced
+    }
 
     var body: some View {
         Form {
@@ -45,6 +57,40 @@ struct CaptureSettingsView: View {
             } footer: {
                 Text("Changes apply to the next capture.")
                     .font(.callout).foregroundStyle(.secondary)
+            }
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Follow links in saved sources")
+                        Spacer()
+                        Text(level.title).foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { Double(acquisition) },
+                            set: { acquisition = Int($0.rounded()) }
+                        ),
+                        in: 0 ... Double(SourceAcquisitionLevel.allCases.count - 1),
+                        step: 1
+                    ) {
+                        Text("Follow links in saved sources")
+                    } minimumValueLabel: {
+                        Image(systemName: "tortoise").accessibilityLabel("Lazy")
+                    } maximumValueLabel: {
+                        Image(systemName: "hare").accessibilityLabel("Eager")
+                    }
+                    .accessibilityValue(level.title)
+                    Text(level.explanation)
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } header: {
+                Text("Source acquisition")
+            } footer: {
+                Text(
+                    "Following links fetches those pages from this Mac. Social profiles, sign-ups and sponsor links are skipped, and automatic saves skip the AI summary."
+                )
+                .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

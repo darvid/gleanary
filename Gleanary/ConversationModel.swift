@@ -21,6 +21,9 @@ final class ConversationModel {
     var referenceDetails: [UUID: ConversationReference] = [:]
     /// What pasted links became, by capture identity.
     var capturedLinks: [String: CapturedLink] = [:]
+    /// Links found inside referenced sources that are suggested or being saved, by source.
+    var acquisitionSuggestions: [UUID: [AcquisitionCandidate]] = [:]
+    private(set) var savingAcquisitions = Set<UUID>()
     /// Reply text a provider is still generating, by task. Display only; never persisted.
     private(set) var replyDrafts: [UUID: ReplyDraft] = [:]
     var composer = ""
@@ -59,6 +62,24 @@ final class ConversationModel {
 
     func isWorking(on taskID: UUID) -> Bool {
         running && activeID == taskID
+    }
+
+    func saveAcquisition(_ candidate: AcquisitionCandidate) async {
+        savingAcquisitions.insert(candidate.id)
+        defer { savingAcquisitions.remove(candidate.id) }
+        let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+        do {
+            try await coordinator.saveAcquisition(candidate.id, changed: changed)
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+        await didMutate?()
+    }
+
+    func dismissAcquisition(_ candidate: AcquisitionCandidate) async {
+        do {
+            try await store.dismissAcquisition(candidate.id)
+        } catch { self.error = error.localizedDescription }
+        await refresh()
     }
 
     /// Empty text withdraws the draft, as when the model turns to tools instead of replying.
@@ -124,8 +145,12 @@ final class ConversationModel {
                 ] } + updatedChanges.values.joined().flatMap { [$0.noteID, $0.targetID] }
                 .compactMap(\.self))
             let updatedReferences = try await store.conversationReferences(referenceIDs)
+            let updatedSuggestions = try await store.acquisitionSuggestions(
+                foundIn: Set(updatedMessages.filter { $0.author != "user" }.flatMap(\.references))
+            )
             let linkIdentities = Set(updatedMessages.filter { $0.author == "user" }
                 .flatMap { PastedLinks.urls(in: $0.text) }.compactMap(PastedLinks.identity))
+                .union(updatedSuggestions.values.joined().map(\.identity))
             let updatedLinks = try await store.capturedLinks(identities: linkIdentities)
             for id in referenceIDs {
                 updatedTitles[id] = updatedReferences[id]?.title ?? "Deleted document"
@@ -141,6 +166,7 @@ final class ConversationModel {
             titles = updatedTitles
             referenceDetails = updatedReferences
             capturedLinks = updatedLinks
+            acquisitionSuggestions = updatedSuggestions
         } catch { self.error = error.localizedDescription }
     }
 
@@ -432,6 +458,7 @@ final class ConversationModel {
             titles = [:]
             referenceDetails = [:]
             capturedLinks = [:]
+            acquisitionSuggestions = [:]
             hasOlderMessages = true
             error = nil
             clearingConversation = false

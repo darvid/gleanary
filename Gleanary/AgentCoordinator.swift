@@ -16,6 +16,7 @@ actor AgentCoordinator {
         fetcher: any SourceFetching = SourceFetcher(),
         inference: any ConversationInferring = AppleConversationInference(),
         screenshotter: (any PageScreenshotting)? = nil,
+        youtube: any YouTubeProviding = NativeYouTubeProvider(),
         captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
         writingStyles: @escaping @Sendable () -> WritingStyleChoice = { WritingStyleChoice() }
     ) {
@@ -24,7 +25,7 @@ actor AgentCoordinator {
         self.inference = inference
         self.writingStyles = writingStyles
         ingestion = IngestionEngine(
-            store: store, fetcher: fetcher, screenshotter: screenshotter,
+            store: store, fetcher: fetcher, youtube: youtube, screenshotter: screenshotter,
             settings: captureSettings
         )
         search = SearchEngine(store: store)
@@ -208,7 +209,8 @@ actor AgentCoordinator {
             captureID: captureID
         )
         await changed()
-        try await ingestion.run(changed: changed)
+        // Recommended sources are saved after this capture's own reply.
+        try await ingestion.run(changed: changed, deferAcquisition: true)
         try Task.checkCancellation()
         guard let job = try await store.captureJob(id: captureID), let noteID = job.noteID,
               job.state == .ready
@@ -279,13 +281,14 @@ actor AgentCoordinator {
             enabled: postsAcknowledgement
         )
         await changed()
-        if source.document.blocks.allSatisfy({ $0.method == "metadata-only" }) {
+        if source.document.evidenceBlocks.allSatisfy({ $0.method == "metadata-only" }) {
             try await store.postConversation(
                 author: .researcher,
                 text: "The source link is saved, but no authorized transcript was available. There is no source text to summarize.",
                 references: [noteID],
                 taskID: taskID
             )
+            try await saveRecommendedSources(taskID: taskID, noteID: noteID, changed: changed)
             return
         }
         try await research(
@@ -300,6 +303,7 @@ actor AgentCoordinator {
             enabled: postsAcknowledgement,
             changed: changed
         )
+        try await saveRecommendedSources(taskID: taskID, noteID: noteID, changed: changed)
     }
 
     private func acknowledgeCapture(
