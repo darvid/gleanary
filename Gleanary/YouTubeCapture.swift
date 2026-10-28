@@ -68,15 +68,16 @@ struct NativeYouTubeProvider: YouTubeProviding {
                 result = try await YouTubeTranscript.fetch(target.id, languages: available)
             }
             try Task.checkCancellation()
-            return VideoTranscript(
+            return try VideoTranscript(
                 videoID: result.videoId,
                 title: result.video?.title ?? "",
                 author: result.video?.author ?? "",
                 language: result.language,
                 generated: result.isGenerated,
                 method: "youtube-captions/536cf88",
-                segments: result.segments.map { TimedText(
-                    text: $0.text,
+                // Caption text arrives HTML-escaped, so "&gt;&gt;" would otherwise be quoted as is.
+                segments: result.segments.map { try TimedText(
+                    text: Entities.unescape($0.text),
                     start: $0.start,
                     duration: $0.duration
                 ) }

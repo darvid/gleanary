@@ -424,6 +424,23 @@ struct MediaCaptureTests {
         #expect(result.map(\.duration) == [1, 2])
     }
 
+    @Test func overlappingCaptionCuesKeepTheirOrder() throws {
+        let transcript = VideoTranscript(
+            videoID: "abcdefghijk",
+            title: "Overlapping",
+            author: "",
+            language: "en",
+            generated: false,
+            method: "fixture",
+            segments: [
+                TimedText(text: "how your product is in terms", start: 333.7, duration: 2),
+                TimedText(text: "of primitives.", start: 329.9, duration: 4),
+            ]
+        )
+        let document = try transcript.document(for: Self.target(Self.video))
+        #expect(document.blocks.map(\.text) == ["how your product is in terms of primitives."])
+    }
+
     @Test func transcriptBoundsAndBrowserNavigationFailClosed() throws {
         let bad = VideoTranscript(
             videoID: "abcdefghijk",
