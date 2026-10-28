@@ -411,10 +411,7 @@ struct AppleConversationInference: ConversationInferring {
                                 "Reading \(sources.count) saved source\(sources.count == 1 ? "" : "s")"
                             )
                         )
-                    if sources.count == 1, question.lowercased().range(
-                        of: #"summari[sz]e|summary"#,
-                        options: .regularExpression
-                    ) != nil {
+                    if Self.asksForSummary(question, sources: sources) {
                         let summary = try await AppleLinkSummarizer().summarize(sources[0].document)
                         continuation.yield(.result(summary))
                     } else {
@@ -483,6 +480,15 @@ struct AppleConversationInference: ConversationInferring {
             }
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+
+    /// A request to summarize one source gets the whole-source summary, not an answer drawn
+    /// from a handful of excerpts.
+    static func asksForSummary(_ question: String, sources: [ResearchSource]) -> Bool {
+        sources.count == 1 && question.lowercased().range(
+            of: #"summari[sz]e|summary"#,
+            options: .regularExpression
+        ) != nil
     }
 
     static func evidence(_ sources: [ResearchSource], question: String = "") -> [ResearchEvidence] {

@@ -130,22 +130,11 @@ struct AppearanceSettingsView: View {
             ForEach(ReadingKind.allCases) { kind in
                 Section {
                     fontControls(kind)
-                    Text("The quick brown fox jumps over the lazy dog.")
-                        .font(appearance[kind].font)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
-                        .accessibilityLabel("\(kind.title) font preview")
                 } header: {
                     Text(kind.title)
                 } footer: {
                     Text(kind.detail)
                 }
-            }
-            Section {
-                Text(
-                    "Applies immediately to document reading and editing. Navigation, controls, and chat keep the system font; code stays monospaced."
-                )
-                .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -153,21 +142,18 @@ struct AppearanceSettingsView: View {
 
     @ViewBuilder private func fontControls(_ kind: ReadingKind) -> some View {
         let choice = appearance[kind]
-        Picker("Font", selection: Binding {
-            appearance[kind].family
-        } set: { family in
-            appearance[kind] = ReadingFont(family: family, size: appearance[kind].size)
-        }) {
-            Text("System").tag("")
-            Divider()
-            if !choice.available {
-                Text("\(choice.family) (unavailable)").tag(choice.family)
-            }
-            ForEach(Self.families, id: \.self) { family in
-                Text(family).tag(family)
-            }
+        LabeledContent("Font") {
+            FontFamilyPicker(
+                family: Binding {
+                    appearance[kind].family
+                } set: { family in
+                    appearance[kind] = ReadingFont(family: family, size: appearance[kind].size)
+                },
+                families: Self.families,
+                available: choice.available,
+                accessibilityLabel: "\(kind.title) font"
+            )
         }
-        .accessibilityLabel("\(kind.title) font")
         Stepper(value: Binding {
             appearance[kind].size
         } set: { size in

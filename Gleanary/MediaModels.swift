@@ -146,9 +146,11 @@ struct VideoTranscript: Codable, Sendable {
         }
         for segment in segments {
             guard segment.start.isFinite, segment.duration.isFinite, segment.start >= 0,
-                  segment.duration >= 0, segment.start >= prior,
+                  segment.duration >= 0,
                   segment.start + segment.duration <= 604_800 else { throw CaptureError.noContent }
-            prior = segment.start
+            // Creator captions can start a cue just before the previous one ends. They stay
+            // in caption order, which is the order of the words.
+            prior = max(prior, segment.start)
             let count = segment.text.split(whereSeparator: \.isWhitespace).count
             if let first = group.first, words + count > 70 || segment.start - first.start >= 35 {
                 if let value = block(group) {
