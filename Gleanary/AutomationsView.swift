@@ -100,10 +100,7 @@ private struct AutomationListRow: View {
     @ViewBuilder private var indicator: some View {
         let waiting = model.pending[kind]?.count ?? 0
         if model.running == kind {
-            Image(systemName: "progress.indicator")
-                .symbolEffect(.variableColor.iterative, options: .repeating)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Running")
+            WorkingProgress().accessibilityLabel("Running")
         } else if model.failed.contains(kind) {
             Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
                 .help("The last run failed")
@@ -279,8 +276,7 @@ private struct AutomationDetail: View {
                     StageProgressText(model.progress ?? "Running…").lineLimit(1)
                         .truncationMode(.middle)
                 } icon: {
-                    Image(systemName: "progress.indicator")
-                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                    ChatWorkingIndicator(color: .secondary)
                 }
                 .foregroundStyle(.secondary)
                 Button("Stop") { model.stop() }.controlSize(.small)

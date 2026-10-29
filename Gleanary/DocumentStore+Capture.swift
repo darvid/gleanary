@@ -175,6 +175,17 @@ extension DocumentStore {
                 sql: "UPDATE ingestion_jobs SET state = 'queued', token = ?, progress = 'Retry queued', error = NULL, recovery = NULL, retryAt = NULL WHERE id = ? AND state IN ('failed','cancelled')",
                 arguments: [UUID().uuidString, id.uuidString]
             )
+            // A save Gleanary made on its own is now one you asked for, so a refusing site
+            // may be opened in the private browser.
+            if let row = try Row.fetchOne(
+                db, sql: "SELECT * FROM ingestion_jobs WHERE id = ?", arguments: [id.uuidString]
+            ), var request = try? Self.captureJob(row).request, request.automatic == true {
+                request.automatic = nil
+                try db.execute(
+                    sql: "UPDATE ingestion_jobs SET request = ? WHERE id = ?",
+                    arguments: [JSONEncoder().encode(request), id.uuidString]
+                )
+            }
         }
     }
 

@@ -78,6 +78,7 @@ final class LibraryModel {
         // When true, summaries wait for `useLinkSummarizer` to pick the provider's engine.
         followsProvider: Bool = false,
         screenshotter: (any PageScreenshotting)? = nil,
+        pageRenderer: (any PageRendering)? = nil,
         captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
         // True only in the app, so tests and previews never run automations on a schedule.
         schedulesAutomations: Bool = false
@@ -92,6 +93,7 @@ final class LibraryModel {
             summarizer: summarizer,
             summarizerChosen: !followsProvider,
             screenshotter: screenshotter,
+            pageRenderer: pageRenderer,
             settings: captureSettings
         )
         self.engine = engine
@@ -702,6 +704,15 @@ final class LibraryModel {
         defer { busy = false }
         do { try await store.retryCapture(id); await refreshCaptures(); startCaptures() }
         catch { self.error = error.localizedDescription }
+    }
+
+    func saveRenderedPage(_ page: RenderedPage, job: CaptureJob) async throws {
+        guard ready, !busy else { throw GleanaryError.operationInProgress }
+        busy = true
+        defer { busy = false }
+        try await ingestion.submitRenderedPage(page, job: job)
+        await refreshCaptures()
+        startCaptures()
     }
 
     func saveBrowserCapture(_ snapshot: SocialSnapshot, job: CaptureJob) async throws {

@@ -73,14 +73,16 @@ struct StageProgressText: View {
 /// app looks alike. A label sits beside the dot in secondary text.
 struct WorkingProgress: View {
     var label: String?
+    var color: Color
 
-    init(_ label: String? = nil) {
+    init(_ label: String? = nil, color: Color = .secondary) {
         self.label = label
+        self.color = color
     }
 
     var body: some View {
         HStack(spacing: 4) {
-            ChatWorkingIndicator(color: .secondary)
+            ChatWorkingIndicator(color: color)
             if let label {
                 Text(label).foregroundStyle(.secondary)
             }

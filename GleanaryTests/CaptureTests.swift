@@ -68,6 +68,20 @@ private actor HeldFetcher: SourceFetching {
     }
 }
 
+/// A browser that gets past the site's check, or one whose check waits for a person.
+private actor FixtureRenderer: PageRendering {
+    let html: String?
+    var calls = 0
+    init(html: String?) {
+        self.html = html
+    }
+
+    func render(_ url: URL) -> RenderedPage? {
+        calls += 1
+        return html.map { RenderedPage(html: $0, url: url) }
+    }
+}
+
 private struct FixtureResolver: HostResolving {
     let addresses: [String]
     func addresses(for _: String) async throws -> [String] {
@@ -499,6 +513,71 @@ struct CaptureTests {
         _ = try await engine.enqueue(url.absoluteString, deduplicate: false); try await engine.run()
         #expect(try await fixture.store.documents().count == 1)
         #expect(try await fixture.store.captureJobs().contains { $0.state == .failed })
+    }
+
+    @Test @MainActor func aRefusedPageYouAskedForLoadsInThePrivateBrowser() async throws {
+        _ = NSApplication.shared
+        let fixture = try CaptureFixture()
+        defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let renderer = FixtureRenderer(html: Self.article())
+        let engine = IngestionEngine(
+            store: fixture.store, fetcher: FixtureFetcher(), summarizer: FixtureLinkSummarizer(),
+            pageRenderer: renderer
+        )
+        _ = try await engine.enqueue("https://fixture.example/guarded"); try await engine.run()
+        #expect(await renderer.calls == 1)
+        #expect(try await fixture.store.documents().first?.name == "Durable knowledge")
+    }
+
+    @Test @MainActor func aCheckThatWantsAPersonOffersTheBrowserWindow() async throws {
+        _ = NSApplication.shared
+        let fixture = try CaptureFixture()
+        defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let engine = IngestionEngine(
+            store: fixture.store, fetcher: FixtureFetcher(), summarizer: FixtureLinkSummarizer(),
+            pageRenderer: FixtureRenderer(html: nil)
+        )
+        _ = try await engine.enqueue("https://fixture.example/guarded"); try await engine.run()
+        let failed = try #require(await fixture.store.captureJobs().first)
+        #expect(failed.state == .failed && failed.recovery == .browser)
+        #expect(failed.error == CaptureError.needsVerification.localizedDescription)
+
+        // The page you loaded in the window resumes the same capture.
+        let url = try #require(URL(string: "https://fixture.example/guarded"))
+        try await engine.submitRenderedPage(
+            RenderedPage(html: Self.article(), url: url),
+            job: failed
+        )
+        try await engine.run()
+        #expect(try await fixture.store.documents().first?.name == "Durable knowledge")
+    }
+
+    @Test @MainActor func anAutomaticSaveTakesTheSitesRefusal() async throws {
+        _ = NSApplication.shared
+        let fixture = try CaptureFixture()
+        defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let renderer = FixtureRenderer(html: Self.article())
+        let engine = IngestionEngine(
+            store: fixture.store, fetcher: FixtureFetcher(), summarizer: FixtureLinkSummarizer(),
+            pageRenderer: renderer
+        )
+        var request = try CaptureRequest
+            .webLink(#require(URL(string: "https://fixture.example/guarded")))
+        request.automatic = true
+        _ = try await fixture.store.enqueueCapture(request); try await engine.run()
+        #expect(await renderer.calls == 0)
+        let failed = try #require(await fixture.store.captureJobs().first)
+        #expect(failed.state == .failed && failed.recovery == nil)
+        #expect(failed.error == CaptureError.http(403).localizedDescription)
+
+        // Trying it again yourself is asking for it.
+        try await fixture.store.retryCapture(failed.id)
+        try await engine.run()
+        #expect(await renderer.calls == 1)
+        #expect(try await fixture.store.documents().first?.name == "Durable knowledge")
     }
 
     @Test @MainActor func resumesRetainedHTMLWithoutDownloadingAgain() async throws {
