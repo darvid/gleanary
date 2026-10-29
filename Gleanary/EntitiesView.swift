@@ -210,13 +210,7 @@ struct EntitiesView: View {
             .font(.callout)
             HStack(spacing: 8) {
                 if model.findingDuplicates {
-                    // The same quiet pulse as Chat's working state, in place of the button.
-                    HStack(spacing: 4) {
-                        ChatWorkingIndicator(color: .secondary)
-                        Text("Checking for duplicates…").foregroundStyle(.secondary)
-                    }
-                    .font(.callout)
-                    .accessibilityElement(children: .combine)
+                    WorkingProgress("Checking for duplicates…").font(.callout)
                 } else {
                     Button("Find Duplicates") { Task { await model.findDuplicates() } }
                         .help("Merge names written differently and suggest likely duplicates")

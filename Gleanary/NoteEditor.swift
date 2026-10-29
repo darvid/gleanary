@@ -109,7 +109,7 @@ struct NoteEditor: View {
             Divider()
             HStack {
                 if document.revision != nil {
-                    Button("Delete note", systemImage: "trash", role: .destructive) {
+                    Button("Delete Note", systemImage: "trash", role: .destructive) {
                         DeleteNoteConfirmation.present(document, library: library) { deleted in
                             if deleted {
                                 close()
@@ -137,7 +137,7 @@ struct NoteEditor: View {
                         } catch { message = "Could not prepare the Markdown export. Try again." }
                     }
                 }.disabled(!profileReady)
-                Button("Save as template…") {
+                Button("Save as Template…") {
                     templateDraft = NoteTemplate(
                         name: name + " template",
                         body: NoteTemplate.starterBody(from: markdown),
@@ -179,7 +179,7 @@ struct NoteEditor: View {
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         .disabled(library.busy)
         .confirmationDialog("Discard unsaved changes?", isPresented: $confirmingDiscard) {
-            Button("Discard changes", role: .destructive) { close() }
+            Button("Discard Changes", role: .destructive) { close() }
         }
         .fileExporter(
             isPresented: $exporting,
@@ -222,7 +222,10 @@ struct MarkdownSourceEditor: View {
     var body: some View {
         NativeTextViewWrapper(
             text: $text,
-            configuration: MarkdownEditorConfiguration(textInsets: TextInsets(horizontal: 28)),
+            configuration: MarkdownEditorConfiguration(
+                services: MarkdownEditorServices(latex: MathMarkdown.renderer),
+                textInsets: TextInsets(horizontal: 28)
+            ),
             fontName: appearance[readingKind].nativeFont.fontName,
             fontSize: appearance[readingKind].size,
             documentId: documentID.uuidString

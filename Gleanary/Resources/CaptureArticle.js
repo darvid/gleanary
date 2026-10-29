@@ -42,6 +42,18 @@ converter.addRule('safeTables', {
     return '\n\n' + [render(header), render(Array(width).fill('---')), ...rows.map(render)].join('\n') + '\n\n';
   }
 });
+// Formulas arrive as <code data-math> (PageMath.swift) and are written as TeX, unescaped.
+const isMath = node => node.nodeName === 'CODE' && node.hasAttribute('data-math');
+const mathMarkdown = node => node.getAttribute('data-math') === 'display'
+  ? '$$' + node.textContent + '$$' : '$' + node.textContent + '$';
+converter.addRule('math', { filter: isMath, replacement: (_text, node) => mathMarkdown(node) });
+// Pages that typeset TeX in the browser carry it as text, such as arXiv abstracts. Markdown
+// escapes would corrupt it, so only the text between formulas is escaped.
+const inlineTeX = /(\$\$[\s\S]+?\$\$|\\\([\s\S]+?\\\)|\$[^\s$](?:[^$\n]*?[^\s$\\])?\$(?!\d))/;
+converter.escape = function (text) {
+  return text.split(inlineTeX).map((part, index) =>
+    index % 2 ? part : TurndownService.prototype.escape.call(this, part)).join('');
+};
 const blocks = [];
 const headings = [];
 const kinds = {P:'paragraph', UL:'list', OL:'list', PRE:'code', TABLE:'table', BLOCKQUOTE:'quote', IMG:'image'};
@@ -50,6 +62,7 @@ function readableText(node) {
   if (node.nodeType !== Node.ELEMENT_NODE) return '';
   if (node.tagName === 'IMG') return node.getAttribute('alt') || '';
   if (node.tagName === 'BR') return '\n';
+  if (isMath(node)) return mathMarkdown(node);
   if (node.tagName === 'PRE') return node.textContent;
   const body = Array.from(node.childNodes).map(readableText).join('');
   return body + (/^(P|LI|TR|TD|TH|H[1-6]|DIV|BLOCKQUOTE)$/.test(node.tagName) ? '\n' : '');

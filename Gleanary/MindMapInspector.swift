@@ -20,7 +20,7 @@ struct MindMapInspector: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Close details", systemImage: "xmark") {
+                    Button("Close Details", systemImage: "xmark") {
                         library.graph.deselectMapNode()
                     }
                     .labelStyle(.iconOnly).buttonStyle(.plain)
@@ -40,7 +40,7 @@ struct MindMapInspector: View {
                                 "\(evidence.noteName) · \(evidence.citation?.label ?? "Note revision")"
                             )
                             .font(.caption).foregroundStyle(.secondary)
-                            Button("View evidence") {
+                            Button("View Evidence") {
                                 if let citation = evidence.citation {
                                     openSource(citation)
                                 } else {

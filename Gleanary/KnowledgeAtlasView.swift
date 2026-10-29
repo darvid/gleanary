@@ -58,7 +58,7 @@ struct KnowledgeAtlasView: View {
                     Text("Choose another type or category to explore your library.")
                 } actions: {
                     if atlas.kindFilter != .all {
-                        Button("Show all types") { typeSelection.wrappedValue = .all }
+                        Button("Show All Types") { typeSelection.wrappedValue = .all }
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if atlas.root.children.isEmpty {
@@ -180,7 +180,7 @@ struct KnowledgeAtlasView: View {
                 .accessibilityLabel("Search the atlas")
                 .onExitCommand { query = ""; canvasFocused = true }
             if !query.isEmpty {
-                Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
+                Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
                     .labelStyle(.iconOnly).buttonStyle(.borderless)
             }
         }
@@ -193,11 +193,11 @@ struct KnowledgeAtlasView: View {
         HStack(spacing: 12) {
             selectionSummary
             Spacer(minLength: 12)
-            Button("Zoom out", systemImage: "minus") { zoomStep(1 / 1.6) }
+            Button("Zoom Out", systemImage: "minus") { zoomStep(1 / 1.6) }
                 .keyboardShortcut("-", modifiers: .command)
             Slider(value: $atlas.zoomLevel, in: 0 ... 1).frame(width: 110).controlSize(.mini)
                 .accessibilityLabel("Zoom")
-            Button("Zoom in", systemImage: "plus") { zoomStep(1.6) }
+            Button("Zoom In", systemImage: "plus") { zoomStep(1.6) }
                 .keyboardShortcut("=", modifiers: .command)
             Button("Reset") { atlas.reset() }
                 .keyboardShortcut("0", modifiers: .command)
@@ -230,7 +230,7 @@ struct KnowledgeAtlasView: View {
                         }.labelStyle(.titleOnly)
                     }
                 } else if tile.childCount > 0, tile.id != atlas.focusID {
-                    Button("Zoom in") { atlas.activate(tile.id) }.buttonStyle(.bordered)
+                    Button("Zoom In") { atlas.activate(tile.id) }.buttonStyle(.bordered)
                         .labelStyle(.titleOnly)
                 }
             }
@@ -479,10 +479,10 @@ struct KnowledgeAtlasView: View {
                     }
                     .accessibilityActions {
                         ForEach(tile.node.item?.summaryDocuments ?? []) { summary in
-                            Button("Open summary: \(summary.title)") { openItem(summary.id) }
+                            Button("Open Summary: \(summary.title)") { openItem(summary.id) }
                         }
                         if let item = tile.node.item, item.isSourceCard {
-                            Button("Open source") { openSource(for: item) }
+                            Button("Open Source") { openSource(for: item) }
                         }
                     }
             }

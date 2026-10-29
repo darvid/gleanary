@@ -80,7 +80,7 @@ struct WorkspaceTasksView: View {
                    tasks
                    .isEmpty
                 {
-                    HStack { ChatWorkingIndicator(color: .secondary); Text("Loading tasks…") }
+                    WorkingProgress("Loading tasks…")
                         .allowsHitTesting(false)
                 } else if tasks.isEmpty, choose != nil {
                     ContentUnavailableView(
@@ -93,7 +93,7 @@ struct WorkspaceTasksView: View {
                 }
             }
             if more {
-                Button("Load more tasks") { Task { await load(reset: false) } }.disabled(loading)
+                Button("Load More Tasks") { Task { await load(reset: false) } }.disabled(loading)
             }
         }
         .padding(24).frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
@@ -264,15 +264,15 @@ struct WorkspaceTaskRow: View {
         }
         .padding(.vertical, 6)
         .contextMenu {
-            Button("Edit task…", action: edit)
+            Button("Edit Task…", action: edit)
             if let removePlacement {
-                Button("Remove from this note…", role: .destructive, action: removePlacement)
+                Button("Remove from This Note…", role: .destructive, action: removePlacement)
             }
-            Button("Plan for today") {
+            Button("Plan for Today") {
                 var next = task; next.planned = WorkspaceDay(date: .now); update(next)
             }
             if task.status == .open {
-                Button("Cancel task") { var next = task; next.status = .canceled; update(next) }
+                Button("Cancel Task") { var next = task; next.status = .canceled; update(next) }
             }
         }
     }

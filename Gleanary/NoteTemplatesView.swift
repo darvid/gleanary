@@ -13,7 +13,7 @@ struct NoteTemplatesView: View {
             HStack {
                 Text("Note templates").font(.title2.weight(.semibold))
                 Spacer()
-                Button("New template", systemImage: "plus") {
+                Button("New Template", systemImage: "plus") {
                     editing = NoteTemplate(name: "New template")
                 }
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
@@ -28,7 +28,7 @@ struct NoteTemplatesView: View {
                 Text(error).foregroundStyle(.red).textSelection(.enabled)
             }
             if let current {
-                Button("Save current note as template…") {
+                Button("Save Current Note as Template…") {
                     Task {
                         do {
                             let profile = try await workspace.store.noteProfile(current.id)
@@ -69,7 +69,7 @@ struct NoteTemplatesView: View {
                     }
                 }.padding(.vertical, 6)
             }
-            Button("Reload templates") { Task { await workspace.loadTemplates() } }
+            Button("Reload Templates") { Task { await workspace.loadTemplates() } }
                 .controlSize(.small)
         }
         .padding(24).frame(minWidth: 620, idealWidth: 760, minHeight: 420, idealHeight: 580)
@@ -82,7 +82,7 @@ struct NoteTemplatesView: View {
                 }
             }
         )) {
-            Button("Delete template", role: .destructive) {
+            Button("Delete Template", role: .destructive) {
                 guard let template = deleting else { return }
                 Task {
                     if await workspace
@@ -109,7 +109,7 @@ struct NoteTemplateEditor: View {
                 Text("Edit template").font(.headline)
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save template") {
+                Button("Save Template") {
                     Task {
                         if await workspace
                             .change({ _ = try await workspace.store.saveNoteTemplate(template) })

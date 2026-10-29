@@ -49,7 +49,7 @@ struct ConversationView: View {
                             HStack {
                                 Text("Saved document").font(.headline)
                                 Spacer()
-                                Button("Close preview", systemImage: "xmark") {
+                                Button("Close Preview", systemImage: "xmark") {
                                     showingPreview = false
                                 }
                                 .labelStyle(.iconOnly).buttonStyle(.borderless)
@@ -290,7 +290,7 @@ struct ConversationView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 if model.hasOlderMessages, model.messages.count >= 200 {
-                    Button("Load earlier messages") {
+                    Button("Load Earlier Messages") {
                         followLatest = false; Task { await model.loadOlder() }
                     }
                 }
@@ -368,7 +368,7 @@ struct ConversationView: View {
         }
         .overlay(alignment: .bottom) {
             if !followLatest {
-                Button("Latest messages", systemImage: "arrow.down") {
+                Button("Latest Messages", systemImage: "arrow.down") {
                     followLatest = true; feedPosition.scrollTo(edge: .bottom)
                 }
                 .labelStyle(.iconOnly).font(.body.weight(.semibold))
@@ -731,8 +731,15 @@ struct ConversationView: View {
             }
         if !candidates.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Suggested reading").font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
+                let note = CaptureSettings.current().acquisition.suggestionNote
+                HStack(spacing: 4) {
+                    Text("Suggested reading").font(.caption.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Image(systemName: "info.circle").font(.caption)
+                        .accessibilityLabel(note)
+                }
+                .foregroundStyle(.secondary)
+                .help(note)
                 ForEach(candidates) { candidate in
                     suggestionRow(candidate)
                 }
@@ -744,11 +751,19 @@ struct ConversationView: View {
     private func suggestionRow(_ candidate: AcquisitionCandidate) -> some View {
         let saved = model.capturedLinks[candidate.identity]
         let saving = model.savingAcquisitions.contains(candidate.id)
-            || (candidate.state == .queued && saved == nil)
+            || (candidate.state == .queued && saved == nil && candidate.captureError == nil)
         let title = saved?.title ?? candidate.displayTitle
         return HStack(spacing: 10) {
-            Image(systemName: saved == nil ? "link" : "doc.text").foregroundStyle(.secondary)
-                .frame(width: 16)
+            Group {
+                if candidate.captureError != nil, !saving {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        .accessibilityLabel("Couldn't save")
+                } else {
+                    Image(systemName: saved == nil ? "link" : "doc.text")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout).lineLimit(1)
                 HStack(spacing: 8) {
@@ -757,15 +772,17 @@ struct ConversationView: View {
                 }
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            .help(candidate.context)
+            .help(candidate.captureError.map { "Couldn't save: \($0)" } ?? candidate.context)
             Spacer(minLength: 8)
             if let saved {
                 Button("Open") { open(saved.noteID) }.buttonStyle(.link)
             } else if saving {
-                ProgressView().controlSize(.small).accessibilityLabel("Saving")
+                WorkingProgress().accessibilityLabel("Saving")
             } else {
-                Button("Save") { Task { await model.saveAcquisition(candidate) } }
-                    .controlSize(.small)
+                Button(candidate.captureError == nil ? "Save" : "Try Again") {
+                    Task { await model.saveAcquisition(candidate) }
+                }
+                .controlSize(.small)
                 Button("Dismiss", systemImage: "xmark") {
                     Task { await model.dismissAcquisition(candidate) }
                 }
@@ -911,7 +928,7 @@ struct ConversationView: View {
                 if proposal.status == "pending" {
                     // macOS convention: secondary action leading, decisions trailing, primary last.
                     HStack {
-                        Button("Review document") {
+                        Button("Review Document") {
                             open(proposal.filing == nil ? proposal.right : proposal.left)
                         }.buttonStyle(.link)
                         Spacer()
@@ -1001,7 +1018,7 @@ struct ConversationView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 // The composer's send button doubles as Stop; keep Escape without a second control.
                 .background {
-                    Button("Stop current task") { Task { await model.cancel() } }
+                    Button("Stop Current Task") { Task { await model.cancel() } }
                         .keyboardShortcut(.escape, modifiers: [])
                         .hidden().accessibilityHidden(true)
                 }

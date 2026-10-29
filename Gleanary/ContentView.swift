@@ -171,7 +171,7 @@ struct ContentView: View {
         }
         .sheet(item: $openingTask) { WorkspaceTaskEditor(workspace: library.workspace, task: $0) }
         .confirmationDialog("Replace the open draft?", isPresented: $replacingDraft) {
-            Button("Discard draft and create note", role: .destructive) {
+            Button("Discard Draft and Create Note", role: .destructive) {
                 startDraft(pendingTemplate)
             }
         } message: { Text("Unsaved changes in the open editor will be discarded.") }
@@ -455,7 +455,7 @@ struct ContentView: View {
                     open: openSavedItem
                 )
             } else {
-                ProgressView("Opening entities…")
+                WorkingProgress("Opening entities…")
             }
         } else if showingTasks {
             if library.ready {
@@ -465,13 +465,13 @@ struct ContentView: View {
                     selection: $taskView
                 )
             } else {
-                ProgressView("Opening tasks…")
+                WorkingProgress("Opening tasks…")
             }
         } else if showingActivity {
             if library.ready {
                 ActivityView(store: library.store, open: openSavedItem, openSource: { source = $0 })
             } else {
-                ProgressView("Opening activity…")
+                WorkingProgress("Opening activity…")
             }
         } else if automating {
             AutomationsView(model: library.automations, open: openSavedItem)
@@ -554,7 +554,7 @@ struct ContentView: View {
                 // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
                 // Plain ellipsis: Liquid Glass already draws the circular button.
                 Menu("More", systemImage: "ellipsis") {
-                    Button("Note templates…", systemImage: "doc.badge.plus") {
+                    Button("Note Templates…", systemImage: "doc.badge.plus") {
                         showingTemplates = true
                     }
                     .disabled(!library.ready || library.busy)
@@ -1315,7 +1315,7 @@ struct ContentView: View {
                     .textFieldStyle(.plain).focused($searchFocused)
                     .accessibilityLabel("Search library")
                     if !library.documentGrid.query.isEmpty {
-                        Button("Clear search", systemImage: "xmark.circle.fill") {
+                        Button("Clear Search", systemImage: "xmark.circle.fill") {
                             library.documentGrid.query = ""
                         }
                         .labelStyle(.iconOnly).buttonStyle(.borderless)
@@ -1344,7 +1344,7 @@ struct ContentView: View {
                     Text(emptyListMessage)
                 } actions: {
                     if kindFilter != .all {
-                        Button("Show all types") { kindFilter = .all }
+                        Button("Show All Types") { kindFilter = .all }
                     } else if !library.documentGrid.loading, scope == nil || scope == .all,
                               library.documentGrid.query.isEmpty
                     {
@@ -1389,9 +1389,9 @@ struct ContentView: View {
             )
             .font(.caption).foregroundStyle(.secondary)
             Spacer()
-            Button("Previous page", systemImage: "chevron.left") { page -= 1 }
+            Button("Previous Page", systemImage: "chevron.left") { page -= 1 }
                 .disabled(page == 0)
-            Button("Next page", systemImage: "chevron.right") { page += 1 }
+            Button("Next Page", systemImage: "chevron.right") { page += 1 }
                 .accessibilityIdentifier("library-next-page")
                 .disabled(pageRange.upperBound >= library.documentGrid.total)
         }.labelStyle(.iconOnly).buttonStyle(.borderless).padding(.horizontal, 18).padding(
@@ -1573,14 +1573,14 @@ struct ContentView: View {
                 .textSelection(.enabled)
             HStack {
                 if let id = job.noteID {
-                    Button("Open saved item") { openSavedItem(id) }
+                    Button("Open Saved Item") { openSavedItem(id) }
                 }
                 if job.state == .failed || job.state == .cancelled {
                     if job.recovery == .browser {
-                        Button("Open browser") { library.browserJob = job }
+                        Button("Open Browser") { library.browserJob = job }
                     }
                     if job.recovery == .audio {
-                        Button("Audio options") { library.audioJob = job }
+                        Button("Audio Options") { library.audioJob = job }
                     }
                     Button("Retry") { Task { await library.retryCapture(job.id) } }
                         .disabled(library.busy)
@@ -1596,7 +1596,7 @@ struct ContentView: View {
         .padding(.vertical, 8)
         .contextMenu {
             if let url = presentation.url {
-                Button("Copy link", systemImage: "doc.on.doc") {
+                Button("Copy Link", systemImage: "doc.on.doc") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(url.absoluteString, forType: .string)
                 }
@@ -1723,10 +1723,10 @@ struct ContentView: View {
             Text(error).font(.callout.weight(.medium)).textSelection(.enabled)
             Spacer()
             if library.indexingError != nil {
-                Button("Retry indexing") { library.startIndexing() }.disabled(library.indexing)
+                Button("Retry Indexing") { library.startIndexing() }.disabled(library.indexing)
             }
             if !library.ready {
-                Button("Retry opening") { Task { await library.load() } }
+                Button("Retry Opening") { Task { await library.load() } }
             }
             Button("Dismiss", systemImage: "xmark") {
                 library.error = nil; library.indexingError = nil

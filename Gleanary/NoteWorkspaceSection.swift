@@ -41,7 +41,7 @@ struct NoteWorkspaceSection: View {
                     ) { editingTask = task }
                 }
                 if more {
-                    Button("Load more tasks") { Task { await loadTasks(reset: false) } }
+                    Button("Load More Tasks") { Task { await loadTasks(reset: false) } }
                         .disabled(loadingMore || workspace.busy)
                 }
                 if !local.isEmpty {
@@ -86,7 +86,7 @@ struct NoteWorkspaceSection: View {
                 }
             }
         )) {
-            Button("Remove from note", role: .destructive) {
+            Button("Remove from Note", role: .destructive) {
                 guard let task = removing else { return }
                 Task {
                     await workspace
@@ -109,7 +109,7 @@ struct NoteWorkspaceSection: View {
                 }
             }
         )) {
-            Button("Track task") {
+            Button("Track Task") {
                 guard let item = tracking else { return }
                 Task {
                     await workspace
@@ -133,7 +133,7 @@ struct NoteWorkspaceSection: View {
                 Text(profile.type == .note ? "No special type" : profile.type.label).font(.callout)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Edit properties…") { editingProperties = true }.controlSize(.small)
+                Button("Edit Properties…") { editingProperties = true }.controlSize(.small)
             }
             ForEach(profile.type.fields) { field in
                 if let value = profile.values[field.id], !value.isEmpty {
@@ -160,7 +160,7 @@ struct NoteWorkspaceSection: View {
                 .font(.subheadline.weight(.semibold))
             Spacer()
             Menu {
-                Button("New task…") {
+                Button("New Task…") {
                     editingTask = WorkspaceTask(
                         title: "",
                         projectID: profile.type == .project ? document.id : profile
@@ -168,7 +168,7 @@ struct NoteWorkspaceSection: View {
                         originID: document.id
                     )
                 }
-                Button("Link existing task…") { linkingTask = true }
+                Button("Link Existing Task…") { linkingTask = true }
             } label: { Label("Add task", systemImage: "plus") }
                 .disabled(workspace.busy)
         }

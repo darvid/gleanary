@@ -57,7 +57,7 @@ struct SourceReaderView: View {
                     description: Text(error)
                 )
             } else {
-                ProgressView("Loading source…")
+                WorkingProgress("Loading source…")
             }
         }
         .task(id: "\(captureID)/\(refreshToken)") {
@@ -143,7 +143,7 @@ struct CaptureSourceView: View {
                                 Text(artifact.name).tag(Optional(artifact.hash))
                             }
                         }
-                        Button("Save original…") { Task { await exportOriginal() } }
+                        Button("Save Original…") { Task { await exportOriginal() } }
                             .disabled(original == nil)
                     }
                     originalView
@@ -185,7 +185,7 @@ struct CaptureSourceView: View {
                     }
                 }
             } else if error == nil {
-                ProgressView("Loading retained source…")
+                WorkingProgress("Loading retained source…")
             }
             if let error {
                 Text(error).foregroundStyle(.secondary).textSelection(.enabled)
@@ -252,7 +252,7 @@ struct CaptureSourceView: View {
                 }
             }
         } else {
-            ProgressView("Reading original…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            WorkingProgress("Reading original…").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

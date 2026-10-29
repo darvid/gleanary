@@ -228,12 +228,15 @@ extension IngestionEngine {
         for candidate in untitled {
             guard !Task.isCancelled else { break }
             var title: String?
-            if await robots.rules(for: candidate.url).allows(candidate.url) {
-                await spaceAutomaticFetch(candidate.url)
-                if let page = try? await reader.fetch(candidate.url),
-                   page.mime.map({ $0.lowercased().contains("html") }) ?? true
-                {
-                    title = PageTitle.read(html: String(decoding: page.data, as: UTF8.self))
+            let address = PageTitle.oEmbedURL(for: candidate.url) ?? candidate.url
+            if await robots.rules(for: address).allows(address) {
+                await spaceAutomaticFetch(address)
+                if let page = try? await reader.fetch(address) {
+                    if address != candidate.url {
+                        title = PageTitle.read(oEmbed: page.data)
+                    } else if page.mime.map({ $0.lowercased().contains("html") }) ?? true {
+                        title = PageTitle.read(html: String(decoding: page.data, as: UTF8.self))
+                    }
                 }
             }
             try? await store.setAcquisitionPageTitle(candidate.id, title)

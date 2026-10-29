@@ -27,7 +27,7 @@ struct NotePropertiesEditor: View {
                 }
             }
         )) {
-            Button("Change type") {
+            Button("Change Type") {
                 guard let type = pendingType else { return }
                 let keys = Set(type.fields.map(\.id))
                 profile.type = type
@@ -126,7 +126,7 @@ struct WorkspaceNotePicker: View {
             }
             .overlay {
                 if loading {
-                    HStack { ChatWorkingIndicator(color: .secondary); Text("Loading notes…") }
+                    WorkingProgress("Loading notes…")
                 } else if notes.isEmpty {
                     ContentUnavailableView(
                         "No matching notes",
@@ -135,7 +135,7 @@ struct WorkspaceNotePicker: View {
                 }
             }
             if more {
-                Button("Load more") { Task { await load(reset: false) } }.disabled(loading)
+                Button("Load More") { Task { await load(reset: false) } }.disabled(loading)
             }
         }
         .padding(24).frame(minWidth: 420, idealWidth: 520, minHeight: 360, idealHeight: 480)

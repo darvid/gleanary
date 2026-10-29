@@ -32,6 +32,20 @@ enum SourceAcquisitionLevel: Int, Codable, Sendable, CaseIterable, Comparable {
         }
     }
 
+    /// Why some found links were saved on their own and these wait, for suggested reading.
+    var suggestionNote: String {
+        let policy = policy
+        let saved = switch self {
+        case .off, .lazy, .suggest: "\(title) saves nothing without asking."
+        case .balanced:
+            "Balanced saves up to \(policy.savesPerSource) links the creator recommends per source."
+        case .eager, .explore:
+            "\(title) saves up to \(policy.savesPerSource) links per source and "
+                + "\(policy.savesPerSitePerDay) per site a day on its own."
+        }
+        return saved + " The rest are here for you to save. Change this in Settings › Capture."
+    }
+
     var policy: AcquisitionPolicy {
         switch self {
         case .off: AcquisitionPolicy(records: false, suggests: false, maximumHops: 0)
@@ -160,6 +174,8 @@ struct AcquisitionCandidate: Identifiable, Sendable, Equatable {
     var intent: LinkIntent?
     /// The linked page's own title, read in the background for suggestions.
     var pageTitle: String?
+    /// Why the save's capture failed, for a queued link whose capture didn't finish.
+    var captureError: String?
 
     /// The page's title once read; until then link text that reads like a title, else the
     /// address's last part in words.
@@ -214,6 +230,26 @@ struct FoundLink: Sendable, Equatable {
 
 /// A page's own title from its HTML: the share title, else `<title>`.
 enum PageTitle {
+    /// YouTube's watch pages are far larger than a title read takes, and its short links
+    /// redirect, so a video's title comes from its oEmbed answer, a few hundred bytes.
+    static func oEmbedURL(for url: URL) -> URL? {
+        guard let target = try? MediaTarget.parse(url), target.site == .youtube else { return nil }
+        // The video's address is a query value, so its own ? and = are escaped too.
+        guard let video = target.url.absoluteString.addingPercentEncoding(
+            withAllowedCharacters: .alphanumerics
+        ) else { return nil }
+        return URL(string: "https://www.youtube.com/oembed?url=\(video)&format=json")
+    }
+
+    static func read(oEmbed data: Data) -> String? {
+        struct Answer: Decodable {
+            let title: String
+        }
+        let title = (try? JSONDecoder().decode(Answer.self, from: data))?.title
+            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return title.flatMap { $0.isEmpty ? nil : String($0.prefix(200)) }
+    }
+
     static func read(html: String) -> String? {
         guard let document = try? SwiftSoup.parse(html) else { return nil }
         let share = try? document.select("meta[property=og:title]").first()?.attr("content")

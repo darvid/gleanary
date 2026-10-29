@@ -10,7 +10,7 @@ struct SourceSummaryLinks: View {
             ForEach(summaries) { summary in
                 Button { openDocument(summary.id) } label: {
                     Label(
-                        summaries.count == 1 ? "Open summary" : "Summary: \(summary.name)",
+                        summaries.count == 1 ? "Open Summary" : "Summary: \(summary.name)",
                         systemImage: "note.text"
                     )
                     .lineLimit(2).multilineTextAlignment(.leading)

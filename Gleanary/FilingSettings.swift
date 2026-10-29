@@ -22,7 +22,7 @@ struct FilingSettings: View {
                     .count == 1 ? "1 category" : "\(model.categories.count) categories")
                     .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
                 Spacer(minLength: 16)
-                Button("Starter categories…") { starterCategories = true }
+                Button("Starter Categories…") { starterCategories = true }
             }
             VStack(spacing: 0) {
                 List(selection: $selection) {
@@ -98,7 +98,7 @@ struct FilingSettings: View {
             titleVisibility: .visible,
             presenting: deleting
         ) { category in
-            Button("Delete category", role: .destructive) { Task { await delete(category) } }
+            Button("Delete Category", role: .destructive) { Task { await delete(category) } }
             Button("Cancel", role: .cancel) {}
         } message: { category in
             Text(deleteMessage(category))
@@ -120,13 +120,13 @@ struct FilingSettings: View {
         let selected = category(selection)
         let area = areas.first { $0.digit == selected?.area } ?? areas.last
         return HStack(spacing: 0) {
-            Button("Add category", systemImage: "plus") {
+            Button("Add Category", systemImage: "plus") {
                 editor = .add(suggestedCode: suggestedCode(near: selection), area: nil)
             }
             .help("Add a category in \(area?.range ?? "the next free area")")
             .modifier(FooterControl())
             footerDivider
-            Button("Delete category", systemImage: "minus") {
+            Button("Delete Category", systemImage: "minus") {
                 if let selected {
                     deleting = selected
                 }
@@ -143,7 +143,7 @@ struct FilingSettings: View {
                     }
                 }
                 if let parent = selected, !parent.code.contains(".") {
-                    Button("Add Subcategory under \(parent.label)") {
+                    Button("Add Subcategory Under \(parent.label)") {
                         editor = .add(suggestedCode: nextSubcode(under: parent), area: nil)
                     }
                 }
@@ -199,7 +199,7 @@ struct FilingSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Choose starter categories…") { starterCategories = true }
+            Button("Choose Starter Categories…") { starterCategories = true }
         }
         .padding(12)
         .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))

@@ -55,8 +55,15 @@ extension AgentCoordinator {
         return queued.count
     }
 
-    /// Saves a suggested link you chose.
+    /// Saves a suggested link you chose, or tries a failed save again.
     func saveAcquisition(_ id: UUID, changed: @escaping @Sendable () async -> Void) async throws {
+        if let candidate = try await store.acquisitionCandidate(id: id),
+           candidate.state == .queued, let job = candidate.captureJobID
+        {
+            try await store.retryCapture(job)
+            await changed()
+            return try await ingestion.settle([job], changed: changed)
+        }
         guard let job = try await ingestion.saveAcquisition(id)?.captureJobID else { return }
         await changed()
         try await ingestion.settle([job], changed: changed)

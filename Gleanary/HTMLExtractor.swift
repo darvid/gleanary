@@ -106,6 +106,8 @@ enum HTMLExtractor {
                 .map { try $0.attr("content").trimmingCharacters(in: .whitespacesAndNewlines) }
                 .flatMap { URL(string: $0, relativeTo: url)?.absoluteURL }
         }.first { $0.scheme == "https" || $0.scheme == "http" }
+        // Before sanitizing, which removes the scripts MathJax 2 keeps formulas in.
+        try PageMath.normalize(document)
         try sanitize(document, url: url)
         return try HTMLAnalysis(
             sanitizedHTML: document.outerHtml(),

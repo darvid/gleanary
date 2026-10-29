@@ -185,14 +185,14 @@ struct SocialBrowserView: View {
             )
             .font(.callout).foregroundStyle(.secondary)
             HStack {
-                Button("Return to post") {
+                Button("Return to Post") {
                     session.webView.load(URLRequest(url: session.target.url))
                 }
                 Text(session.currentURL.isEmpty ? session.target.url.absoluteString : session
                     .currentURL).lineLimit(1).textSelection(.enabled)
                 Spacer()
                 if session.loading {
-                    ProgressView().controlSize(.small)
+                    WorkingProgress()
                 }
             }
             SocialWebView(webView: session.webView)

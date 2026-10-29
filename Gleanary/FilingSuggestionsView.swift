@@ -111,7 +111,7 @@ struct FilingSuggestionsView: View {
                     Button(stopping ? "Stopping…" : "Stop") { library.stopCategorizing() }
                         .disabled(stopping)
                     if stopping {
-                        ProgressView().controlSize(.small)
+                        WorkingProgress()
                     }
                 }
             }
@@ -349,11 +349,11 @@ struct SeriesFilingActions: View {
             Text(summary).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if status.unfiled > 0 {
-                Button("Organize notes…", action: review).buttonStyle(.link)
+                Button("Organize Notes…", action: review).buttonStyle(.link)
                     .help("Review filing for this collection with the Librarian")
             }
             if !status.batches.isEmpty {
-                Button("Undo filing", action: undo).buttonStyle(.link)
+                Button("Undo Filing", action: undo).buttonStyle(.link)
                     .help("Undo filing for these new notes; keep the published collection")
             }
         }

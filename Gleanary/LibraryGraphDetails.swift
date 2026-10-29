@@ -34,7 +34,7 @@ struct LibraryGraphDetails: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if let anchor {
                         if let relationship {
-                            Button("Back to connections", systemImage: "chevron.left") {
+                            Button("Back to Connections", systemImage: "chevron.left") {
                                 graph.select(anchor.id)
                             }.buttonStyle(.borderless)
                             evidence(relationship)
@@ -92,7 +92,7 @@ struct LibraryGraphDetails: View {
                 TextField("Find in this graph", text: $itemQuery).textFieldStyle(.plain)
                     .accessibilityLabel("Find an item in the graph list")
                 if !itemQuery.isEmpty {
-                    Button("Clear item search", systemImage: "xmark.circle.fill") {
+                    Button("Clear Item Search", systemImage: "xmark.circle.fill") {
                         itemQuery = ""
                     }.labelStyle(.iconOnly).buttonStyle(.borderless)
                 }
@@ -166,7 +166,7 @@ struct LibraryGraphDetails: View {
                     Button("Connections", systemImage: "chevron.left") { graph.select(node.id) }
                         .help("Back to connections for \(node.label)")
                 } else {
-                    Button("All items", systemImage: "chevron.left") { graph.deselect() }
+                    Button("All Items", systemImage: "chevron.left") { graph.deselect() }
                 }
                 Spacer()
                 closeButton
@@ -193,7 +193,7 @@ struct LibraryGraphDetails: View {
 
     @ViewBuilder private var closeButton: some View {
         if let close {
-            Button("Hide graph inspector", systemImage: "xmark", action: close)
+            Button("Hide Graph Inspector", systemImage: "xmark", action: close)
                 .labelStyle(.iconOnly).buttonStyle(.borderless)
         }
     }
@@ -203,7 +203,7 @@ struct LibraryGraphDetails: View {
             openNote(id)
         }
         if let focusNote {
-            Button("Focus in graph", systemImage: "scope") { focusNote(id) }
+            Button("Focus in Graph", systemImage: "scope") { focusNote(id) }
         }
     }
 
@@ -283,7 +283,7 @@ struct LibraryGraphDetails: View {
                 }
             }
             if neighbors.count > limit {
-                Button("Show more connections") { extraConnections += compact ? 8 : 40 }
+                Button("Show More Connections") { extraConnections += compact ? 8 : 40 }
             }
         }
     }
@@ -299,7 +299,7 @@ struct LibraryGraphDetails: View {
                         "Open \(inspector.kind(of: neighbor.node).lowercased())",
                         systemImage: "doc.text"
                     ) { openNote(id) }
-                    Button("Select in graph", systemImage: "scope") {
+                    Button("Select in Graph", systemImage: "scope") {
                         graph.select(neighbor.node.id)
                     }
                     .labelStyle(.iconOnly).help("Select \(neighbor.node.label) in graph")
@@ -324,12 +324,12 @@ struct LibraryGraphDetails: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             if graph.evidenceLoading {
-                ProgressView("Loading evidence…").controlSize(.small)
+                WorkingProgress("Loading evidence…")
             } else if let error = graph.evidenceError {
                 Text(error).font(.callout).foregroundStyle(.secondary)
                 Button("Retry") { graph.loadEvidence() }
             } else if graph.evidenceHasMore {
-                Button("Load more supporting entries") { graph.loadEvidence() }
+                Button("Load More Supporting Entries") { graph.loadEvidence() }
             }
         }
     }
@@ -339,9 +339,9 @@ struct LibraryGraphDetails: View {
             Text(reason.text).font(.callout).textSelection(.enabled)
             Text(reason.label).font(.caption).foregroundStyle(.secondary)
             if let citation = reason.citation {
-                Button("View evidence") { openSource(citation) }.controlSize(.small)
+                Button("View Evidence") { openSource(citation) }.controlSize(.small)
             } else if let id = reason.noteID {
-                Button("View evidence") { openNote(id) }.controlSize(.small)
+                Button("View Evidence") { openNote(id) }.controlSize(.small)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }

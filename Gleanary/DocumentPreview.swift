@@ -227,7 +227,7 @@ struct DocumentPreview: View {
 
     var body: some View {
         if model.loading {
-            ProgressView("Loading preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            WorkingProgress("Loading preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let document = model.document {
             if readerMode {
                 ReaderTextView(
@@ -504,7 +504,7 @@ struct DocumentPreview: View {
             }
         }
         .confirmationDialog("Create another summary?", isPresented: $confirmingAnotherSummary) {
-            Button("Create summary") { createAnotherSummary?(document) }
+            Button("Create Summary") { createAnotherSummary?(document) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
@@ -521,11 +521,11 @@ struct DocumentPreview: View {
     private func moreMenu(_ document: MarkdownDocument) -> some View {
         Menu {
             if model.citation != nil {
-                Button("Use as summary for this source…", systemImage: "note.text.badge.plus") {
+                Button("Use as Summary for This Source…", systemImage: "note.text.badge.plus") {
                     associatingSummary = true
                 }
                 if createAnotherSummary != nil, !model.summaries.isEmpty || model.generatedSummary {
-                    Button("Create another summary…", systemImage: "sparkles") {
+                    Button("Create Another Summary…", systemImage: "sparkles") {
                         confirmingAnotherSummary = true
                     }.disabled(!summaryEnabled || generatingSummary)
                 }
@@ -662,7 +662,7 @@ struct DocumentPreview: View {
                 infoRow("Summary") {
                     HStack {
                         Text("No summary associated.").foregroundStyle(.secondary)
-                        Button("Use existing note…") { associatingSummary = true }
+                        Button("Use Existing Note…") { associatingSummary = true }
                             .buttonStyle(.link)
                     }
                 }
@@ -864,13 +864,16 @@ struct MarkdownPreview: View {
     var readingFont: ReadingFont?
     /// Fades in the end of the last block while a reply streams.
     var trailingFade: TrailingFade?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let blocks = Self.blocks(markdown)
         VStack(alignment: .leading, spacing: 14) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 let fade = index == blocks.count - 1 ? trailingFade : nil
-                if block.hasPrefix("```") {
+                if let latex = MathMarkdown.displayFormula(block) {
+                    MathBlock(latex: latex, size: nativeFont().pointSize)
+                } else if block.hasPrefix("```") {
                     fading(Text(block.components(separatedBy: "\n").dropFirst().dropLast()
                             .joined(separator: "\n")), fade)
                         .font(readingFont
@@ -951,9 +954,12 @@ struct MarkdownPreview: View {
         var blocks: [String] = []
         var lines: [String] = []
         var code = false
+        var math = false
         for rawLine in markdown.components(separatedBy: "\n") {
-            let line = code ? rawLine : normalizedBlockLine(rawLine)
-            if line.hasPrefix("```") {
+            let line = code || math ? rawLine : normalizedBlockLine(rawLine)
+            if !code, displayMath(line, open: &math, lines: &lines, blocks: &blocks) {
+                continue
+            } else if line.hasPrefix("```") {
                 if code {
                     lines.append(line)
                     flush(&lines, into: &blocks)
@@ -983,6 +989,30 @@ struct MarkdownPreview: View {
         }
         flush(&lines, into: &blocks)
         return blocks
+    }
+
+    /// A display formula is a block of its own, even inside a paragraph. Returns whether the
+    /// line belonged to one.
+    private nonisolated static func displayMath(
+        _ line: String, open: inout Bool, lines: inout [String], blocks: inout [String]
+    ) -> Bool {
+        if open {
+            lines.append(line)
+            if MathMarkdown.closesDisplay(line) {
+                flush(&lines, into: &blocks)
+                open = false
+            }
+            return true
+        }
+        let whole = MathMarkdown.displayFormula(line) != nil
+        guard whole || MathMarkdown.opensDisplay(line) else { return false }
+        flush(&lines, into: &blocks)
+        lines.append(line)
+        open = !whole
+        if whole {
+            flush(&lines, into: &blocks)
+        }
+        return true
     }
 
     private nonisolated static func flush(_ lines: inout [String], into blocks: inout [String]) {
@@ -1057,15 +1087,19 @@ struct MarkdownPreview: View {
         _ source: String, nativeFont: NSFont? = nil, lineSpacing: CGFloat = 0,
         color: NSColor = .labelColor, fade: TrailingFade? = nil
     ) -> some View {
-        let text = Self.inline(source)
+        let (text, formulas) = Self.inline(source)
+        let font = nativeFont ?? self.nativeFont()
         // Linked text is AppKit-drawn, so it streams in without the fade.
         if text.runs.contains(where: { $0.link != nil }) {
             MarkdownLinkText(
-                text: text, font: nativeFont ?? self.nativeFont(), color: color,
-                lineSpacing: lineSpacing
+                text: text, font: font, color: color, lineSpacing: lineSpacing,
+                formulas: formulas
             )
         } else {
-            fading(Text(text), fade)
+            fading(MathMarkdown.text(
+                text, formulas: formulas, size: font.pointSize,
+                secondary: color == .secondaryLabelColor, dark: colorScheme == .dark
+            ), fade)
         }
     }
 
@@ -1088,11 +1122,13 @@ struct MarkdownPreview: View {
         return NSFont(descriptor: descriptor, size: base.pointSize * scale) ?? base
     }
 
-    private static func inline(_ text: String) -> AttributedString {
-        (try? AttributedString(
+    private static func inline(_ source: String) -> (AttributedString, [MathMarkdown.Formula]) {
+        let (text, formulas) = MathMarkdown.extractingInline(source)
+        let parsed = (try? AttributedString(
             markdown: text,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(text)
+        return (parsed, formulas)
     }
 }
 

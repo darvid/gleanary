@@ -97,7 +97,7 @@ struct FilingInspector: View {
                 Text(category.name).lineLimit(1)
                 Spacer(minLength: 4)
                 if filingID == category.id {
-                    ProgressView().controlSize(.mini)
+                    WorkingProgress()
                 } else if primary {
                     Image(systemName: "checkmark").fontWeight(.semibold)
                         .foregroundStyle(Color.accentColor)

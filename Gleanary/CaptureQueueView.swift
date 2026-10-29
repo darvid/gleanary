@@ -12,7 +12,7 @@ struct CaptureQueueView: View {
                         ForEach(library.captureJobs) { job in
                             HStack(alignment: .top, spacing: 10) {
                                 if job.state == .fetching || job.state == .extracting {
-                                    ProgressView().controlSize(.small)
+                                    WorkingProgress()
                                 } else {
                                     Image(systemName: symbol(job.state)).foregroundStyle(.secondary)
                                         .accessibilityLabel(job.state.rawValue)
@@ -33,9 +33,9 @@ struct CaptureQueueView: View {
                                     }
                                 } else if job.state == .failed || job.state == .cancelled {
                                     if job.state == .failed, job.recovery == .browser {
-                                        Button("Open browser") { library.browserJob = job }
+                                        Button("Open Browser") { library.browserJob = job }
                                     } else if job.state == .failed, job.recovery == .audio {
-                                        Button("Audio options") { library.audioJob = job }
+                                        Button("Audio Options") { library.audioJob = job }
                                     }
                                     Button("Retry") { Task { await library.retryCapture(job.id) } }
                                 }

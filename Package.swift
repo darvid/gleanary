@@ -34,6 +34,7 @@ let package = Package(
                 .product(name: "YouTubeComments", package: "swift-youtube-metadata"),
                 .product(name: "YouTubeKit", package: "YouTubeKit"),
                 .product(name: "MarkdownEngine", package: "swift-markdown-engine"),
+                .product(name: "MarkdownEngineLatex", package: "swift-markdown-engine"),
             ],
             path: "Gleanary",
             // The app icon goes in the app bundle itself (scripts/build-app.sh), not the

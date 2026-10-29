@@ -155,7 +155,7 @@ struct StarterCategoriesView: View {
                 }
                 Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
             } else {
-                Button("Not now") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Not Now") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Add \(Self.counted(additions.count))") { Task { await apply() } }
                     .keyboardShortcut(.defaultAction)
                     .disabled(working || additions.isEmpty)
