@@ -3,7 +3,7 @@ import Foundation
 /// Read-only presentation of the current canvas. Inspector search never changes graph scope.
 struct LibraryGraphInspector {
     enum Group: String, CaseIterable, Identifiable {
-        case notes = "Related notes", sources = "Sources", concepts = "Concepts"
+        case notes = "Related notes", sources = "Sources", concepts = "Entities"
         var id: String {
             rawValue
         }
