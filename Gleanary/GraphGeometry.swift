@@ -247,9 +247,14 @@ struct GraphViewport {
 
     static func fit(bounds: CGRect, size: CGSize, compact: Bool) -> GraphCamera? {
         guard !bounds.isNull, !bounds.isInfinite else { return nil }
+        // Margins shrink with a narrow canvas, so they can't take nearly all of it.
+        let margin = CGSize(
+            width: min(compact ? 100 : 220, size.width * 0.25),
+            height: min(compact ? 100 : 150, size.height * 0.2)
+        )
         let scale = min(1.3, max(0.0001, min(
-            max(40, size.width - (compact ? 100 : 220)) / max(1, bounds.width),
-            max(40, size.height - (compact ? 100 : 150)) / max(1, bounds.height)
+            max(40, size.width - margin.width) / max(1, bounds.width),
+            max(40, size.height - margin.height) / max(1, bounds.height)
         )))
         return GraphCamera(
             scale: scale,

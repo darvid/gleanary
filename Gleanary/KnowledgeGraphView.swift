@@ -16,6 +16,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @State private var zoomOrigin: Double?
     @State private var keyboardNode: String?
     @State private var hasFitted = false
+    /// Whether you've panned or zoomed, or a remembered camera was restored. Until then the
+    /// graph keeps fitting as the canvas settles to its size and the layout finishes.
+    @State private var adjusted = false
     @State private var hoveredNode: String?
     @State private var labelCache = GraphLabelCache()
     @FocusState private var focused: Bool
@@ -82,6 +85,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 .simultaneousGesture(drag(size: geometry.size))
                 .simultaneousGesture(MagnifyGesture().onChanged { value in
                     hasFitted = true
+                    adjusted = true
                     if zoomOrigin == nil {
                         zoomOrigin = scale
                     }
@@ -147,6 +151,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     scale = saved.scale
                     pan = saved.pan
                     hasFitted = true
+                    adjusted = true
                 } else if !graph.positions.isEmpty, !graph.layingOut {
                     fit(size: geometry.size)
                     hasFitted = true
@@ -159,8 +164,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     scale = saved.scale
                     pan = saved.pan
                     hasFitted = true
+                    adjusted = true
                 } else {
                     hasFitted = false
+                    adjusted = false
                     fit(size: geometry.size)
                 }
             }
@@ -171,14 +178,13 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 }
             }
             .onChange(of: graph.layingOut) { _, running in
-                if !running, !hasFitted,
-                   dragOrigin == nil
-                {
+                if !running, !adjusted, dragOrigin == nil {
                     fit(size: geometry.size); hasFitted = true
                 }
             }
             .onChange(of: geometry.size) {
-                if !hasFitted, !graph.positions.isEmpty {
+                // The canvas often first lays out narrow while the panes beside it settle.
+                if !adjusted, !graph.positions.isEmpty {
                     fit(size: geometry.size)
                     hasFitted = true
                 }
@@ -574,6 +580,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     private func drag(size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 5).onChanged { value in
             hasFitted = true
+            adjusted = true
             if dragOrigin == nil {
                 dragOrigin = pan
                 draggedNode = hitNode(value.startLocation, size: size)?.id
@@ -620,6 +627,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         let newScale = min(3, max(0.0001, oldScale * exp(boundedDelta * 0.018)))
         guard newScale != oldScale else { return }
         hasFitted = true
+        adjusted = true
         let center = CGPoint(x: size.width / 2, y: size.height / 2)
         let worldX = (location.x - center.x - pan.width) / oldScale
         let worldY = (location.y - center.y - pan.height) / oldScale
@@ -653,18 +661,21 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             ControlGroup {
                 Button {
                     hasFitted = true
+                    adjusted = true
                     scale = max(0.0001, scale / 1.25)
                 } label: {
                     controlImage("minus", label: "Zoom out")
                 }.help("Zoom out")
                 Button {
                     hasFitted = true
+                    adjusted = false
                     fit(size: size)
                 } label: {
                     controlImage("arrow.up.left.and.arrow.down.right", label: "Fit graph")
                 }.help("Fit graph")
                 Button {
                     hasFitted = true
+                    adjusted = true
                     scale = min(3, scale * 1.25)
                 } label: {
                     controlImage("plus", label: "Zoom in")
