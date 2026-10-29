@@ -26,8 +26,8 @@ struct GraphSearchResults: View {
                             Text(match.explanation).font(.caption).foregroundStyle(.secondary)
                             Text(match.passage.text).textSelection(.enabled)
                             HStack {
-                                Button("Focus in graph") { focusNote(match.passage.documentID) }
-                                Button("Open note") { openNote(match.passage.documentID) }
+                                Button("Focus in Graph") { focusNote(match.passage.documentID) }
+                                Button("Open Note") { openNote(match.passage.documentID) }
                                 if let citation = match.passage.citation {
                                     Button("Source: \(citation.label)") { openSource(citation) }
                                 }
@@ -47,7 +47,7 @@ struct GraphSearchResults: View {
                 Text(library.intelligenceStatus).font(.caption).foregroundStyle(.secondary)
                     .fadesOnChange(library.intelligenceStatus)
                 Spacer()
-                Button("Summarize top 3") { Task { await library.summarize() } }
+                Button("Summarize Top 3") { Task { await library.summarize() } }
                     .disabled(library.busy || library.matches.isEmpty || !library
                         .intelligenceAvailable)
             }

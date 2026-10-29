@@ -19,7 +19,7 @@ struct GraphInspector: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Close details", systemImage: "xmark") { graph.deselect() }
+                    Button("Close Details", systemImage: "xmark") { graph.deselect() }
                         .labelStyle(.iconOnly).buttonStyle(.plain)
                 }
                 if let id = node.noteID, let job = graph.jobs.first(where: { $0.noteID == id }),
@@ -44,7 +44,7 @@ struct GraphInspector: View {
                             }
                             if graph.evidence.count == graph.evidenceLimit {
                                 if graph.evidenceLimit < 1000 {
-                                    Button("Load more evidence") { graph.moreEvidence() }
+                                    Button("Load More Evidence") { graph.moreEvidence() }
                                 } else {
                                     Text(
                                         "Showing the first 1,000 quotations. Focus a related node to narrow the view."
@@ -73,7 +73,7 @@ struct GraphInspector: View {
             Text(item.quote).font(.callout).textSelection(.enabled)
             Text("\(item.noteName) · \(item.citation?.label ?? "Note revision")")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("View evidence") {
+            Button("View Evidence") {
                 if let citation = item.citation {
                     openSource(citation)
                 } else {
@@ -94,7 +94,7 @@ struct GraphActivityView: View {
                 Text(library.status).font(.caption).fadesOnChange(library.status)
                 Spacer()
                 if library.indexingError != nil {
-                    Button("Retry indexing") { library.startIndexing() }.disabled(library.indexing)
+                    Button("Retry Indexing") { library.startIndexing() }.disabled(library.indexing)
                 }
             }
             if let error = library

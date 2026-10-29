@@ -64,7 +64,7 @@ struct BookmarkImportView: View {
             } else if let draft, plan != nil {
                 review(draft)
             } else if preparing {
-                ProgressView("Reading export…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                WorkingProgress("Reading export…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 introduction
             }

@@ -54,7 +54,7 @@ struct ActivityView: View {
             }
             if model.days.isEmpty {
                 if model.loading {
-                    ProgressView("Loading activity…").frame(
+                    WorkingProgress("Loading activity…").frame(
                         maxWidth: .infinity,
                         maxHeight: .infinity
                     )
@@ -91,13 +91,13 @@ struct ActivityView: View {
                         }
                     }
                     if model.hasMore {
-                        Button("Load older activity") { Task { await model.loadMore() } }
+                        Button("Load Older Activity") { Task { await model.loadMore() } }
                             .disabled(model.loading).padding(.vertical, 8)
                     }
                 }
                 .listStyle(.inset).accessibilityLabel("Daily activity")
                 if model.loading {
-                    ProgressView().controlSize(.small).padding(6)
+                    WorkingProgress().padding(6)
                 }
             }
             if let since = model.trackingSince {
@@ -118,7 +118,7 @@ struct ActivityView: View {
                 TextField("Search activity", text: $model.query.search)
                     .textFieldStyle(.plain).focused($searchFocused)
                 if !model.query.search.isEmpty {
-                    Button("Clear search", systemImage: "xmark.circle.fill") {
+                    Button("Clear Search", systemImage: "xmark.circle.fill") {
                         model.query.search = ""
                     }
                     .labelStyle(.iconOnly).buttonStyle(.borderless)
@@ -134,7 +134,7 @@ struct ActivityView: View {
                 Spacer(minLength: 4)
                 Button("Today") { model.query.day = Calendar.current.startOfDay(for: Date()) }
                     .help("Show today’s activity")
-                Button("Jump to date", systemImage: "calendar") { choosingDate = true }
+                Button("Jump to Date", systemImage: "calendar") { choosingDate = true }
                     .labelStyle(.iconOnly)
                     .popover(isPresented: $choosingDate) {
                         ActivityDateJump(
@@ -149,13 +149,13 @@ struct ActivityView: View {
             }
             if let day = model.query.day {
                 HStack {
-                    Button("Previous day", systemImage: "chevron.left") { moveDay(-1) }
+                    Button("Previous Day", systemImage: "chevron.left") { moveDay(-1) }
                         .labelStyle(.iconOnly)
                     Text(day.formatted(date: .abbreviated, time: .omitted)).font(.callout)
-                    Button("Next day", systemImage: "chevron.right") { moveDay(1) }
+                    Button("Next Day", systemImage: "chevron.right") { moveDay(1) }
                         .labelStyle(.iconOnly)
                     Spacer(minLength: 4)
-                    Button("All dates") { model.query.day = nil }
+                    Button("All Dates") { model.query.day = nil }
                         .help(
                             "Clear the \(day.formatted(date: .abbreviated, time: .omitted)) date filter"
                         )
@@ -166,7 +166,7 @@ struct ActivityView: View {
 
     @ViewBuilder private var inspection: some View {
         if model.inspecting {
-            ProgressView("Loading change…")
+            WorkingProgress("Loading change…")
         } else if let error = model.inspectionError {
             ContentUnavailableView {
                 Label("Change unavailable", systemImage: "exclamationmark.triangle")
@@ -242,7 +242,7 @@ struct ActivityDateJump: View {
             HStack {
                 Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
                 Spacer()
-                Button("Show day") { show(date) }
+                Button("Show Day") { show(date) }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
         }.padding(20).frame(width: 280)
@@ -287,7 +287,7 @@ private struct ActivityGroupRow: View {
                 Group {
                     ForEach(events) { ActivityEventRow(event: $0).tag($0.id) }
                     if loading {
-                        ProgressView().controlSize(.small)
+                        WorkingProgress()
                     }
                     if let error {
                         Text(error).font(.caption).foregroundStyle(.secondary)

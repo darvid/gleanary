@@ -58,7 +58,7 @@ struct LibraryGraphView: View {
                     TextField("Search this graph", text: $query).textFieldStyle(.plain)
                         .focused($searching).accessibilityLabel("Search graph")
                     if !query.isEmpty {
-                        Button("Clear search", systemImage: "xmark.circle.fill") { query = "" }
+                        Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
                             .labelStyle(.iconOnly).buttonStyle(.borderless)
                     }
                 }
@@ -68,7 +68,7 @@ struct LibraryGraphView: View {
                 )
                 if focus != nil {
                     HStack {
-                        Button("All connections", systemImage: "arrow.left") { focus = nil }
+                        Button("All Connections", systemImage: "arrow.left") { focus = nil }
                             .buttonStyle(.borderless)
                         Spacer()
                         Picker("Neighborhood", selection: $graph.depth) {
@@ -95,7 +95,7 @@ struct LibraryGraphView: View {
                     Button("Retry") { retry += 1 }
                 }
             } else if graph.loading, graph.snapshot.nodes.isEmpty {
-                ProgressView("Loading connections…").frame(
+                WorkingProgress("Loading connections…").frame(
                     maxWidth: .infinity,
                     maxHeight: .infinity
                 )
@@ -173,7 +173,7 @@ struct NoteConnectionsView: View {
                 Text(error).font(.callout).foregroundStyle(.secondary)
                 Button("Retry") { retry += 1 }
             } else if graph.loading, graph.snapshot.nodes.isEmpty {
-                ProgressView("Loading connections…")
+                WorkingProgress("Loading connections…")
             } else {
                 if !graph.snapshot.edges.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {

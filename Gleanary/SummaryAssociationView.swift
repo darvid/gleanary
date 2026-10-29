@@ -36,7 +36,7 @@ struct SummaryAssociationView: View {
             if let associated {
                 HStack {
                     Text("Associated: \(associated.name)").lineLimit(2)
-                    Button("Remove summary role") { update(associated, enabled: false) }
+                    Button("Remove Summary Role") { update(associated, enabled: false) }
                         .disabled(busy)
                         .help("Keep the note and its source reference")
                 }.font(.callout)
@@ -59,7 +59,7 @@ struct SummaryAssociationView: View {
                                 .accessibilityLabel("Remove summary association: \(note.name)")
                         }
                     } else {
-                        Button("Use as summary") { update(note, enabled: true) }
+                        Button("Use as Summary") { update(note, enabled: true) }
                             .disabled(busy)
                             .accessibilityLabel("Use \(note.name) as a summary for this source")
                     }
@@ -68,14 +68,14 @@ struct SummaryAssociationView: View {
             .overlay {
                 if notes.isEmpty {
                     if loading {
-                        ProgressView("Loading notes…")
+                        WorkingProgress("Loading notes…")
                     } else {
                         ContentUnavailableView("No notes found", systemImage: "note.text")
                     }
                 }
             }
             if offset < total {
-                Button("Load more notes") { Task { await load(reset: false) } }
+                Button("Load More Notes") { Task { await load(reset: false) } }
                     .disabled(busy || loading)
             }
         }

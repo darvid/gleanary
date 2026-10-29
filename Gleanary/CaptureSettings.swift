@@ -167,7 +167,7 @@ struct CaptureSettingsView: View {
                     }
                 }
                 .labelsHidden().fixedSize()
-                Button("Remove override for \(category.label)", systemImage: "minus.circle") {
+                Button("Remove Override for \(category.label)", systemImage: "minus.circle") {
                     setOverride(category.code, nil)
                 }
                 .labelStyle(.iconOnly).buttonStyle(.borderless)

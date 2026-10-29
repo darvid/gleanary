@@ -37,7 +37,7 @@ struct LinkedSourcesView: View {
                             .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                         Spacer()
                         if available.count > 1 {
-                            Button("Add all", systemImage: "plus") { add(available) }
+                            Button("Add All", systemImage: "plus") { add(available) }
                                 .buttonStyle(.borderless)
                                 .disabled(!context.canAdd)
                                 .help(
@@ -48,7 +48,7 @@ struct LinkedSourcesView: View {
                     }
                     if let error = model.error {
                         Text(error).font(.callout).foregroundStyle(.secondary)
-                        Button("Check again") {
+                        Button("Check Again") {
                             Task { await model.load(document, from: context.store) }
                         }
                     }
@@ -74,7 +74,7 @@ struct LinkedSourcesView: View {
                 }
             }
         ), presenting: confirmingSource) { source in
-            Button("Create summary") {
+            Button("Create Summary") {
                 if let id = source.noteID {
                     context.createAnotherSummary?(id)
                 }
@@ -140,9 +140,9 @@ struct LinkedSourcesView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             if source.noteID != nil {
                 Menu {
-                    Button("Use as summary for this source…") { associatingSource = source }
+                    Button("Use as Summary for This Source…") { associatingSource = source }
                     if !source.summaries.isEmpty, context.createAnotherSummary != nil {
-                        Button("Create another summary…") { confirmingSource = source }
+                        Button("Create Another Summary…") { confirmingSource = source }
                             .disabled(!context.canAdd)
                     }
                 } label: {

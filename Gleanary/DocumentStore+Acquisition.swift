@@ -149,10 +149,24 @@ extension DocumentStore {
         guard !noteIDs.isEmpty else { return [:] }
         return try readyDatabase().read { db in
             let placeholders = Array(repeating: "?", count: noteIDs.count).joined(separator: ",")
-            let candidates = try Self.acquisitionCandidates(
+            var candidates = try Self.acquisitionCandidates(
                 sql: "foundInNoteID IN (\(placeholders)) AND state IN ('suggested','approved','queued')",
                 arguments: StatementArguments(noteIDs.map(\.uuidString)), in: db
             )
+            // A save whose capture failed says so instead of looking like it's still saving.
+            for index in candidates.indices {
+                guard candidates[index].state == .queued,
+                      let job = candidates[index].captureJobID,
+                      let row = try Row.fetchOne(
+                          db,
+                          sql: "SELECT error FROM ingestion_jobs WHERE id = ? AND state IN ('failed','cancelled')",
+                          arguments: [job.uuidString]
+                      )
+                else { continue }
+                candidates[index].captureError = (row[
+                    "error"
+                ] as String?) ?? "The capture was cancelled."
+            }
             return Dictionary(grouping: candidates, by: \.foundInNoteID)
         }
     }
@@ -194,12 +208,14 @@ extension DocumentStore {
         }
     }
 
-    /// Only a suggestion can be dismissed; a queued save is undone like any capture.
+    /// A suggestion, or a save whose capture failed, can be dismissed; a save in progress or
+    /// done is undone like any capture.
     func dismissAcquisition(_ id: UUID) throws {
         try readyDatabase().write { db in
             try db.execute(sql: """
             UPDATE acquisition_candidates SET state = 'rejected', reason = 'Dismissed', updatedAt = ?
-            WHERE id = ? AND state = 'suggested'
+            WHERE id = ? AND (state = 'suggested' OR (state = 'queued' AND captureJobID IN (
+                SELECT id FROM ingestion_jobs WHERE state IN ('failed','cancelled'))))
             """, arguments: [Date().timeIntervalSince1970, id.uuidString])
         }
     }

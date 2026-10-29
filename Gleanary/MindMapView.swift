@@ -88,15 +88,15 @@ struct MindMapView: View {
             }
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 12) {
-                    Button("Fit map", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    Button("Fit Map", systemImage: "arrow.up.left.and.arrow.down.right") {
                         fit(layout: layout, size: geometry.size)
                     }
                     .labelStyle(.iconOnly).buttonStyle(.borderless).help("Fit map")
-                    Button("Zoom out", systemImage: "minus") { scale = max(0.35, scale * 0.82) }
+                    Button("Zoom Out", systemImage: "minus") { scale = max(0.35, scale * 0.82) }
                         .labelStyle(.iconOnly).buttonStyle(.borderless)
                     Text("\(Int(scale * 100))%").font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary).frame(width: 42)
-                    Button("Zoom in", systemImage: "plus") { scale = min(2.2, scale * 1.18) }
+                    Button("Zoom In", systemImage: "plus") { scale = min(2.2, scale * 1.18) }
                         .labelStyle(.iconOnly).buttonStyle(.borderless)
                 }
                 .padding(10)

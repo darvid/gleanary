@@ -78,7 +78,7 @@ struct ChatGPTSettings: View {
             accountRow
             if connection.signingIn {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                    WorkingProgress()
                     Text("Signing in with ChatGPT…").font(.callout)
                     Spacer()
                     Button("Cancel") { connection.cancelSignIn() }.controlSize(.small)
@@ -108,7 +108,7 @@ struct ChatGPTSettings: View {
             }
             if connection.busy, !connection.refreshingModels {
                 HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
+                    WorkingProgress()
                     Text("Updating connection…").font(.caption)
                 }.padding(.vertical, 12)
             }
@@ -130,7 +130,7 @@ struct ChatGPTSettings: View {
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
             } label: {
                 // Outside a List, macOS only toggles from the chevron, not the label.
-                Button("How AI is used") { withAnimation { showingDetails.toggle() } }
+                Button("How AI Is Used") { withAnimation { showingDetails.toggle() } }
                     .buttonStyle(.plain)
             }.font(.callout)
         }
@@ -145,7 +145,7 @@ struct ChatGPTSettings: View {
             if let prompt = connection.providerPrompt {
                 switch prompt {
                 case .sharing:
-                    Button("Allow and use ChatGPT") { connection.confirmProviderSelection(prompt) }
+                    Button("Allow and Use ChatGPT") { connection.confirmProviderSelection(prompt) }
                 case .signIn:
                     Button("Continue with ChatGPT") { connection.confirmProviderSelection(prompt) }
                 }
@@ -163,7 +163,7 @@ struct ChatGPTSettings: View {
             }
         }
         .alert("You're using your ChatGPT plan", isPresented: $connection.welcome) {
-            Button("Got it") { connection.acknowledgeWelcome() }
+            Button("Got It") { connection.acknowledgeWelcome() }
         } message: {
             Text(
                 "Eligible AI requests in Gleanary use your ChatGPT plan. Manage usage in ChatGPT Settings. Allow sharing with OpenAI, then choose ChatGPT as your provider."
@@ -193,11 +193,11 @@ struct ChatGPTSettings: View {
                 }
                 if !connection.accounts.isEmpty {
                     Menu {
-                        Button("Add account…") { connection.signIn() }
+                        Button("Add Account…") { connection.signIn() }
                         Button("Reconnect…") { connection.signIn(accountID: connection.activeID) }
                         if connection.activeAccount?.signedIn == true {
                             Divider()
-                            Button("Sign out", role: .destructive) {
+                            Button("Sign Out", role: .destructive) {
                                 Task { await connection.signOut() }
                             }
                         }

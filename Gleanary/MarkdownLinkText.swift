@@ -7,6 +7,8 @@ struct MarkdownLinkText: NSViewRepresentable {
     let font: NSFont
     var color = NSColor.labelColor
     var lineSpacing: CGFloat = 0
+    /// Formulas whose placeholders the text holds, from `MathMarkdown.extractingInline`.
+    var formulas: [MathMarkdown.Formula] = []
     @Environment(\.openURL) private var openURL
 
     func makeCoordinator() -> Coordinator {
@@ -35,6 +37,10 @@ struct MarkdownLinkText: NSViewRepresentable {
     func updateNSView(_ view: NSTextView, context: Context) {
         context.coordinator.openURL = openURL
         let content = Self.content(text, font: font, color: color, lineSpacing: lineSpacing)
+        MathMarkdown.attach(
+            formulas, in: content, size: font.pointSize,
+            dark: context.environment.colorScheme == .dark
+        )
         if view.textStorage?.isEqual(to: content) != true {
             view.textStorage?.setAttributedString(content)
         }
@@ -55,7 +61,7 @@ struct MarkdownLinkText: NSViewRepresentable {
 
     static func content(
         _ text: AttributedString, font: NSFont, color: NSColor, lineSpacing: CGFloat
-    ) -> NSAttributedString {
+    ) -> NSMutableAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = lineSpacing
         let content = NSMutableAttributedString(string: "")

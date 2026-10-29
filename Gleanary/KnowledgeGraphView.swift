@@ -55,10 +55,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                         }
                     }
                     if let previousID = accessibilityPage.previousID {
-                        Button("Previous graph items") { selectAccessibleNode(previousID) }
+                        Button("Previous Graph Items") { selectAccessibleNode(previousID) }
                     }
                     if let nextID = accessibilityPage.nextID {
-                        Button("Next graph items") { selectAccessibleNode(nextID) }
+                        Button("Next Graph Items") { selectAccessibleNode(nextID) }
                     }
                 }
                 // Selection must not wait for the system's double-click timeout.
@@ -677,7 +677,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             if !compact, graph.snapshot.nodes.count < graph.snapshot.totalNodes,
                graph.visibleLimit < graph.maximumVisibleNodes
             {
-                Button("Show more") { graph.expand() }.controlSize(.small)
+                Button("Show More") { graph.expand() }.controlSize(.small)
             }
             if graph.snapshot.truncatedEdges {
                 Text("Connections limited to 1,200").font(.caption)

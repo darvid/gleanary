@@ -47,7 +47,7 @@ struct GleanaryApp: App {
                 if let conversation {
                     ContentView(library: library, conversation: conversation)
                 } else {
-                    ProgressView("Opening workspace…")
+                    WorkingProgress("Opening workspace…")
                         .task { ensureConversation() }
                 }
             }
@@ -62,7 +62,7 @@ struct GleanaryApp: App {
             if let conversation {
                 ConversationSettings(model: conversation, library: library)
             } else {
-                ProgressView().frame(
+                WorkingProgress().frame(
                     width: ConversationSettings.size.width,
                     height: ConversationSettings.size.height
                 )

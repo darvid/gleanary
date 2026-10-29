@@ -436,6 +436,30 @@ struct CaptureTests {
         #expect(document.authors == ["Synthetic Writer"])
     }
 
+    @Test @MainActor func pageFormulasAreCapturedAsTheirTeX() async throws {
+        _ = NSApplication.shared
+        let extra = #"""
+        <p>KaTeX gives <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi></mrow><annotation encoding="application/x-tex">a_i^2</annotation></semantics></math></span><span class="katex-html">a i 2</span></span> inline.</p>
+        <span class="katex-display"><span class="katex"><span class="katex-mathml"><math display="block"><semantics><mrow></mrow><annotation encoding="application/x-tex">\sum_{k=1}^n k</annotation></semantics></math></span></span></span>
+        <p>Wikipedia writes <span class="mwe-math-element"><span class="mwe-math-mathml-inline"><math alttext="{\displaystyle e^{i\pi}}"></math></span><img class="mwe-math-fallback-image-inline" alt="{\displaystyle e^{i\pi}}"></span> this way.</p>
+        <p>MathJax 2 keeps <span class="MathJax">junk</span><script type="math/tex">\frac{a}{b}</script> in scripts.</p>
+        <p>MathML alone has <math><msup><mi>y</mi><mn>2</mn></msup></math> in it.</p>
+        <p>Browser-typeset TeX like $\alpha_1 * \beta_2$ stays unescaped, while 2*3 and_this do not.</p>
+        """#
+        let analysis = try HTMLExtractor.analyze(Self.article(extra), url: nil)
+        let document = try await HTMLExtractor.extract(analysis, url: nil)
+        let markdown = document.markdown
+        #expect(markdown.contains("KaTeX gives $a_i^2$ inline."))
+        #expect(markdown.contains("$$\\sum_{k=1}^n k$$"))
+        #expect(markdown.contains("Wikipedia writes $e^{i\\pi}$ this way."))
+        #expect(markdown.contains("MathJax 2 keeps $\\frac{a}{b}$ in scripts."))
+        #expect(!markdown.contains("junk"))
+        #expect(markdown.contains("MathML alone has ${y}^{2}$ in it."))
+        #expect(markdown.contains("$\\alpha_1 * \\beta_2$"))
+        #expect(markdown.contains("2\\*3 and\\_this"))
+        #expect(document.blocks.contains { $0.text.contains("$a_i^2$") })
+    }
+
     @Test @MainActor func refreshDoesNotOverwriteEditsOrResurrectDeletion() async throws {
         _ = NSApplication.shared
         let fixture = try CaptureFixture(); defer { fixture.clean() }

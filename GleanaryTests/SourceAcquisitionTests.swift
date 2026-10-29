@@ -87,6 +87,13 @@ struct RobotsFetcher: SourceFetching {
     }
 }
 
+/// Refuses the recommended essay, as a site that blocks automated fetches does.
+struct ForbiddenFetcher: SourceFetching {
+    func fetch(_ url: URL) async throws -> DownloadedContent {
+        throw CaptureError.http(url.absoluteString == CreatorVideoFixture.essay ? 403 : 404)
+    }
+}
+
 /// Reads every link's wording as one fixed intent, or fails.
 struct FixedJudge: RecommendationJudging {
     let intent: LinkIntent?
@@ -772,6 +779,48 @@ struct FixedRelevance: LinkRelevanceScoring {
             """, arguments: StatementArguments([video.id.uuidString, essay.id.uuidString].sorted()))
         }
         #expect(linked?.hasPrefix("Recommended by the creator") == true)
+    }
+
+    @Test func aSaveWhoseCaptureFailedSaysSoAndCanBeDismissed() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
+        _ = try await store.open()
+        let engine = IngestionEngine(
+            store: store, fetcher: ForbiddenFetcher(), youtube: CreatorVideoFixture(),
+            settings: { CaptureSettings(summarize: false, previews: false, acquisition: .balanced) }
+        )
+        _ = try await engine.enqueue(
+            "https://www.youtube.com/watch?v=abcdefghijk", summarizeLink: false
+        )
+        try await engine.run()
+        let video = try #require(await store.documents().first)
+        let essay = try #require(await store.acquisitionSuggestions(foundIn: [video.id])[video.id]?
+            .first { $0.url.absoluteString == CreatorVideoFixture.essay })
+        #expect(essay.state == .queued)
+        #expect(essay.captureError?.isEmpty == false)
+
+        try await store.dismissAcquisition(essay.id)
+        #expect(try await store.acquisitionCandidate(id: essay.id)?.state == .rejected)
+    }
+
+    @Test func youTubeSuggestionsAreTitledFromOEmbed() throws {
+        let short = try #require(URL(string: "https://youtu.be/abcdefghijk?t=30"))
+        let oEmbed = try #require(PageTitle.oEmbedURL(for: short))
+        #expect(oEmbed.host == "www.youtube.com" && oEmbed.path == "/oembed")
+        #expect(oEmbed.query?.contains("watch%3Fv%3Dabcdefghijk") == true)
+        #expect(try PageTitle
+            .oEmbedURL(for: #require(URL(string: "https://example.org/essay"))) == nil)
+        #expect(PageTitle.read(oEmbed: Data(#"{"title":"A  synthetic\ntalk","type":"video"}"#.utf8))
+            == "A synthetic talk")
+        #expect(PageTitle.read(oEmbed: Data("not json".utf8)) == nil)
+    }
+
+    @Test func suggestedReadingExplainsWhatTheLevelSavesOnItsOwn() {
+        #expect(SourceAcquisitionLevel.suggest.suggestionNote.hasPrefix("Suggest saves nothing"))
+        #expect(SourceAcquisitionLevel.eager.suggestionNote
+            .hasPrefix("Eager saves up to 10 links per source and 5 per site a day"))
+        #expect(SourceAcquisitionLevel.balanced.suggestionNote.contains("Settings › Capture"))
     }
 
     @Test func offRecordsNothingAndDeferredSavesWaitForTheCaller() async throws {

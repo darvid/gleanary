@@ -68,3 +68,24 @@ struct StageProgressText: View {
         }
     }
 }
+
+/// Indeterminate progress, as the same quiet pulse as Chat's working state so every wait in the
+/// app looks alike. A label sits beside the dot in secondary text.
+struct WorkingProgress: View {
+    var label: String?
+
+    init(_ label: String? = nil) {
+        self.label = label
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ChatWorkingIndicator(color: .secondary)
+            if let label {
+                Text(label).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label ?? "In progress")
+    }
+}

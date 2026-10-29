@@ -44,7 +44,7 @@ struct AudioOptionsView: View {
             HStack {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(submitting)
                 Spacer()
-                Button("Download audio and transcribe") {
+                Button("Download Audio and Transcribe") {
                     submitting = true
                     Task {
                         defer { submitting = false }

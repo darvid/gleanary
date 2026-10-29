@@ -20,7 +20,7 @@ struct DocumentGridView: View {
         .onDisappear { model.pause() }
         .overlay {
             if model.loading {
-                ProgressView("Loading documents…")
+                WorkingProgress("Loading documents…")
             } else if model.total == 0, model.error == nil {
                 ContentUnavailableView(
                     model.query.isEmpty ? "Your library starts here" : "No matching documents",

@@ -21,7 +21,7 @@ struct SourceSummaryNavigation: View {
 
     @ViewBuilder private var controls: some View {
         if summaries.count == 1, let summary = summaries.first {
-            Button("Open summary", systemImage: "note.text") { openSummary(summary.id) }
+            Button("Open Summary", systemImage: "note.text") { openSummary(summary.id) }
                 .help("Open saved summary: \(summary.name)")
                 .accessibilityLabel("Open summary: \(summary.name)")
         } else if !summaries.isEmpty {
@@ -32,7 +32,7 @@ struct SourceSummaryNavigation: View {
             }
         }
         if showsSource {
-            Button("View source", systemImage: "doc.text.magnifyingglass", action: viewSource)
+            Button("View Source", systemImage: "doc.text.magnifyingglass", action: viewSource)
                 .help("Read the retained captured text without downloading it again")
         }
     }
