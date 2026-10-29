@@ -20,6 +20,7 @@ actor AgentCoordinator {
         fetcher: any SourceFetching = SourceFetcher(),
         inference: any ConversationInferring = AppleConversationInference(),
         screenshotter: (any PageScreenshotting)? = nil,
+        pageRenderer: (any PageRendering)? = nil,
         youtube: any YouTubeProviding = NativeYouTubeProvider(),
         graphProvider: any GraphExtracting = AppleGraphExtractor(),
         captureSettings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
@@ -33,7 +34,7 @@ actor AgentCoordinator {
         defaultGraphProvider = graphProvider
         ingestion = IngestionEngine(
             store: store, fetcher: fetcher, youtube: youtube, screenshotter: screenshotter,
-            settings: captureSettings,
+            pageRenderer: pageRenderer, settings: captureSettings,
             recommendationJudge: inference as? any RecommendationJudging
         )
         search = SearchEngine(store: store)

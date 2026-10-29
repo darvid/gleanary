@@ -298,6 +298,7 @@ extension IngestionEngine {
         // Automatic saves cost no AI calls until someone asks for a summary.
         request.summarizeLink = false
         request.acquisitionHop = candidate.hop
+        request.automatic = automatic ? true : nil
         let job = try await store.enqueueCapture(request)
         try await store.markAcquisitionQueued(candidate.id, jobID: job)
         var queued = candidate

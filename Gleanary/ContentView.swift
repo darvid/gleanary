@@ -246,6 +246,8 @@ struct ContentView: View {
         .sheet(item: $library.browserJob) { job in
             if let url = job.request.url, let target = try? MediaTarget.parse(url) {
                 SocialBrowserView(job: job, target: target, library: library)
+            } else if let url = job.request.url {
+                PageBrowserView(job: job, url: url, library: library)
             }
         }
         .sheet(item: $library.audioJob) { AudioOptionsView(job: $0, library: library) }
@@ -1110,9 +1112,7 @@ struct ContentView: View {
                         .labelStyle(LibrarySidebarLabelStyle(color: color))
                     Spacer()
                     if library.automations.running != nil {
-                        Image(systemName: "progress.indicator")
-                            .symbolEffect(.variableColor.iterative, options: .repeating)
-                            .font(.caption).foregroundStyle(color.opacity(0.72))
+                        WorkingProgress(color: color.opacity(0.72))
                             .help("An automation is running")
                             .accessibilityLabel("An automation is running")
                     }
@@ -1555,12 +1555,8 @@ struct ContentView: View {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
                         .accessibilityLabel("Needs attention")
                 } else if !job.state.terminal {
-                    // A symbol, not a ProgressView: it sits on the title's baseline like the
-                    // attention icon, and its animation follows Reduce Motion.
-                    Image(systemName: "progress.indicator")
-                        .symbolEffect(.variableColor.iterative, options: .repeating)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("In progress")
+                    // The app's working dot, which holds still with Reduce Motion.
+                    WorkingProgress()
                 }
                 CaptureRowHeading(presentation: presentation)
             }
@@ -1830,8 +1826,7 @@ struct LibraryDocumentRow: View {
                         Text(activity).lineLimit(1)
                             .fadesOnChange(activity)
                     } icon: {
-                        Image(systemName: "progress.indicator")
-                            .symbolEffect(.variableColor.iterative, options: .repeating)
+                        ChatWorkingIndicator(color: .secondary)
                     }
                     .font(.caption).foregroundStyle(.secondary)
                 } else if let coverage = document.coverage.flatMap(Coverage.init(rawValue:)), [

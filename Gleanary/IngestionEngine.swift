@@ -14,6 +14,7 @@ actor IngestionEngine {
     /// made while ChatGPT is still loading doesn't quietly use Apple Intelligence.
     private var summarizerChosen: Bool
     let screenshotter: (any PageScreenshotting)?
+    let pageRenderer: (any PageRendering)?
     /// Read at each capture, so Settings changes apply to the next one.
     let settings: @Sendable () -> CaptureSettings
     /// How close found links are to the library, for the eager acquisition levels.
@@ -37,6 +38,7 @@ actor IngestionEngine {
         summarizer: any LinkSummarizing = AppleLinkSummarizer(),
         summarizerChosen: Bool = true,
         screenshotter: (any PageScreenshotting)? = nil,
+        pageRenderer: (any PageRendering)? = nil,
         settings: @escaping @Sendable () -> CaptureSettings = { CaptureSettings() },
         relevance: (any LinkRelevanceScoring)? = nil,
         recommendationJudge: (any RecommendationJudging)? = nil
@@ -52,6 +54,7 @@ actor IngestionEngine {
         self.transcriber = transcriber
         self.summarizer = summarizer
         self.screenshotter = screenshotter
+        self.pageRenderer = pageRenderer
         artifacts = ArtifactStore(root: store.url.deletingLastPathComponent()
             .appending(path: "artifacts"))
     }
@@ -184,8 +187,11 @@ actor IngestionEngine {
             } catch let error as ChatGPTError {
                 try await store.failCapture(job, error: error.localizedDescription)
             } catch let error as CaptureError {
+                // Only a capture you asked for opens the browser; an automatic one just fails.
                 try await store.failCapture(
-                    job, error: error.localizedDescription, retryable: error.retryable
+                    job, error: error.localizedDescription,
+                    recovery: job.request.automatic == true ? nil : error.recovery,
+                    retryable: error.retryable
                 )
             } catch {
                 try await store.failCapture(
@@ -545,7 +551,7 @@ actor IngestionEngine {
         let acquired: [Artifact] = if let target = try MediaTarget.parse(url) {
             try await acquireMedia(target, job: job, changed: changed)
         } else {
-            try await [download(url)]
+            try await [downloadOrRender(url, job: job, changed: changed)]
         }
         try await store.checkpoint(job, acquired: acquired, progress: "Original retained locally")
         await changed()
@@ -606,6 +612,49 @@ actor IngestionEngine {
                 )
             return document
         }
+    }
+
+    /// A site that refuses a plain request, such as one behind Cloudflare's check, may let a
+    /// browser through. For a capture you asked for, the page loads in a private, unseen
+    /// browser; if its check wants a person, the capture offers the browser window instead.
+    private func downloadOrRender(
+        _ url: URL, job: CaptureJob, changed: @escaping @Sendable () async -> Void
+    ) async throws -> Artifact {
+        do {
+            return try await download(url)
+        } catch let CaptureError.http(status) where Self.browserMayPass(status) {
+            guard job.request.automatic != true, let pageRenderer else {
+                throw CaptureError.http(status)
+            }
+            try await store.checkpoint(job, acquired: [], progress: "Opening in a private browser")
+            await changed()
+            guard let page = try await pageRenderer.render(url) else {
+                throw CaptureError.needsVerification
+            }
+            return try await retainRendered(page)
+        }
+    }
+
+    nonisolated static func browserMayPass(_ status: Int) -> Bool {
+        [401, 403, 429, 503].contains(status)
+    }
+
+    /// A page you loaded in the private browser, kept as its HTML original.
+    func retainRendered(_ page: RenderedPage) async throws -> Artifact {
+        try Self.requireDocumentSource(page.url)
+        return try await artifacts.retain(
+            Data(page.html.utf8), kind: .html,
+            name: page.url.lastPathComponent.isEmpty ? page.url.host ?? "Web capture"
+                : page.url.lastPathComponent,
+            sourceURL: page.url, textEncoding: "utf-8"
+        )
+    }
+
+    /// Resumes a capture with the page you loaded in the private browser window.
+    func submitRenderedPage(_ page: RenderedPage, job: CaptureJob) async throws {
+        let artifact = try await retainRendered(page)
+        try Task.checkCancellation()
+        try await store.resumeMedia(job, artifacts: [artifact])
     }
 
     private func download(_ url: URL) async throws -> Artifact {

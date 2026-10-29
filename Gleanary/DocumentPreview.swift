@@ -479,7 +479,7 @@ struct DocumentPreview: View {
             }
             AddToChatButton(target: .note(document.id), compact: compact)
             if generatingSummary {
-                SummarizingButton(compact: compact, cancel: cancelSummary)
+                SummarizingButton(cancel: cancelSummary)
             } else if model.canGenerateSummary, model.summaries.isEmpty, showsSummaryActions {
                 Button { generateSummary(document) } label: {
                     actionLabel("Summarize", systemImage: "sparkles", compact: compact)
@@ -614,9 +614,7 @@ struct DocumentPreview: View {
                             .lineLimit(1).truncationMode(.tail)
                             .fadesOnChange(step)
                     } icon: {
-                        Image(systemName: "progress.indicator")
-                            .symbolEffect(.variableColor.iterative, options: .repeating)
-                            .foregroundStyle(.secondary)
+                        ChatWorkingIndicator(color: .secondary)
                     }
                     .help(
                         "Fetching the full page. This bookmark's notes will be replaced by the page and its summary."
@@ -1155,8 +1153,9 @@ struct RowDisclosure<Content: View>: View {
 
 /// Summarize's place while it runs: one button showing progress, with a stop mark that says
 /// what a click does, instead of a loose spinner beside a separate Cancel button.
+/// It keeps its words even where other actions are icons: a dot alone doesn't say what's
+/// happening.
 private struct SummarizingButton: View {
-    let compact: Bool
     /// Nil shows progress only, for a summary the page fetch is writing.
     let cancel: (() -> Void)?
 
@@ -1164,9 +1163,7 @@ private struct SummarizingButton: View {
         Button(action: cancel ?? {}) {
             HStack(spacing: 6) {
                 ChatWorkingIndicator(color: .secondary)
-                if !compact {
-                    Text("Summarizing…")
-                }
+                Text("Summarizing…")
                 if cancel != nil {
                     Image(systemName: "xmark.circle.fill")
                         .symbolRenderingMode(.hierarchical)
@@ -1261,8 +1258,7 @@ private struct FilingRow: View {
             Label {
                 Text("Asking the Librarian…")
             } icon: {
-                Image(systemName: "progress.indicator")
-                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                ChatWorkingIndicator(color: .secondary)
             }
             .font(.callout).foregroundStyle(.secondary)
         case let .suggested(suggestion):

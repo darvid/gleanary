@@ -38,6 +38,9 @@ struct CaptureRequest: Codable, Sendable {
     /// Hops from something you saved yourself, for links Gleanary followed on its own; nil
     /// for your own captures.
     var acquisitionHop: Int? = nil
+    /// True for a save Gleanary made without asking. A site's refusal stands for those; one
+    /// you asked for may be opened in a browser instead.
+    var automatic: Bool? = nil
 
     static func webLink(_ url: URL, referencing noteID: UUID? = nil) throws -> CaptureRequest {
         let media = try MediaTarget.parse(url)
@@ -285,8 +288,17 @@ struct CaptureDetail: Identifiable, Sendable {
 
 enum CaptureError: LocalizedError {
     case emptyInput, unsafeURL, unsupported, tooLarge, tooManyPages, lockedPDF, invalidPDF
-    case noContent, needsBrowser, extractionFailed, resourceMissing, staleJob
+    case noContent, needsBrowser, needsVerification, extractionFailed, resourceMissing, staleJob
     case http(Int), downloadFailed, missingArtifact, deletedCapture
+
+    /// What a person can do about it: a page refused to plain requests can be opened in the
+    /// private browser.
+    var recovery: CaptureRecovery? {
+        switch self {
+        case .needsVerification, .needsBrowser: .browser
+        default: nil
+        }
+    }
 
     /// A dropped connection, a timeout or a server having a bad day; never a refusal.
     var retryable: Bool {
@@ -307,6 +319,7 @@ enum CaptureError: LocalizedError {
         case .lockedPDF: "This PDF requires a password. Unlock a copy locally and attach it again."
         case .invalidPDF: "The downloaded or attached file is not a readable PDF."
         case .noContent: "No usable document text was found. The page may require a browser, or the document may contain only unsupported visual content."
+        case .needsVerification: "The site asks a browser to confirm a person is visiting. Open the page in Gleanary’s private browser, complete the check, then capture it."
         case .needsBrowser: "This page appears to require login, browser verification, or JavaScript. Open it in your browser and paste the text or save a PDF instead."
         case .extractionFailed: "Local extraction failed or timed out. The original is retained; retry the capture."
         case .resourceMissing: "A bundled extraction resource is missing. Rebuild or reinstall Gleanary."

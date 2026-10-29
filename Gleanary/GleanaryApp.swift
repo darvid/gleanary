@@ -16,6 +16,7 @@ struct GleanaryApp: App {
         #endif
         let library = LibraryModel(
             followsProvider: true, screenshotter: WebPageScreenshotter(),
+            pageRenderer: WebKitPageRenderer(),
             captureSettings: CaptureSettings.current,
             schedulesAutomations: true
         )

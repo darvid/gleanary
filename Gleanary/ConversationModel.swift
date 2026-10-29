@@ -52,6 +52,7 @@ final class ConversationModel {
         self.coordinator = coordinator ??
             AgentCoordinator(
                 store: store, screenshotter: WebPageScreenshotter(),
+                pageRenderer: WebKitPageRenderer(),
                 captureSettings: CaptureSettings.current,
                 writingStyles: { WritingStyleChoice.current() }
             )
