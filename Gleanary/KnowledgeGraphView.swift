@@ -240,19 +240,21 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 inferred.line(from: start, to: end)
             }
         }
-        let opacity = contrast == .increased ? 0.9 : (scale < 0.3 ? 0.2 : 0.5)
+        // Faint enough that a dense graph reads as its nodes; a selection's lines stand out.
+        let opacity = contrast == .increased ? 0.9 : (scale < 0.3 ? 0.12 : 0.28)
+        let width = contrast == .increased ? 1 : 0.75
         for path in solid.paths {
             context.stroke(
                 Path(path),
                 with: .color(.secondary.opacity(opacity)),
-                lineWidth: 1
+                lineWidth: width
             )
         }
         for path in inferred.paths {
             context.stroke(
                 Path(path),
                 with: .color(.secondary.opacity(opacity)),
-                style: StrokeStyle(lineWidth: 1, dash: [4, 4])
+                style: StrokeStyle(lineWidth: width, dash: [3, 4])
             )
         }
         for path in highlighted.paths {

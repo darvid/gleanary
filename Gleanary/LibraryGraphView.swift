@@ -33,8 +33,9 @@ struct LibraryGraphView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 16) {
                     LibraryKindPicker(selection: $kind)
-                    Toggle("Concepts", isOn: $graph.includesConcepts).toggleStyle(.checkbox)
-                        .help("Include saved, evidence-backed concepts. No analysis is started.")
+                    Toggle("Entities", isOn: $graph.includesConcepts).toggleStyle(.switch)
+                        .controlSize(.small)
+                        .help("Include saved, evidence-backed entities. No analysis is started.")
                     Spacer(minLength: 16)
                     HStack(spacing: 12) {
                         GraphArrangementControl(graph: graph)
@@ -81,7 +82,7 @@ struct LibraryGraphView: View {
                     Text(graph.snapshot.nodes.contains(where: { $0.kind != .document })
                         ? "Dashed lines are extracted relationships. Select a connection to inspect its evidence."
                         :
-                        "No saved concepts in this view. This switch reads existing analysis; it does not start extraction.")
+                        "No saved entities in this view. This switch reads existing analysis; it does not start extraction.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.padding(18)
