@@ -61,6 +61,15 @@ struct GraphGeometryTests {
         ) == nil)
     }
 
+    @Test func aNarrowCanvasStillFitsTheGraphAcrossMostOfIt() throws {
+        // A library graph's settled width, in a canvas the panes beside it have squeezed.
+        let bounds = CGRect(x: -1040, y: -800, width: 2080, height: 1600)
+        let size = CGSize(width: 290, height: 700)
+        let camera = try #require(GraphViewport.fit(bounds: bounds, size: size, compact: false))
+        #expect(bounds.width * camera.scale >= size.width * 0.75 - 1)
+        #expect(bounds.width * camera.scale <= size.width)
+    }
+
     @Test func largeGraphsFitAndCoordinateTransformsRoundTrip() throws {
         let size = CGSize(width: 1200, height: 800)
         let bounds = CGRect(x: -10000, y: -9000, width: 20000, height: 18000)
