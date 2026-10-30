@@ -20,6 +20,10 @@ struct ContentView: View {
     @State private var readerTarget: ChatAttachmentTarget?
     @State private var readerPreview = DocumentPreviewModel()
     var initialSelection: UUID?
+    /// Whether this is the main window, which reopens where it was last left.
+    private let restoresWindow: Bool
+    /// The window as the previous launch left it.
+    private let savedWindow: SavedLibraryWindow?
     @State private var scope: LibraryScope? = .all
     @AppStorage("libraryKindFilter") private var kindFilter = LibraryKindFilter.all
     @State private var sidebarVisible = true
@@ -76,8 +80,16 @@ struct ContentView: View {
     ) {
         self.library = library
         self.conversation = conversation
-        _chatting = State(initialValue: conversation != nil && initialSelection == nil)
         self.initialSelection = initialSelection
+        restoresWindow = conversation != nil && initialSelection == nil
+        savedWindow = restoresWindow ? SavedLibraryWindow.load() : nil
+        let destination = savedWindow?.destination ?? (initialSelection == nil ? .chat : .library)
+        _chatting = State(initialValue: conversation != nil && destination == .chat)
+        _automating = State(initialValue: destination == .automations)
+        _showingActivity = State(initialValue: destination == .activity)
+        _showingTasks = State(initialValue: destination == .tasks)
+        _showingEntities = State(initialValue: destination == .entities)
+        _scope = State(initialValue: savedWindow.map(\.scope) ?? .all)
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
         _atlas = State(initialValue: atlasModel ?? KnowledgeAtlasModel())
         _graph = State(initialValue: graphModel ?? LibraryGraphModel())
@@ -258,6 +270,9 @@ struct ContentView: View {
             library.documentGrid.scope = scope ?? .all
             library.documentGrid.kindFilter = kindFilter
             await library.documentGrid.reloadIfNeeded()
+            if let savedWindow, let view = savedWindow.atlas, savedWindow.kindFilter == kindFilter {
+                atlas.restore(view, scope: savedWindow.scope ?? .all, kind: kindFilter)
+            }
             await atlas.load(from: library.store)
             showInAtlas(scope ?? .all)
             if let initialSelection {
@@ -267,7 +282,18 @@ struct ContentView: View {
                 }
             }
             await loadCategories()
+            // A category deleted since the last launch can't be reopened.
+            if case let .category(id) = scope, !categories.contains(where: { $0.id == id }) {
+                scope = .all
+            }
             await library.refreshCaptures()
+        }
+        .task(id: windowState) {
+            guard restoresWindow else { return }
+            // Pans and zooms change this every frame; write once they settle.
+            do { try await Task.sleep(for: .milliseconds(500)) }
+            catch { return }
+            windowState.save()
         }
         .task(
             id: "\(library.ready)/\(library.documentGrid.generation)/\(chatting)/\(automating)/\(showingActivity)"
@@ -920,6 +946,23 @@ struct ContentView: View {
             .map { atlas.layout.tiles[$0] }
             .filter { $0.node.kind != .direct }
             .map { (id: $0.id, label: $0.node.label) }
+    }
+
+    private var windowState: SavedLibraryWindow {
+        let destination: SavedLibraryWindow.Destination =
+            chatting ? .chat : showingTasks ? .tasks : showingEntities ? .entities :
+            showingActivity ? .activity : automating ? .automations : .library
+        var state = SavedLibraryWindow(
+            destination: destination, scope: scope, kindFilter: kindFilter,
+            atlas: atlas.savedView
+        )
+        // Until the Atlas has been shown this launch, keep the view saved for this collection.
+        if state.atlas == nil, let savedWindow, savedWindow.scope == scope,
+           savedWindow.kindFilter == kindFilter
+        {
+            state.atlas = savedWindow.atlas
+        }
+        return state
     }
 
     // MARK: History

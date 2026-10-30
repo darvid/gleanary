@@ -84,11 +84,60 @@ final class KnowledgeAtlasModel {
     @ObservationIgnored private var activeScope: LibraryCanvasScope?
     @ObservationIgnored private var savedViews: [LibraryCanvasScope: ViewState] = [:]
     @ObservationIgnored private var pendingScopeFocus: AtlasNodeID?
+    @ObservationIgnored private var pendingSavedView: (key: LibraryCanvasScope, view: SavedView)?
+
+    /// The region and camera shown for one collection, kept across launches.
+    struct SavedView: Codable, Equatable {
+        var focus: AtlasNodeID
+        /// The viewport's center in layout coordinates, as a share of the viewport, because the
+        /// layout scales with the window.
+        var center: CGPoint
+        var scale: CGFloat
+    }
+
+    /// Nil until the Atlas has data and a viewport, and while an earlier view is being restored.
+    var savedView: SavedView? {
+        guard pendingSavedView == nil, snapshot != nil, viewport.width > 0, viewport.height > 0
+        else { return nil }
+        let center = camera.logical(viewportCenter)
+        return SavedView(
+            focus: focusID,
+            center: CGPoint(x: center.x / viewport.width, y: center.y / viewport.height),
+            scale: camera.scale
+        )
+    }
+
+    /// Returns to a view from an earlier launch once this collection's data and viewport are
+    /// ready. Activating a different collection first discards it.
+    func restore(_ view: SavedView, scope: LibraryScope, kind: KindFilter) {
+        pendingSavedView = (LibraryCanvasScope(scope: scope, kind: kind), view)
+        applyPendingSavedView()
+    }
+
+    private func applyPendingSavedView() {
+        guard let pending = pendingSavedView, pending.key == activeScope, snapshot != nil,
+              viewport.width > 0, viewport.height > 0 else { return }
+        pendingSavedView = nil
+        let saved = pending.view
+        // A region removed since can't be returned to; keep the default view.
+        guard let tile = layout.tile(saved.focus), tile.node.kind != .item else { return }
+        transitionTask?.cancel()
+        transition = nil
+        pendingScopeFocus = nil
+        focusID = saved.focus
+        camera = clamp(.centered(
+            on: CGPoint(x: saved.center.x * viewport.width, y: saved.center.y * viewport.height),
+            scale: saved.scale, in: viewport
+        ))
+    }
 
     /// Sidebar navigation restores this collection without treating it as a Fit command.
     func activate(scope: LibraryScope, kind: KindFilter) {
         let key = LibraryCanvasScope(scope: scope, kind: kind)
         guard key != activeScope else { return }
+        if pendingSavedView?.key != key {
+            pendingSavedView = nil
+        }
         if let activeScope {
             savedViews[activeScope] = ViewState(
                 camera: camera, viewport: viewport, focus: focusID, selection: selectedID
@@ -129,6 +178,7 @@ final class KnowledgeAtlasModel {
             pendingScopeFocus = target
         }
         navigations += 1
+        applyPendingSavedView()
     }
 
     init(snapshot: AtlasSnapshot? = nil) {
@@ -251,6 +301,7 @@ final class KnowledgeAtlasModel {
             self.pendingScopeFocus = nil
             focus(pendingScopeFocus, animated: false)
         }
+        applyPendingSavedView()
     }
 
     private func recountMatches() {
@@ -285,6 +336,7 @@ final class KnowledgeAtlasModel {
         } else {
             fit(focusID, animated: false)
         }
+        applyPendingSavedView()
     }
 
     private func restoredCamera(_ saved: AtlasCamera, from size: CGSize) -> AtlasCamera {

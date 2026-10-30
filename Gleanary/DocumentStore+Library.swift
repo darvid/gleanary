@@ -31,7 +31,7 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
     }
 }
 
-enum LibraryKindFilter: String, CaseIterable, Identifiable, Sendable {
+enum LibraryKindFilter: String, CaseIterable, Identifiable, Sendable, Codable {
     case all, notes, sources
 
     var id: Self {
@@ -56,7 +56,7 @@ enum LibraryKindFilter: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-enum LibraryScope: Hashable, Sendable {
+enum LibraryScope: Hashable, Sendable, Codable {
     case all, sources, notes, unfiled, captures, category(UUID)
     /// Archived items, which every other scope leaves out.
     case archived
