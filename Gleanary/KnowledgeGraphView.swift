@@ -182,6 +182,13 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     fit(size: geometry.size); hasFitted = true
                 }
             }
+            // An animated layout starts as a tight cluster and spreads out. Follow it while it
+            // settles, so the view eases out with the graph instead of snapping at the end.
+            .onChange(of: graph.geometry.bounds) {
+                if graph.layingOut, !adjusted, dragOrigin == nil {
+                    fit(size: geometry.size); hasFitted = true
+                }
+            }
             .onChange(of: geometry.size) {
                 // The canvas often first lays out narrow while the panes beside it settle.
                 if !adjusted, !graph.positions.isEmpty {
