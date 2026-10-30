@@ -36,6 +36,9 @@ enum ReadingKind: String, CaseIterable, Identifiable {
 
 struct ReadingFont: Equatable, Sendable {
     static let sizeRange = 10.0 ... 32.0
+    /// Chat replies and messages: the system font a step above macOS's 13pt body, since
+    /// they're read as prose rather than scanned like labels.
+    static let chat = ReadingFont(family: "", size: 14)
     let family: String
     let size: Double
 

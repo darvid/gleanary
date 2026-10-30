@@ -17,6 +17,58 @@ import Testing
         )
     }
 
+    @Test func taskStatusLeadsWithItsFirstSentence() {
+        let (headline, detail) = ConversationView.statusSentences(
+            "Interrupted when Gleanary closed. Retry to continue; saved sources are retained."
+        )
+        #expect(headline == "Interrupted when Gleanary closed")
+        #expect(detail == "Retry to continue; saved sources are retained.")
+        #expect(ConversationView.statusSentences("Cancelled.") == ("Cancelled.", nil))
+    }
+
+    @MainActor @Test func replyMentionsOfCategoriesTakeTheirInk() throws {
+        let ai = DecimalCategory(id: UUID(), code: "20.03", name: "AI agents & automation")
+        let ops = DecimalCategory(id: UUID(), code: "20.01", name: "Infrastructure & ops")
+        let categories = [ai, ops]
+        #expect(MarkdownPreview.category(named: "20.03 ai agents & automation", in: categories)?
+            .id == ai.id)
+        #expect(MarkdownPreview.category(named: "Infrastructure & ops", in: categories)?
+            .id == ops.id)
+        #expect(MarkdownPreview.category(named: "20.01", in: categories)?.id == ops.id)
+        #expect(MarkdownPreview.category(named: "Guillermo Rauch", in: categories) == nil)
+
+        var text = try AttributedString(
+            markdown: "Filed under **20.03 AI agents & automation** in `20.01` by **Rauch**.",
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )
+        MarkdownPreview.tintCategories(in: &text, categories: categories, dark: true)
+        let tinted = text.runs.filter { $0.foregroundColor != nil }
+            .map { String(text[$0.range].characters) }
+        #expect(tinted == ["20.03 AI agents & automation", "20.01"])
+        // The code span names a category, so it loses its monospaced face.
+        #expect(!text.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+    }
+
+    @Test func peekExcerptTakesTheFirstBodyParagraphAsPlainText() {
+        let markdown = """
+        # Synthetic title
+
+        ![cover](cover.png)
+
+        The **first** paragraph links to [a page](https://example.com)
+        and wraps onto a second line.
+
+        A later paragraph.
+        """
+        #expect(ReferencePeek.excerpt(from: markdown)
+            == "The first paragraph links to a page and wraps onto a second line.")
+        #expect(ReferencePeek.excerpt(from: "# Only a heading\n\n```\ncode\n```") == nil)
+
+        let long = String(repeating: "word ", count: 100)
+        let cut = ReferencePeek.excerpt(from: long, limit: 40)
+        #expect(cut == "word word word word word word word word…")
+    }
+
     @Test func groupsSpecialistsWithTheirCoordinatingReplyWithoutChangingHistory() throws {
         let task = UUID()
         let messages = [message("user", task: task), message("researcher", task: task),
@@ -167,9 +219,9 @@ import Testing
     }
 
     @MainActor private func clickActivity(in host: NSView, window: NSWindow) async throws {
-        // The native disclosure triangle sits in the fixed header of this synthetic fixture.
+        // The activity line is the reply's first row, and its whole label toggles it.
         let point = host.convert(
-            NSPoint(x: 52, y: host.isFlipped ? 64 : host.bounds.height - 64),
+            NSPoint(x: 72, y: host.isFlipped ? 34 : host.bounds.height - 34),
             to: nil
         )
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {

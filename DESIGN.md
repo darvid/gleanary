@@ -144,8 +144,12 @@ The frontmatter's title/body roles describe default Sources typography;
   and category chips use `.callout`. Source or Note appears at normal
   contrast and medium weight, with any subtype and host secondary. Row
   metadata and quiet hints use `.caption`.
+- Chat replies, streamed drafts and the person's message text use the
+  system font at 14pt, a step above the 13pt body style, since they are
+  read as prose. Specialist activity, chips, captions and controls keep
+  their own styles beneath them.
 - Counts use monospaced digits. Fenced code remains monospaced, scaled
-  to the reading size in document previews and `.body` in chat.
+  to the reading size in document previews and to 14pt in chat replies.
 - Font pickers list installed families, with a live preview and a reset
   for each group. Missing fonts fall back to the system font without
   erasing the saved choice. No bundled font is installed.
@@ -153,14 +157,13 @@ The frontmatter's title/body roles describe default Sources typography;
 Paragraphs and quotes add four points of line spacing; bullet text adds
 three. No uppercase eyebrow or tracking scale is installed.
 
-The document body sits on a quiet reading surface with continuous 16pt
-corners and 20pt padding. Its primary-color fill uses 0.035 opacity in
-dark appearance and 0.025 in light appearance, with no border or shadow.
-Its heading shares the reading font. Notes add a faint notebook dot grid:
-1.2pt dots on a 20pt repeat, white at 0.10 opacity in dark appearance or
-black at 0.08 in light. A cached image tile avoids work proportional to
-note length. Sources stay plain; increased-contrast appearance hides the
-decorative dots. The pattern ignores clicks and accessibility navigation.
+In document previews the body sits directly on the window background,
+below a divider, with no card around it. Its heading shares the reading
+font. Reader Mode notes keep a faint notebook dot grid: 1.2pt dots on a
+20pt repeat, white at 0.10 opacity in dark appearance or black at 0.08
+in light. A cached image tile avoids work proportional to note length.
+Sources stay plain; increased-contrast appearance hides the decorative
+dots. The pattern ignores clicks and accessibility navigation.
 Provenance, actions, and related items stay outside in system typography,
 separating app UI from prose.
 
@@ -185,15 +188,28 @@ and explicit viewport constraints govern resizing.
 | Document list | 260pt | 330pt | 440pt |
 | Capture list | 260pt | 330pt | 440pt |
 | Reading detail | 320pt | Flexible | Flexible |
-| Chat document preview | 320pt | 400pt | 520pt |
+| Chat document pane | 260pt | Flexible | Flexible |
+| Chat beside a document | 280pt | 360pt | 480pt |
 | Filing inspector | 300pt | 300pt | 300pt |
 
 Reading content is leading-aligned and capped at 680pt, with 32pt
 horizontal and 28pt vertical padding. Its width is
 `min(680, max(0, viewportWidth - 64))`, so metadata and images cannot
-enlarge a narrow scroll view. The chat split reserves room for its
-preview: the feed minimum is `min(460, max(240, viewportWidth - 321))`
-when the preview is open, otherwise 240pt.
+enlarge a narrow scroll view. The reading measure is
+`min(760, max(520, readingSize * 36))`, about 65–75 characters a line.
+A saved document opened from Chat becomes
+the main pane, with the feed and composer narrowed to a column on its
+right; otherwise Chat fills the split with a 240pt minimum. The
+document's bar offers Chat (back; Escape also closes), Open in Library
+and a Focus toggle that hides the Chat column. Filing opens the Filing
+inspector as a sheet. In the feed, the open document's reference chip
+gains an accent outline and an Open label. While a document is open the
+composer offers it with a dashed "About: …" chip and the placeholder "Ask
+about this document…"; sending includes it as context for that message,
+and the chip's remove button stops offering that document. Hovering a
+reference chip for 700ms, pressing Space on it, or choosing Peek from
+its menu shows a 360pt popover with the kind and host, title, first
+paragraph in system text, filing, Add to Chat and Open (Return).
 
 Document/action stacks use 20pt spacing. List headers and handoff
 controls use the list-inset token. Rows reserve 18pt for SF Symbols;
@@ -214,8 +230,10 @@ progress.indicator symbol on the text baseline.
 ## Elevation & Depth
 
 Library uses semantic control surfaces, native selection, split
-separators, and metadata cards rather than custom shadows. The info card
-uses a quaternary background at 0.5 opacity. Native sheets and controls
+separators, and flat metadata rather than custom shadows. Under a
+document's title, filing chips come first, then any Archived or Status
+row, then a collapsed Details row titled with the saved date (Written by
+or Summary, the full saved time, capture notes). Native sheets and controls
 retain system-provided depth; this is not a ban on system materials.
 
 ## Shapes
@@ -501,14 +519,25 @@ button radius. Code blocks use a rectangular control surface.
   ignore interaction and accessibility, and leave the composer, preview,
   and Latest messages control untouched. Increased Contrast and Reduce
   Transparency disable them; no timed scroll-fade animation is added.
-- **Chat turn hierarchy:** user messages remain trailing bubbles. A small
-  monochrome speech symbol and Gleanary label identify the leading reply,
-  with its body inset into a shared reading column. Consecutive non-user
+- **Chat turn hierarchy:** user messages remain trailing bubbles. Replies
+  have no visible byline: the unboxed leading text opposite the bubbles
+  identifies them, and each carries a VoiceOver-only "Gleanary" heading.
+  Replies share the feed's text column with no extra inset, and turns
+  are 32pt apart. Consecutive non-user
   messages for the same task form one presentation group; user messages,
   other tasks, and missing task IDs remain boundaries. Specialist updates
-  sit in a native Activity disclosure, collapsed initially, with an update
-  count and participant names. While working, its summary uses the shared
-  fading dot and actual task progress. The coordinating reply, unique
+  sit in a native Activity disclosure, collapsed initially. Its whole
+  label toggles it: a lone specialist reads as its work ("Researched",
+  "Filed", "Found connections", "Drafted"), several are named, followed by
+  "· N steps", which outranks names when space is short. While working,
+  its summary uses the shared fading dot and actual task progress. A
+  reply's references sit in one bordered card headed "Saved N items"
+  (green check) when the task created or captured them, otherwise "N
+  items"; each row shows kind symbol, title, kind and host, filing tag,
+  an In Chat check and an Open state, with Space or the menu to peek.
+  Bold or code spans that name a category take its filing ink. A failed
+  or cancelled task shows its first sentence beside a warning symbol and
+  a small Retry button; the rest of the message is the tooltip. The coordinating reply, unique
   saved-item links, proposal controls, Writer scope, filing review, and
   undo stay outside the disclosure. Per-message provenance and research
   reference groups remain inside activity. Older or directly addressed

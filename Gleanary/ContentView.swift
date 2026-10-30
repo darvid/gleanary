@@ -481,7 +481,9 @@ struct ContentView: View {
 
     @ViewBuilder private var browsingContent: some View {
         if chatting, let conversation {
-            ConversationView(model: conversation, library: library)
+            ConversationView(
+                model: conversation, library: library, openInLibrary: openSavedItem
+            )
         } else if showingEntities {
             if library.ready {
                 EntitiesView(

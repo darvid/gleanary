@@ -7,12 +7,14 @@ struct StreamingMarkdown: View {
     /// True while the provider may still extend the text. Whether it is true when the view
     /// appears decides if the text is revealed at all.
     let streaming: Bool
+    var readingFont: ReadingFont?
     @State private var pacer: RevealPacer?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(_ markdown: String, streaming: Bool) {
+    init(_ markdown: String, streaming: Bool, readingFont: ReadingFont? = nil) {
         self.markdown = markdown
         self.streaming = streaming
+        self.readingFont = readingFont
         _pacer = State(initialValue: streaming ? RevealPacer() : nil)
     }
 
@@ -22,6 +24,7 @@ struct StreamingMarkdown: View {
                 let shown = min(markdown.count, Int(pacer.frontier))
                 MarkdownPreview(
                     markdown: String(markdown.prefix(shown)),
+                    readingFont: readingFont,
                     trailingFade: TrailingFade(
                         length: RevealPacer.fadeLength,
                         overshoot: pacer.frontier - Double(shown)
@@ -29,7 +32,7 @@ struct StreamingMarkdown: View {
                 )
                 .accessibilityAddTraits(.updatesFrequently)
             } else {
-                MarkdownPreview(markdown: markdown)
+                MarkdownPreview(markdown: markdown, readingFont: readingFont)
             }
         }
         .onChange(of: markdown.count, initial: true) { _, count in pacer?.count = count }
