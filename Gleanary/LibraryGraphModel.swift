@@ -34,7 +34,17 @@ import Observation
     var focus: UUID?
     var includesConcepts = false
     var depth = 1
-    var inspectorVisible = true
+    var inspectorVisible = true {
+        didSet {
+            if inspectorVisible != oldValue {
+                preferences?.set(!inspectorVisible, forKey: Self.inspectorHiddenKey)
+            }
+        }
+    }
+
+    /// Keeps the inspector's shown state across launches; nil for embedded graphs and tests.
+    @ObservationIgnored private var preferences: UserDefaults?
+    static let inspectorHiddenKey = "libraryGraphInspectorHidden"
     var reduceMotion = false
     var camera: GraphCamera?
     private(set) var cameraReset = 0
@@ -218,6 +228,12 @@ import Observation
 
     func isSource(_ node: GraphNode) -> Bool {
         node.kind == .document && data.sourceNodeIDs.contains(node.id)
+    }
+
+    /// Restores whether the inspector was hidden last time, and remembers changes from now on.
+    func remembersInspector(in preferences: UserDefaults) {
+        inspectorVisible = !preferences.bool(forKey: Self.inspectorHiddenKey)
+        self.preferences = preferences
     }
 
     func select(_ id: String, edgeID: String? = nil) {

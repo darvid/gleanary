@@ -91,8 +91,18 @@ struct ContentView: View {
         _showingEntities = State(initialValue: destination == .entities)
         _scope = State(initialValue: savedWindow.map(\.scope) ?? .all)
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
-        _atlas = State(initialValue: atlasModel ?? KnowledgeAtlasModel())
-        _graph = State(initialValue: graphModel ?? LibraryGraphModel())
+        let atlas = atlasModel ?? KnowledgeAtlasModel()
+        // Before anything loads, so the map's first paint is the saved view rather than a fit
+        // it then jumps away from.
+        if let savedWindow, let view = savedWindow.atlas {
+            atlas.restore(view, scope: savedWindow.scope ?? .all, kind: savedWindow.kindFilter)
+        }
+        _atlas = State(initialValue: atlas)
+        let graph = graphModel ?? LibraryGraphModel()
+        if restoresWindow {
+            graph.remembersInspector(in: .standard)
+        }
+        _graph = State(initialValue: graph)
     }
 
     var body: some View {
@@ -270,9 +280,6 @@ struct ContentView: View {
             library.documentGrid.scope = scope ?? .all
             library.documentGrid.kindFilter = kindFilter
             await library.documentGrid.reloadIfNeeded()
-            if let savedWindow, let view = savedWindow.atlas, savedWindow.kindFilter == kindFilter {
-                atlas.restore(view, scope: savedWindow.scope ?? .all, kind: kindFilter)
-            }
             await atlas.load(from: library.store)
             showInAtlas(scope ?? .all)
             if let initialSelection {

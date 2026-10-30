@@ -39,6 +39,28 @@ private struct LibraryGraphFixture {
 }
 
 struct LibraryGraphTests {
+    @MainActor @Test func inspectorVisibilityPersistsOnlyWhereRemembered() throws {
+        let suite = "LibraryGraphInspectorTests"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let first = LibraryGraphModel()
+        first.remembersInspector(in: defaults)
+        #expect(first.inspectorVisible)
+        first.inspectorVisible = false
+
+        let relaunched = LibraryGraphModel()
+        relaunched.remembersInspector(in: defaults)
+        #expect(!relaunched.inspectorVisible)
+        relaunched.inspectorVisible = true
+        #expect(!defaults.bool(forKey: LibraryGraphModel.inspectorHiddenKey))
+
+        // Embedded graphs keep their own state without writing the preference.
+        let embedded = LibraryGraphModel()
+        embedded.inspectorVisible = false
+        #expect(!defaults.bool(forKey: LibraryGraphModel.inspectorHiddenKey))
+    }
+
     @Test func canonicalLinksWorkWithoutExtractionAndGraphReadsNeverWrite() async throws {
         let fixture = try LibraryGraphFixture(); defer { fixture.clean() }
         let notes = try await fixture.store.open(seed: [
