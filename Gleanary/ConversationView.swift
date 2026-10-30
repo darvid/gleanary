@@ -4,8 +4,15 @@ import UniformTypeIdentifiers
 struct ConversationView: View {
     @Bindable var model: ConversationModel
     @Bindable var library: LibraryModel
+    /// Shows a saved item in the Library; nil where there is no Library to switch to.
+    var openInLibrary: ((UUID) -> Void)?
     @State private var preview = DocumentPreviewModel()
     @State private var showingPreview = false
+    /// Hides the Chat column so the open document has the window to itself.
+    @State private var focusingDocument = false
+    @State private var filingDocument: MarkdownDocument?
+    /// The open document the person removed from the composer, so it isn't offered again.
+    @State private var aboutDismissed: UUID?
     @State private var source: SourceCitation?
     @State private var reviewingChanges: ReviewedChangeset?
     @State private var reviewingFiling: SeriesFiling.Status?
@@ -26,49 +33,36 @@ struct ConversationView: View {
     init(
         model: ConversationModel,
         library: LibraryModel,
-        previewModel: DocumentPreviewModel? = nil
+        previewModel: DocumentPreviewModel? = nil,
+        openInLibrary: ((UUID) -> Void)? = nil
     ) {
         self.model = model
         self.library = library
+        self.openInLibrary = openInLibrary
         _preview = State(initialValue: previewModel ?? DocumentPreviewModel())
         _showingPreview = State(initialValue: previewModel?.selectedID != nil)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            GeometryReader { viewport in
-                HSplitView {
-                    // Reserve room for the preview even at the main window's minimum width.
-                    feed.frame(
-                        minWidth: showingPreview ? min(460, max(240, viewport.size.width - 321)) :
-                            240,
-                        maxWidth: .infinity, maxHeight: .infinity
-                    )
-                    if showingPreview {
-                        VStack(spacing: 0) {
-                            HStack {
-                                Text("Saved document").font(.headline)
-                                Spacer()
-                                Button("Close Preview", systemImage: "xmark") {
-                                    showingPreview = false
-                                }
-                                .labelStyle(.iconOnly).buttonStyle(.borderless)
-                            }.padding()
-                            savedDocumentPreview(for: preview)
-                            if let id = preview.selectedID {
-                                CategoryMembershipView(
-                                    store: model.store,
-                                    noteID: id,
-                                    categories: model.categories
-                                )
-                            }
-                        }
-                        .frame(minWidth: 320, idealWidth: 400, maxWidth: 520)
-                    }
-                }
+        // A saved document opens as the main pane, with Chat narrowed beside it so it can still
+        // be asked about. The Chat column keeps its identity, so the feed keeps its place.
+        HSplitView {
+            if showingPreview {
+                documentPane.frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
             }
-            Divider()
-            composer
+            if !showingPreview || !focusingDocument {
+                VStack(spacing: 0) {
+                    feed.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Divider()
+                    composer
+                }
+                .frame(
+                    minWidth: showingPreview ? 280 : 240,
+                    idealWidth: showingPreview ? 360 : nil,
+                    maxWidth: showingPreview ? 480 : .infinity,
+                    maxHeight: .infinity
+                )
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .toolbar { toolbar }
@@ -189,6 +183,65 @@ struct ConversationView: View {
         return actions
     }
 
+    private var documentPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Button(action: closePreview) {
+                    Label("Chat", systemImage: "chevron.left")
+                }
+                .help("Back to Chat (Esc)")
+                .accessibilityLabel("Close document and return to Chat")
+                Spacer(minLength: 8)
+                if let openInLibrary, let id = preview.selectedID {
+                    Button("Open in Library", systemImage: "books.vertical") { openInLibrary(id) }
+                        .help("Show this item in the Library")
+                }
+                Toggle(isOn: $focusingDocument.animation(.snappy(duration: 0.25))) {
+                    Label(
+                        focusingDocument ? "Show Chat" : "Focus",
+                        systemImage: focusingDocument ? "sidebar.right" :
+                            "arrow.up.left.and.arrow.down.right"
+                    )
+                }
+                .toggleStyle(.button)
+                .help(focusingDocument ? "Show Chat beside the document" :
+                    "Hide Chat while reading")
+            }
+            .buttonStyle(.borderless)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            Divider()
+            savedDocumentPreview(for: preview)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onExitCommand(perform: closePreview)
+        .sheet(item: $filingDocument) { document in
+            FilingInspector(
+                document: document, categories: model.categories, store: model.store,
+                file: { document, categoryID in
+                    do {
+                        let includesSource = try await model.store
+                            .captureID(for: document.id) != nil
+                        try await model.store.fileNote(
+                            document.id, categoryID: categoryID, includeSources: includesSource
+                        )
+                        await preview.load(from: model.store)
+                        await model.didMutate?()
+                    } catch { model.error = error.localizedDescription }
+                },
+                close: { filingDocument = nil }
+            )
+            .frame(width: 360, height: 480)
+        }
+    }
+
+    private func closePreview() {
+        withAnimation(.snappy(duration: 0.25)) {
+            showingPreview = false
+            focusingDocument = false
+        }
+        composing = true
+    }
+
     func savedDocumentPreview(for preview: DocumentPreviewModel) -> DocumentPreview {
         DocumentPreview(
             model: preview,
@@ -202,6 +255,7 @@ struct ConversationView: View {
             bookmarkFetch: preview.selectedID
                 .flatMap { library.bookmarkFetch(for: $0)?.progress },
             openDocument: open,
+            fileDocument: { filingDocument = $0 },
             suggestHome: HomeSuggester(
                 suggest: { try await model.suggestHome(for: $0) },
                 file: { id, suggestion in
@@ -288,7 +342,7 @@ struct ConversationView: View {
 
     private var feed: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 32) {
                 if model.hasOlderMessages, model.messages.count >= 200 {
                     Button("Load Earlier Messages") {
                         followLatest = false; Task { await model.loadOlder() }
@@ -308,6 +362,7 @@ struct ConversationView: View {
                 }
             }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
         }
+        .environment(\.tintedCategories, model.categories)
         .scrollPosition($feedPosition)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .defaultScrollAnchor(.bottom, for: .alignment)
@@ -464,12 +519,13 @@ struct ConversationView: View {
             ?? false
         let latest = drafting ? nil : replies.last
         let task = model.tasks.first { $0.id == entry.taskID }
-        return VStack(alignment: .leading, spacing: 12) {
-            Label("Gleanary", systemImage: "bubble.left")
-                .font(.callout.weight(.semibold))
-                .labelStyle(.titleAndIcon)
+        // No visible byline: the unboxed reply opposite the person's bubbles says who is talking.
+        // VoiceOver still gets a heading per reply to move between turns.
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("Gleanary")
+                .frame(width: 0, height: 0).clipped()
                 .accessibilityAddTraits(.isHeader)
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
                 if !activity.isEmpty {
                     ConversationActivityView(
                         messages: activity,
@@ -490,7 +546,7 @@ struct ConversationView: View {
                                             .help(AgentRole(rawValue: message.author)?
                                                 .responsibility ?? "")
                                     }
-                                    messageText(message)
+                                    messageText(message, readingFont: nil)
                                     references(for: message)
                                 }
                                 .accessibilityElement(children: .contain)
@@ -502,14 +558,14 @@ struct ConversationView: View {
                     messageText(message)
                 }
                 if let live = drafting ? draft?.text : latest.map(displayedMarkdown) {
-                    StreamingMarkdown(live, streaming: draft != nil)
+                    StreamingMarkdown(live, streaming: draft != nil, readingFont: .chat)
                         .textSelection(.enabled)
                         .help(latest?.createdAt.formatted(date: .abbreviated, time: .shortened)
                             ?? "")
                 }
                 // Keep each saved result visible once; activity retains per-message provenance.
-                ForEach(entry.referenceIDs, id: \.self) { id in
-                    reference(id)
+                if !entry.referenceIDs.isEmpty {
+                    savedItems(entry, captured: task?.captureID != nil).padding(.top, 4)
                 }
                 acquisitionSuggestions(entry)
                 // Approvals remain reachable while activity is collapsed.
@@ -517,17 +573,85 @@ struct ConversationView: View {
                     messageActions(message)
                 }
             }
-            .padding(.leading, 24)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// Splits a status message into its first sentence and the rest, so a long explanation
+    /// can sit in a tooltip.
+    nonisolated static func statusSentences(_ text: String) -> (String, String?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let end = trimmed.range(of: ". "), end.upperBound < trimmed.endIndex else {
+            return (trimmed, nil)
+        }
+        let rest = trimmed[end.upperBound...].trimmingCharacters(in: .whitespaces)
+        return (String(trimmed[..<end.lowerBound]), rest.isEmpty ? nil : rest)
+    }
+
+    /// The items a reply saved or cited, as one card of rows rather than loose chips.
+    private func savedItems(_ entry: ConversationFeedEntry, captured: Bool) -> some View {
+        let ids = entry.referenceIDs
+        let saved = ids.filter { id in
+            captured || entry.taskID != nil && model.referenceDetails[id]?.taskID == entry.taskID
+        }.count
+        let title = saved == ids.count
+            ? (ids.count == 1 ? "Saved 1 item" : "Saved \(ids.count) items")
+            : (ids.count == 1 ? "1 item" : "\(ids.count) items")
+        return VStack(alignment: .leading, spacing: 0) {
+            Label {
+                Text(title)
+            } icon: {
+                Image(systemName: saved == ids.count ? "checkmark" : "books.vertical")
+                    .foregroundStyle(saved == ids.count ? Color.green : Color.secondary)
+            }
+            .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .accessibilityAddTraits(.isHeader)
+            ForEach(ids, id: \.self) { id in
+                Divider()
+                savedItemRow(id)
+            }
+        }
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func savedItemRow(_ id: UUID) -> some View {
+        let details = model.referenceDetails[id]
+        let host = details?.sourceURL?.host()
+            .map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+        let kind = details.map { details in
+            details.hasCapture ? "Source" : details.artifactKind == nil ? "Note"
+                : details.researchKindTitle
+        } ?? "Saved document"
+        return SavedItemRow(
+            title: model.titles[id] ?? details?.title ?? "Saved document",
+            kind: kind, host: host,
+            symbol: details?.hasCapture == true ? "doc.text" : "note.text",
+            filing: details?.filing,
+            selected: model.selectedSources.contains(id),
+            available: model.titles[id] != "Deleted document",
+            isOpen: showingPreview && preview.selectedID == id,
+            open: { open(id) }, toggleSource: { model.select(id) },
+            explore: model.exploringNotes.contains(id) ? nil : {
+                Task { await model.exploreFrom(id) }
+            },
+            excerpt: { await excerpt(id) }
+        )
     }
 
     private func displayedMarkdown(_ message: ConversationMessage) -> String {
         researchResult(in: message) == nil ? message.text : message.textWithoutResearchBibliography
     }
 
-    private func messageText(_ message: ConversationMessage) -> some View {
-        MarkdownPreview(markdown: displayedMarkdown(message))
+    /// Replies read at `ReadingFont.chat`; specialist activity stays at body size beneath them.
+    private func messageText(
+        _ message: ConversationMessage, readingFont: ReadingFont? = .chat
+    ) -> some View {
+        MarkdownPreview(markdown: displayedMarkdown(message), readingFont: readingFont)
             .textSelection(.enabled)
             .help(message.createdAt.formatted(date: .abbreviated, time: .shortened))
     }
@@ -541,17 +665,24 @@ struct ConversationView: View {
                let task = model.tasks.first(where: { $0.id == taskID }),
                ["failed", "cancelled"].contains(task.state)
             {
-                // Sits under the person's bubble, on the same trailing edge.
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
-                    Text(task.progress).textSelection(.enabled).multilineTextAlignment(.trailing)
+                // Sits under the person's bubble, on the same trailing edge. The first sentence
+                // says what happened; the rest is in the tooltip.
+                let failed = task.state == "failed"
+                let (headline, detail) = Self.statusSentences(task.progress)
+                HStack(alignment: .center, spacing: 8) {
+                    Image(systemName: failed ? "exclamationmark.triangle.fill" : "stop.circle")
+                        .foregroundStyle(failed ? Color.orange : Color.secondary)
+                        .accessibilityHidden(true)
+                    Text(headline).textSelection(.enabled).multilineTextAlignment(.trailing)
                         .fixedSize(horizontal: false, vertical: true)
+                        .help(detail ?? headline)
                     Button("Retry", systemImage: "arrow.clockwise") {
                         Task { await model.send(retry: task) }
                     }
-                    .buttonStyle(.link).disabled(model.running)
+                    .controlSize(.small).disabled(model.running)
+                    .help(detail ?? "Run this request again")
                 }
-                .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
+                .font(.callout).foregroundStyle(.primary)
                 .frame(maxWidth: 560, alignment: .trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 80).padding(.trailing, 4)
@@ -665,7 +796,12 @@ struct ConversationView: View {
             filing: model.referenceDetails[id]?.filing,
             explore: model.exploringNotes.contains(id) ? nil : {
                 Task { await model.exploreFrom(id) }
-            }
+            },
+            isOpen: showingPreview && preview.selectedID == id,
+            kind: model.referenceDetails[id]?.attachmentKind,
+            host: model.referenceDetails[id]?.sourceURL?.host()
+                .map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 },
+            excerpt: { await excerpt(id) }
         )
     }
 
@@ -689,7 +825,7 @@ struct ConversationView: View {
             }
             // Cards stand in for a message that is only links.
             if !PastedLinks.isOnlyLinks(message.text) {
-                Text(message.text).textSelection(.enabled)
+                Text(message.text).font(ReadingFont.chat.font).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(PastedLinks.urls(in: message.text), id: \.self) { url in
@@ -1042,7 +1178,7 @@ struct ConversationView: View {
                 }.controlSize(.small)
             }
             VStack(alignment: .leading, spacing: 8) {
-                if !model.selectedSources.isEmpty {
+                if !model.selectedSources.isEmpty || aboutDocument != nil {
                     sourceAttachments
                 }
                 HStack(alignment: .bottom, spacing: 12) {
@@ -1056,7 +1192,8 @@ struct ConversationView: View {
                     .buttonStyle(.plain).disabled(!model.ready || model.running)
                     .accessibilityLabel("Attach document").help("Import a document")
                     TextField(
-                        "Ask Gleanary or save something…",
+                        aboutDocument == nil ? "Ask Gleanary or save something…" :
+                            "Ask about this document…",
                         text: $model.composer,
                         axis: .vertical
                     )
@@ -1104,6 +1241,30 @@ struct ConversationView: View {
     private var sourceAttachments: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 6) {
+                if let about = aboutDocument {
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.viewfinder").foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
+                        Text("About: \(about.title)").lineLimit(1).frame(maxWidth: 220)
+                        Button("Don't ask about \(about.title)", systemImage: "xmark") {
+                            aboutDismissed = about.id
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    }
+                    .font(.callout)
+                    .padding(.leading, 10).padding(.trailing, 8).padding(.vertical, 6)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(Color.primary.opacity(0.18), style: StrokeStyle(
+                                lineWidth: 1,
+                                dash: [3, 2]
+                            ))
+                    }
+                    .help("Your next message includes the open document")
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("About: \(about.title)")
+                }
                 ForEach(model.selectedSources, id: \.self) { id in
                     let title = model.titles[id] ?? "Saved document"
                     let kind = model.referenceDetails[id]?.attachmentKind ?? "Note"
@@ -1133,8 +1294,33 @@ struct ConversationView: View {
         model.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// The open document, offered as context for the next message until it's dismissed or
+    /// attached outright.
+    private var aboutDocument: (id: UUID, title: String)? {
+        guard showingPreview, let document = preview.document,
+              document.id == preview.selectedID, document.id != aboutDismissed,
+              !model.selectedSources.contains(document.id) else { return nil }
+        return (document.id, document.name)
+    }
+
     private func send() {
-        followLatest = true; Task { await model.send() }
+        followLatest = true
+        let about = aboutDocument.flatMap { model.selectedSources.count < 4 ? $0.id : nil }
+        if let about {
+            model.selectedSources.append(about)
+        }
+        Task {
+            await model.send()
+            // Only offered: a capture or a failed send leaves attachments in place.
+            if let about {
+                model.selectedSources.removeAll { $0 == about }
+            }
+        }
+    }
+
+    private func excerpt(_ id: UUID) async -> String? {
+        guard let document = try? await model.store.document(id: id) else { return nil }
+        return ReferencePeek.excerpt(from: document.markdown)
     }
 
     private func open(_ id: UUID) {
@@ -1185,42 +1371,6 @@ struct AddToChatButton: View {
                 Text(error ?? "Try again.")
             }
         }
-    }
-}
-
-private struct CategoryMembershipView: View {
-    let store: DocumentStore
-    let noteID: UUID
-    let categories: [DecimalCategory]
-    @State private var assigned: [DecimalCategory] = []
-    @State private var error: String?
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Filing").font(.headline)
-            Text(assigned.isEmpty ? "Not filed" : assigned.map(\.label).joined(separator: ", "))
-                .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-            Menu("Set primary home") {
-                ForEach(categories) { category in
-                    Button(category.label) {
-                        Task {
-                            do { try await store.fileNote(
-                                noteID,
-                                categoryID: category.id
-                            ); assigned = try await store.categories(for: noteID) } catch {
-                                self.error = error.localizedDescription
-                            }
-                        }
-                    }
-                }
-            }
-            if let error {
-                Text(error).font(.caption)
-            }
-        }.padding().frame(maxWidth: .infinity, alignment: .leading)
-            .task(id: noteID) {
-                do { assigned = try await store.categories(for: noteID) }
-                catch { self.error = error.localizedDescription }
-            }
     }
 }
 
@@ -1342,7 +1492,16 @@ private struct ReferenceChip: View {
     var filing: DecimalCategory?
     /// Follows this item's links once; nil while that is running.
     var explore: (() -> Void)?
+    /// Whether this item is the document open beside Chat.
+    var isOpen = false
+    var kind: String?
+    var host: String?
+    /// The opening of the item's text, for the peek; nil when it can't be read.
+    var excerpt: (() async -> String?)?
     @State private var hovering = false
+    @State private var peeking = false
+    @State private var hoveringPeek = false
+    @State private var peekTimer: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -1351,8 +1510,33 @@ private struct ReferenceChip: View {
             }
             .buttonStyle(.plain).help("Open \(title)")
             .accessibilityLabel(role.map { "\($0): \(title)" } ?? title)
+            .accessibilityValue(isOpen ? "Open" : "")
+            .accessibilityHint("Press Space to peek")
+            .onKeyPress(.space) {
+                guard excerpt != nil, available else { return .ignored }
+                peeking.toggle()
+                return .handled
+            }
+            .popover(isPresented: $peeking, arrowEdge: .bottom) {
+                ReferencePeek(
+                    title: title, kind: kind, host: host, filing: filing, selected: selected,
+                    load: excerpt ?? { nil },
+                    open: { peeking = false; open() },
+                    toggleSource: toggleSource
+                )
+                .onHover { inside in
+                    hoveringPeek = inside
+                    if !inside {
+                        schedulePeekClose()
+                    }
+                }
+            }
             if let filing {
                 FilingTag(category: filing)
+            }
+            if isOpen {
+                Text("Open").font(.caption).foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
             }
             Button(
                 selected ? "Remove from sources" : "Use as source",
@@ -1372,15 +1556,208 @@ private struct ReferenceChip: View {
             selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.06),
             in: Capsule()
         )
-        .onHover { hovering = $0 }
+        .overlay {
+            if isOpen {
+                Capsule().strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1)
+            }
+        }
+        .onHover { inside in
+            hovering = inside
+            peekTimer?.cancel()
+            if inside {
+                guard excerpt != nil, available, !isOpen else { return }
+                // Dwell first, so moving the pointer across a reply doesn't flash previews.
+                peekTimer = Task {
+                    try? await Task.sleep(for: .milliseconds(700))
+                    if !Task.isCancelled {
+                        peeking = true
+                    }
+                }
+            } else {
+                schedulePeekClose()
+            }
+        }
         .contextMenu {
             Button("Open", action: open)
+            Button("Peek") { peeking = true }.disabled(excerpt == nil || !available)
             Button(selected ? "Remove from sources" : "Use as source", action: toggleSource)
                 .disabled(!available)
             Button("Explore Links from Here", action: explore ?? {})
                 .disabled(explore == nil || !available)
                 .help("Follow this item's links once, as Eager source acquisition would")
         }
+    }
+
+    /// Leaves time to move the pointer from the chip into the peek.
+    private func schedulePeekClose() {
+        peekTimer?.cancel()
+        peekTimer = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if !Task.isCancelled, !hovering, !hoveringPeek {
+                peeking = false
+            }
+        }
+    }
+}
+
+/// One saved item in a reply's card: what it is, where it's filed, and whether it's the
+/// document open beside Chat. Space or the menu peeks at it.
+private struct SavedItemRow: View {
+    let title: String
+    let kind: String
+    let host: String?
+    let symbol: String
+    let filing: DecimalCategory?
+    let selected: Bool
+    let available: Bool
+    let isOpen: Bool
+    let open: () -> Void
+    let toggleSource: () -> Void
+    let explore: (() -> Void)?
+    let excerpt: () async -> String?
+    @State private var peeking = false
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 12) {
+                Image(systemName: symbol).font(.body).foregroundStyle(.secondary)
+                    .frame(width: 20).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                    Text([kind, host].compactMap(\.self).joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                if let filing {
+                    FilingTag(category: filing)
+                }
+                if selected {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.accentColor)
+                        .help("Used as a source for your next message")
+                        .accessibilityLabel("In Chat")
+                }
+                if isOpen {
+                    Text("Open").font(.caption).foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 9)
+            .background(isOpen ? Color.accentColor.opacity(0.10) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!available)
+        .help("Open \(title)")
+        .accessibilityLabel("\(kind): \(title)")
+        .accessibilityValue(isOpen ? "Open" : "")
+        .accessibilityHint("Press Space to peek")
+        .onKeyPress(.space) {
+            guard available else { return .ignored }
+            peeking.toggle()
+            return .handled
+        }
+        .popover(isPresented: $peeking, arrowEdge: .bottom) {
+            ReferencePeek(
+                title: title, kind: kind, host: host, filing: filing, selected: selected,
+                load: excerpt, open: { peeking = false; open() }, toggleSource: toggleSource
+            )
+        }
+        .contextMenu {
+            Button("Open", action: open)
+            Button("Peek") { peeking = true }.disabled(!available)
+            Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
+                .disabled(!available)
+            Button("Explore Links from Here", action: explore ?? {})
+                .disabled(explore == nil || !available)
+        }
+    }
+}
+
+/// A glance at a saved item from Chat: its title, opening lines and filing, with Open on Return.
+/// It uses system text like the rest of Chat; the reading font is for reading the item itself.
+struct ReferencePeek: View {
+    let title: String
+    let kind: String?
+    let host: String?
+    let filing: DecimalCategory?
+    let selected: Bool
+    let load: () async -> String?
+    let open: () -> Void
+    let toggleSource: () -> Void
+    @State private var excerpt: String?
+    @State private var loaded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            let caption = [kind, host].compactMap(\.self).joined(separator: " · ")
+            if !caption.isEmpty {
+                Text(caption).font(.caption.weight(.semibold)).textCase(.uppercase)
+                    .foregroundStyle(.secondary)
+            }
+            Text(title)
+                .font(.headline)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            if let excerpt {
+                Text(excerpt).font(.callout).foregroundStyle(.secondary).lineLimit(5)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if !loaded {
+                ProgressView().controlSize(.small).accessibilityLabel("Loading preview")
+            }
+            if let filing {
+                FilingTag(category: filing)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
+                Button("Open", action: open).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 360, alignment: .leading)
+        .task {
+            excerpt = await load()
+            loaded = true
+        }
+    }
+
+    /// The first paragraph of body text, without Markdown syntax, cut at a word near 280
+    /// characters.
+    nonisolated static func excerpt(from markdown: String, limit: Int = 280) -> String? {
+        var paragraph: [String] = []
+        var inFence = false
+        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = line.trimmingCharacters(in: .whitespaces)
+            if text.hasPrefix("```") || text.hasPrefix("~~~") {
+                inFence.toggle()
+                continue
+            }
+            if inFence || text.hasPrefix("#") || text.hasPrefix("![") || text.hasPrefix("|")
+                || text.hasPrefix(">") && paragraph.isEmpty || text == "---"
+            {
+                if !paragraph.isEmpty {
+                    break
+                }
+                continue
+            }
+            if text.isEmpty {
+                if !paragraph.isEmpty {
+                    break
+                }
+                continue
+            }
+            paragraph.append(text)
+        }
+        guard !paragraph.isEmpty else { return nil }
+        let joined = paragraph.joined(separator: " ")
+        let plain = (try? AttributedString(
+            markdown: joined,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )).map { String($0.characters) } ?? joined
+        guard plain.count > limit else { return plain }
+        let cut = plain.prefix(limit)
+        let end = cut.lastIndex(of: " ") ?? cut.endIndex
+        return cut[..<end].trimmingCharacters(in: .punctuationCharacters.union(.whitespaces)) + "…"
     }
 }
 

@@ -256,6 +256,7 @@ struct DocumentPreview: View {
                                 }
                             }
                             infoCard(document)
+                            Divider()
                             VStack(alignment: .leading, spacing: 12) {
                                 if contentTitle != nil || (enterReader != nil && !readerMode) {
                                     HStack(alignment: .firstTextBaseline) {
@@ -284,20 +285,6 @@ struct DocumentPreview: View {
                                 .textSelection(.enabled)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(20)
-                            .background {
-                                if readingKind == .notes {
-                                    NotebookDots()
-                                        .clipShape(RoundedRectangle(
-                                            cornerRadius: 16,
-                                            style: .continuous
-                                        ))
-                                }
-                            }
-                            .background(
-                                Color.primary.opacity(dark ? 0.035 : 0.025),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            )
                             .accessibilityElement(children: .contain)
                             .accessibilityLabel("Document content")
                             if !model.showsCapturedSource, let noteWorkspace {
@@ -340,7 +327,7 @@ struct DocumentPreview: View {
                         // A vertical scroll view must not inherit the image or metadata's ideal
                         // width.
                         .frame(
-                            width: min(680, max(0, viewport.size.width - 64)),
+                            width: min(readingMeasure, max(0, viewport.size.width - 64)),
                             alignment: .leading
                         )
                         .padding(.horizontal, 32).padding(.vertical, 28)
@@ -364,6 +351,12 @@ struct DocumentPreview: View {
                     "Its summary or note opens here.")
             )
         }
+    }
+
+    /// Roughly 65–75 characters a line at the reading size, so text never runs the width of a
+    /// wide pane.
+    private var readingMeasure: CGFloat {
+        min(760, max(520, readingFont.size * 36))
     }
 
     private var contentTitle: String? {
@@ -582,112 +575,150 @@ struct DocumentPreview: View {
 
     // MARK: Info
 
-    /// Get Info–style facts: right-aligned labels, left-aligned values.
+    /// Filing leads, since it's the fact you act on; status that needs attention stays visible;
+    /// who wrote it and when sit in a collapsed Details row.
     private func infoCard(_ document: MarkdownDocument) -> some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
-            if let archived = model.details.archived {
-                infoRow("Archived") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Text(archived.formatted(date: .abbreviated, time: .omitted))
-                            if let archiveDocument {
-                                Button("Unarchive") { archiveDocument(document, false) }
-                                    .buttonStyle(.link)
-                            }
-                        }
-                        if let reason = model.details.archiveReason {
-                            Text(reason).font(.caption).foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .help("Hidden from the library, Atlas, search and Chat until unarchived.")
-                }
+        VStack(alignment: .leading, spacing: 10) {
+            FilingRow(
+                document: document, categories: model.categories,
+                change: fileDocument.map { change in { change(document) } },
+                suggester: suggestHome, editor: editHomes
+            )
+            .id(document.id)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Filing")
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                statusRows(document)
             }
-            if let bookmarkFetch {
-                infoRow("Status") {
-                    // One line, so the card doesn't change height as each step reports in.
-                    // The same animated symbol as library rows and Captures: it sits on the
-                    // text's baseline, which a spinner doesn't.
-                    let step = bookmarkFetch.isEmpty ? "Waiting to fetch the page" : bookmarkFetch
-                    Label {
-                        Text(step)
-                            .lineLimit(1).truncationMode(.tail)
-                            .fadesOnChange(step)
-                    } icon: {
-                        ChatWorkingIndicator(color: .secondary)
-                    }
-                    .help(
-                        "Fetching the full page. This bookmark's notes will be replaced by the page and its summary."
-                    )
-                }
-            } else if let bookmarkFetchFailure {
-                infoRow("Status") {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .symbolRenderingMode(.multicolor).accessibilityHidden(true)
-                            Text("Couldn't fetch the page")
-                            Button("Try Again", action: retryBookmarkFetch).buttonStyle(.link)
-                        }
-                        Text(bookmarkFetchFailure).font(.caption).foregroundStyle(.secondary)
-                            .lineLimit(2).textSelection(.enabled)
-                    }
-                    .help("The bookmark is kept as it was imported.")
-                }
-            }
-            infoRow("Filed in") {
-                FilingRow(
-                    document: document, categories: model.categories,
-                    change: fileDocument.map { change in { change(document) } },
-                    suggester: suggestHome, editor: editHomes
-                )
-                .id(document.id)
-            }
-            if model.generatedSummary, !model.showsCapturedSource,
-               let provider = model.authorProvider
-            {
-                infoRow("Summary") {
-                    HStack(spacing: 4) {
-                        Label(provider, systemImage: "sparkles")
-                        Text("(check the source for details)").foregroundStyle(.secondary)
-                    }
-                }
-            } else if let provider = model.authorProvider, provider != "user",
-                      !model.showsCapturedSource
-            {
-                infoRow("Written by") { Label(provider, systemImage: "sparkles") }
-            } else if model.canGenerateSummary, model.summaries.isEmpty {
-                infoRow("Summary") {
-                    HStack {
-                        Text("No summary associated.").foregroundStyle(.secondary)
-                        Button("Use Existing Note…") { associatingSummary = true }
-                            .buttonStyle(.link)
-                    }
-                }
-            }
-            if let saved = model.details.saved {
-                infoRow("Saved") {
-                    Text(saved.formatted(date: .abbreviated, time: .shortened))
-                }
-            }
-            if !model.warnings.isEmpty {
-                infoRow("Notes") {
-                    RowDisclosure(
-                        title: "\(model.warnings.count) capture note\(model.warnings.count == 1 ? "" : "s")"
+            if hasDetails {
+                RowDisclosure(title: detailsTitle) {
+                    Grid(
+                        alignment: .leadingFirstTextBaseline,
+                        horizontalSpacing: 14, verticalSpacing: 8
                     ) {
-                        ForEach(Array(model.warnings.enumerated()), id: \.offset) { _, warning in
-                            Text(warning).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .textSelection(.enabled)
+                        detailRows
+                    }
+                    .padding(.top, 6)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .font(.callout)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private func statusRows(_ document: MarkdownDocument) -> some View {
+        if let archived = model.details.archived {
+            infoRow("Archived") {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(archived.formatted(date: .abbreviated, time: .omitted))
+                        if let archiveDocument {
+                            Button("Unarchive") { archiveDocument(document, false) }
+                                .buttonStyle(.link)
                         }
+                    }
+                    if let reason = model.details.archiveReason {
+                        Text(reason).font(.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+                .help("Hidden from the library, Atlas, search and Chat until unarchived.")
+            }
+        }
+        if let bookmarkFetch {
+            infoRow("Status") {
+                // One line, so the row doesn't change height as each step reports in.
+                // The same animated symbol as library rows and Captures: it sits on the
+                // text's baseline, which a spinner doesn't.
+                let step = bookmarkFetch
+                    .isEmpty ? "Waiting to fetch the page" : bookmarkFetch
+                Label {
+                    Text(step)
+                        .lineLimit(1).truncationMode(.tail)
+                        .fadesOnChange(step)
+                } icon: {
+                    ChatWorkingIndicator(color: .secondary)
+                }
+                .help(
+                    "Fetching the full page. This bookmark's notes will be replaced by the page and its summary."
+                )
+            }
+        } else if let bookmarkFetchFailure {
+            infoRow("Status") {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor).accessibilityHidden(true)
+                        Text("Couldn't fetch the page")
+                        Button("Try Again", action: retryBookmarkFetch).buttonStyle(.link)
+                    }
+                    Text(bookmarkFetchFailure).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2).textSelection(.enabled)
+                }
+                .help("The bookmark is kept as it was imported.")
+            }
+        }
+    }
+
+    @ViewBuilder private var detailRows: some View {
+        if model.generatedSummary, !model.showsCapturedSource,
+           let provider = model.authorProvider
+        {
+            infoRow("Summary") {
+                HStack(spacing: 4) {
+                    Label(provider, systemImage: "sparkles")
+                    Text("(check the source for details)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } else if let provider = model.authorProvider, provider != "user",
+                  !model.showsCapturedSource
+        {
+            infoRow("Written by") { Label(provider, systemImage: "sparkles") }
+        } else if model.canGenerateSummary, model.summaries.isEmpty {
+            infoRow("Summary") {
+                HStack {
+                    Text("No summary associated.").foregroundStyle(.secondary)
+                    Button("Use Existing Note…") { associatingSummary = true }
+                        .buttonStyle(.link)
+                }
+            }
+        }
+        if let saved = model.details.saved {
+            infoRow("Saved") {
+                Text(saved.formatted(date: .abbreviated, time: .shortened))
+            }
+        }
+        if !model.warnings.isEmpty {
+            infoRow("Notes") {
+                RowDisclosure(
+                    title: "\(model.warnings.count) capture note\(model.warnings.count == 1 ? "" : "s")"
+                ) {
+                    ForEach(
+                        Array(model.warnings.enumerated()),
+                        id: \.offset
+                    ) { _, warning in
+                        Text(warning).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
                 }
             }
         }
-        .font(.callout)
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var hasDetails: Bool {
+        model.authorProvider != nil && !model.showsCapturedSource
+            || model.canGenerateSummary && model.summaries.isEmpty
+            || model.details.saved != nil || !model.warnings.isEmpty
+    }
+
+    /// The saved date, so the collapsed row still says when.
+    private var detailsTitle: String {
+        model.details.saved.map {
+            "Saved \($0.formatted(date: .abbreviated, time: .omitted))"
+        } ?? "Details"
     }
 
     private func infoRow(_ label: String, @ViewBuilder value: () -> some View) -> some View {
@@ -863,6 +894,7 @@ struct MarkdownPreview: View {
     /// Fades in the end of the last block while a reply streams.
     var trailingFade: TrailingFade?
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.tintedCategories) private var tintedCategories
 
     var body: some View {
         let blocks = Self.blocks(markdown)
@@ -1085,7 +1117,7 @@ struct MarkdownPreview: View {
         _ source: String, nativeFont: NSFont? = nil, lineSpacing: CGFloat = 0,
         color: NSColor = .labelColor, fade: TrailingFade? = nil
     ) -> some View {
-        let (text, formulas) = Self.inline(source)
+        let (text, formulas) = tintedInline(source)
         let font = nativeFont ?? self.nativeFont()
         // Linked text is AppKit-drawn, so it streams in without the fade.
         if text.runs.contains(where: { $0.link != nil }) {
@@ -1120,6 +1152,50 @@ struct MarkdownPreview: View {
         return NSFont(descriptor: descriptor, size: base.pointSize * scale) ?? base
     }
 
+    private func tintedInline(_ source: String) -> (AttributedString, [MathMarkdown.Formula]) {
+        var (text, formulas) = Self.inline(source)
+        if !tintedCategories.isEmpty {
+            Self.tintCategories(
+                in: &text, categories: tintedCategories, dark: colorScheme == .dark
+            )
+        }
+        return (text, formulas)
+    }
+
+    /// Colors bold or code spans that name a category with that category's ink, as filing tags
+    /// do, so a reply's mention of a home reads as the same thing.
+    static func tintCategories(
+        in text: inout AttributedString, categories: [DecimalCategory], dark: Bool
+    ) {
+        for run in text.runs {
+            let intent = run.inlinePresentationIntent ?? []
+            guard intent.contains(.stronglyEmphasized) || intent.contains(.code),
+                  run.link == nil else { continue }
+            let span = String(text[run.range].characters)
+                .trimmingCharacters(in: .whitespaces.union(.punctuationCharacters))
+            guard let category = category(named: span, in: categories) else { continue }
+            let ink = AtlasPalette.ink(AtlasHierarchy.hue(for: category.code), dark: dark)
+            text[run.range].foregroundColor = ink
+            text[run.range].appKit.foregroundColor = NSColor(ink)
+            // A code span named a category, not code: drop the monospaced face.
+            if intent.contains(.code) {
+                text[run.range].inlinePresentationIntent = intent.subtracting(.code)
+                    .union(.stronglyEmphasized)
+            }
+        }
+    }
+
+    nonisolated static func category(
+        named span: String, in categories: [DecimalCategory]
+    ) -> DecimalCategory? {
+        guard !span.isEmpty else { return nil }
+        return categories.first {
+            span.caseInsensitiveCompare($0.label) == .orderedSame
+                || span.caseInsensitiveCompare($0.name) == .orderedSame
+                || span == $0.code
+        }
+    }
+
     private static func inline(_ source: String) -> (AttributedString, [MathMarkdown.Formula]) {
         let (text, formulas) = MathMarkdown.extractingInline(source)
         let parsed = (try? AttributedString(
@@ -1128,6 +1204,11 @@ struct MarkdownPreview: View {
         )) ?? AttributedString(text)
         return (parsed, formulas)
     }
+}
+
+extension EnvironmentValues {
+    /// Categories whose names are tinted where Markdown bolds them; empty outside Chat.
+    @Entry var tintedCategories: [DecimalCategory] = []
 }
 
 /// A disclosure whose whole label toggles it, as in Finder and System Settings. SwiftUI's

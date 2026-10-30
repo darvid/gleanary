@@ -18,6 +18,17 @@ enum AgentRole: String, Codable, Sendable, CaseIterable {
         }
     }
 
+    /// What the role's work amounts to, for a one-line summary of it.
+    var pastTense: String {
+        switch self {
+        case .assistant: "Coordinated"
+        case .researcher: "Researched"
+        case .curator: "Found connections"
+        case .librarian: "Filed"
+        case .writer: "Drafted"
+        }
+    }
+
     var responsibility: String {
         switch self {
         case .assistant: "Questions and coordination"
