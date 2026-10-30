@@ -39,6 +39,32 @@ struct NavigationLocation: Equatable {
     }
 }
 
+/// Where the main window was when the app last ran, so the next launch opens there.
+struct SavedLibraryWindow: Codable, Equatable {
+    enum Destination: String, Codable {
+        case chat, library, automations, activity, tasks, entities
+    }
+
+    var destination: Destination
+    var scope: LibraryScope?
+    /// The collection `atlas` belongs to, with `scope`.
+    var kindFilter: LibraryKindFilter
+    var atlas: KnowledgeAtlasModel.SavedView?
+
+    static let defaultsKey = "libraryWindow"
+
+    static func load(from defaults: UserDefaults = .standard) -> Self? {
+        defaults.data(forKey: defaultsKey)
+            .flatMap { try? JSONDecoder().decode(Self.self, from: $0) }
+    }
+
+    func save(to defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) {
+            defaults.set(data, forKey: Self.defaultsKey)
+        }
+    }
+}
+
 /// Back and forward through visited locations, like a browser: visiting after going back drops
 /// the forward entries.
 struct NavigationHistory<Location: Equatable> {

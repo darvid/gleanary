@@ -58,7 +58,7 @@ struct AtlasSnapshot: Sendable, Equatable {
     var items: [AtlasItem]
 }
 
-enum AtlasNodeID: Hashable, Sendable {
+enum AtlasNodeID: Hashable, Sendable, Codable {
     case library
     case category(UUID)
     /// A code prefix with descendants but no category row of its own (for example "50" when only

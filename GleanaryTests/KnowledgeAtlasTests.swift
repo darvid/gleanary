@@ -575,6 +575,43 @@ struct KnowledgeAtlasCameraTests {
         #expect(abs(atlas.camera.scale - unfiledCamera.scale) < 0.000001)
     }
 
+    @Test func savedViewRestoresAfterRelaunchOnceDataAndViewportArrive() throws {
+        let (atlas, fixture) = model()
+        atlas.activate(scope: .all, kind: .all)
+        atlas.focus(.category(fixture.ai.id), animated: false)
+        atlas.zoom(by: 1.6, around: CGPoint(x: 420, y: 300))
+        atlas.pan(by: CGSize(width: 30, height: -12))
+        let window = SavedLibraryWindow(
+            destination: .library, scope: .all, kindFilter: .all, atlas: atlas.savedView
+        )
+        let defaults = try #require(UserDefaults(suiteName: "SavedLibraryWindowTests"))
+        defer { defaults.removePersistentDomain(forName: "SavedLibraryWindowTests") }
+        window.save(to: defaults)
+        let loaded = try #require(SavedLibraryWindow.load(from: defaults))
+        #expect(loaded == window)
+
+        // A new launch: the collection activates before its data loads or the map is sized.
+        let relaunched = KnowledgeAtlasModel()
+        relaunched.reduceMotion = true
+        try relaunched.restore(#require(loaded.atlas), scope: .all, kind: .all)
+        relaunched.activate(scope: .all, kind: .all)
+        #expect(relaunched.savedView == nil)
+        relaunched.setViewport(CGSize(width: 1000, height: 640))
+        relaunched.apply(fixture.snapshot)
+        #expect(relaunched.focusID == .category(fixture.ai.id))
+        #expect(abs(relaunched.camera.scale - atlas.camera.scale) < 0.000001)
+        #expect(abs(relaunched.camera.offset.x - atlas.camera.offset.x) < 0.000001)
+        #expect(abs(relaunched.camera.offset.y - atlas.camera.offset.y) < 0.000001)
+
+        // Opening a different collection first drops the restore instead of applying it there.
+        let elsewhere = KnowledgeAtlasModel()
+        try elsewhere.restore(#require(loaded.atlas), scope: .all, kind: .all)
+        elsewhere.activate(scope: .unfiled, kind: .all)
+        elsewhere.setViewport(CGSize(width: 1000, height: 640))
+        elsewhere.apply(fixture.snapshot)
+        #expect(elsewhere.focusID == .uncategorized)
+    }
+
     @Test func viewportChangesKeepMapZoomAndRelativeCenterInsteadOfFitting() {
         let (atlas, _) = model()
         atlas.zoom(by: 3, around: CGPoint(x: 350, y: 250))
