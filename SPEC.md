@@ -1,34 +1,29 @@
 # Gleanary: Agent-Native Personal Knowledge System
 
-**Status:** Implementation specification for an existing application  
-**Last updated:** 2026-10-12  
-**Primary audience:** Codex working in the Gleanary repository
-**Directive:** Build and validate a working vertical slice. Prefer running software and measured user experience over speculative abstractions.
+**Status:** Product and behavior specification for the shipped app.
+UI and visual design live in `DESIGN.md`.
+
+**Last updated:** 2026-10-31
 
 ---
 
-## 0. Codex: Read This First
+## 0. Working Rules
 
-You are the lead engineer and product-minded implementer of **Gleanary**, an existing **Swift application backed by SQLite that already uses Apple Intelligence**. Your job is to evolve the real application into a compelling, local-first, agent-native second brain, **not** to bootstrap a replacement project.
-
-**Operating instructions:**
-
-1. **Inspect the repository first.** Identify supported Apple platforms, deployment targets, Swift/SwiftUI architecture, package/dependency choices, build instructions, existing SQLite schema and migrations, inference integration, ingestion pipeline, UI/navigation, tests, and any instructions in `AGENTS.md` or repository documentation. Those discoveries take precedence over proposed names and folder layouts in this spec.
-2. **Preserve working code and user data.** Extend the current persistence model. Never drop existing tables or rewrite the database without a tested, reversible migration and a backup/recovery strategy. Preserve the current Apple Intelligence functionality.
-3. **Execute, don't merely propose.** Implement the vertical slice, build it, run tests, fix regressions, and document results. Make incremental, reviewable changes. Use test doubles where network credentials, permissions, or device-only capabilities are unavailable.
-4. **Make reasonable technical decisions autonomously.** Don't stop for stylistic choices, framework bikeshedding, speculative feature requests, or routine implementation details. Ask only when blocked by a true external dependency, unavailable authorization, materially ambiguous destructive action, or platform constraint that cannot be resolved from the repository.
-5. **Avoid speculative infrastructure.** No PostgreSQL, graph database, server backend, Node/TypeScript runtime, microservices, Pi integration, agent marketplace, multi-room workspace, or elaborate ontology merely because those technologies might eventually be useful. Reuse existing dependencies and patterns when reasonable.
-6. **Keep security and privacy real.** The SQLite database is the local source of truth. Treat ingested source text and model output as untrusted. Keep credentials in Keychain. Require review for destructive or consequential knowledge mutations. Explicitly communicate remote data sharing when enabling cloud inference.
-7. **Do not claim features work without testing them.** Separate implementations, unit-tested paths, simulator/device verification, and OAuth end-to-end verification in the final report. Don't insert fake functionality into the production UI and present it as live.
-8. **Prefer a polished, narrow experience over a broad but hollow prototype.** The goal is something a real user can ingest with, converse through, retrieve from, and meaningfully collaborate with.
-
-### Required opening steps
-
-- Read `AGENTS.md` and any nested guidance, `README`, build project and package manifests, relevant source files, migrations, and tests.
-- Run the existing build and tests; record a baseline and pre-existing failures.
-- Map the current source, artifact, category, inference, and navigation concepts to the ones below. **Adapt the spec to the codebase, not vice versa.**
-- Write a concise `IMPLEMENTATION_NOTES.md` (or update an existing engineering notes file) with: existing architecture, migration strategy, selected vertical slice, build/test commands, decisions, deviations, and known limitations.
-- Then begin implementation. Do not spend the entire session writing an architecture plan.
+1. **Preserve working code and user data.** Extend the current
+   persistence model. Never drop tables or rewrite the database without a
+   tested, reversible migration and a recovery path.
+2. **Reuse before adding.** Check for an existing model, table, search
+   index or service before creating another.
+3. **Avoid speculative infrastructure.** No server backend, graph
+   database, extra runtime, agent marketplace or elaborate ontology
+   because it might be useful later.
+4. **Keep security and privacy real.** SQLite is the local source of
+   truth. Treat ingested text and model output as untrusted. Keep
+   credentials in Keychain. Require review for consequential knowledge
+   changes.
+5. **Don't claim what isn't tested.** No fake functionality, mock
+   retrieval hits or invented citations in the production UI.
+6. **Prefer a polished, narrow experience** over a broad but hollow one.
 
 ---
 
@@ -60,7 +55,7 @@ The user should not need to know whether their request is technically ingestion,
 - **Native and responsive:** SwiftUI UX, streaming feedback, accessible controls, keyboard friendliness, actionable states, cancellation.
 - **Useful offline:** users can always browse/search saved content; on-device inference works where Apple's supported models are available.
 
-### Explicit non-goals for MVP
+### Non-goals
 
 - A full research graph or claim-level epistemic ontology.
 - Fully autonomous unattended research loops or continuous web crawling. Scheduled maintenance of the user's own library (§7.4) is in scope: bounded batches over saved items, with the same permission policy as chat.
@@ -72,27 +67,16 @@ The user should not need to know whether their request is technically ingestion,
 
 ---
 
-## 2. Existing Application Is the Baseline
+## 2. Known Limits
 
-**Known:** Swift application, SQLite storage, Apple Intelligence inference, working product code exists.
-
-**Unknown until repo inspection:** whether the target is macOS, iOS, or multiplatform; exact SQLite library/ORM; current source/artifact schema; extent of existing ingestion, search, UI and test coverage; whether user data is stored in app container, external vault, or both.
-
-**Rule:** Do not assume it is a macOS app simply because the proposed UI resembles Slack. Respect actual target platforms and use conditional capabilities for platform-specific features.
-
-After inspection, prepare an inventory:
-
-| Area | Existing implementation | Reuse / extend / replace | Relevant files |
-|---|---|---|---|
-| App shell/navigation | Discover | Decide | Discover |
-| Database and migrations | Discover | Prefer extend | Discover |
-| Source ingestion | Discover | Prefer extend | Discover |
-| Artifacts/notes | Discover | Prefer extend | Discover |
-| Search | Discover | Prefer extend | Discover |
-| Apple inference | Discover | Preserve and adapt | Discover |
-| Tests | Discover | Expand | Discover |
-
-Do not create duplicate models, tables, search indexes, or services before checking for existing equivalents.
+- Chat search (`search_library`) matches words and meaning only. It has
+  no date or time filters, so phrases like "last week" are ignored.
+- ChatGPT sign-in and inference need a real eligible account. Automated
+  tests cover OAuth, tokens and consent with fixtures, not a live account.
+- A YouTube link without an authorized transcript is saved as metadata
+  only, and research on it is declined rather than guessed.
+- Source-grounding checks reduce model errors but don't prove their
+  absence.
 
 ---
 
@@ -784,75 +768,10 @@ and Explore.
 
 ---
 
-## 9. Implementation Sequence and Definition of Done
+## 9. Test Plan
 
-Implement **in order of user-visible value**, adjusting sequence when repo architecture offers an obviously simpler path. Commit coherent steps where permitted; never make unrelated broad refactors as a prerequisite.
-
-### Phase 0 — Discover and preserve
-
-**Build:** inventory repository; run baseline build/tests; inspect data model, ingestion and Apple inference; document reality and migration plan.  
-**Done when:** baseline results and source/schema map are recorded, and no unreviewed destructive data change is required.
-
-### Phase 1 — Chat as the primary workflow
-
-**Build:** persistent `#general`, composer, messages, mentions, conversation history, message authors, streaming status, minimal task/event persistence. Route explicit mentions even if initially the agents are single-agent executions.  
-**Done when:** every role is addressable, messages persist across restart, and user can view/cancel an active task.
-
-### Phase 2 — Make the knowledge flow real
-
-**Build:** a supported URL ingestion path using existing services, canonical source persistence, normalization, librarian JD filing, researcher-generated summary artifact, and source/artifact detail references. Use Apple inference where available; if device testing is unavailable, exercise provider via a deterministic test double while accurately reporting hardware limits.  
-**Done when:** ingest → categorize → summarize → save → search/retrieve → restart works end to end with a real source.
-
-### Phase 3 — Meaningful agent teamwork
-
-**Build:** lightweight coordinator, bounded cross-agent delegation, context retrieval, curator lookup/relevance, a useful agent-to-agent exchange when justified, conversational follow-up and user interruption.  
-**Done when:** user can independently address researcher and librarian, a curator contribution surfaces only on relevant matches, and conversations remain readable rather than stuffed with procedural chatter.
-
-### Phase 4 — Reviewable knowledge changes
-
-**Build:** curation/link proposals, preview/apply/reject, optimistic concurrency/precondition checks, and revision or undo capability using existing persistence patterns.  
-**Done when:** an agent suggests a meaningful edit to existing information and user can inspect, accept or reject it without data loss.
-
-### Phase 5 — Optional ChatGPT
-
-**Build:** verified provider boundary, authentication and permission handling **only where the supported distribution route applies**, streamed inference, Keychain storage, provider choice and graceful fallback.  
-**Done when:** eligible authenticated user can complete a real task using authorized ChatGPT-plan inference; missing eligibility/consent produces a correct local experience. Otherwise isolate the unfinished integration and clearly document the external blocker without breaking the rest of the MVP.
-
-### Phase 6 — Polish and evaluate
-
-**Build:** native interaction polish, loading/error/offline states, keyboard and accessibility support, diagnostics, tests and representative scripted demo scenarios.  
-**Done when:** a real user can perform core scenarios without debugging tools, and the app builds/tests on the supported targets.
-
-### Phase 7 — Automations
-
-**Build:** archive and unarchive (§7.5); a persisted automation recipe and run log; an in-app scheduler; and the Inbox summarizer, Link checker (report and propose only) and Cross-linker (propose only) built-ins, with an Automations list and Run Now. Chat-created automations, pipelines and running with the app closed come later.
-**Done when:**
-- An enabled automation runs on schedule and catches up once after a missed run.
-- Its changes are either applied with Undo or reviewable as one changeset.
-- It never revisits checked items early, never exceeds its budget, and never changes anything outside its output policy.
-
-### Phase 8 — Writer
-
-**Build:**
-- The Writer role and a Writing style setting with presets.
-- The compose workflow (gather → confirm → extract → write → save as a linked note) on the existing ChatGPT tool loop, with a final `write_document` tool.
-- Refresh with a reviewable diff.
-- Multiple custom styles and scheduled refresh come later.
-
-**Done when:**
-- A request across dozens of sources produces a styled document after the user confirms the scope.
-- Every graded or factual statement traces to a saved source, and uncovered facts are marked rather than invented.
-- Refresh shows what changed before saving.
-
-**Sequencing note:** If ChatGPT availability is critical to demonstrating research quality, prove a minimal auth + streaming spike sooner, but do not let pending external consent stall the local-first product.
-
----
-
-## 10. Test Plan: Build Trust in the Vertical Slice
-
-Prefer deterministic unit tests and integration tests with test databases and model/network fixtures; add UI tests for critical interactions when tooling permits.
-
-### Minimum automated test categories
+Prefer deterministic unit and integration tests with temporary databases
+and model/network fixtures; add UI tests for critical interactions.
 
 1. **Database and migrations:** existing sample DB upgrades without data loss; foreign keys and associations hold; app can reopen and retrieve records; rollback/backup recovery path is documented and tested where applicable.
 2. **Source identity/dedup:** equivalent arXiv links resolve to same source; distinct version/content cases aren't silently collapsed; duplicate submissions don't create redundant artifacts unexpectedly.
@@ -872,61 +791,9 @@ Prefer deterministic unit tests and integration tests with test databases and mo
    - Archive and unarchive round-trip, and trash restores within its window.
 10. **Writer:** the gathered scope is confirmed before extraction runs; extraction marks uncovered facts instead of inferring them; composed claims carry source references; style instructions change wording but cannot add tools or permissions; source text cannot change the active style; cancelling saves no partial document; refresh re-extracts only new or changed sources.
 
-### Live smoke scenarios
-
-Run on supported target platform(s), using an actual local database seeded with safe non-sensitive test content:
-
-- **S1:** Ingest a real public article; verify title, source URL, normalized text and Johnny Decimal category persist.
-- **S2:** Ask the researcher for a summary; save an artifact with an actual link to the source.
-- **S3:** Add a related second source; request comparison; verify one artifact linked to two sources.
-- **S4:** Ask curator for related existing content; see a genuine retrieval result or candid “none found,” never invented notes.
-- **S5:** User addresses librarian during active work; conversation remains coherent and state does not corrupt.
-- **S6:** A proposed edit is reviewed and declined, leaving the original unchanged; separately approve another and verify persistence.
-- **S7:** Disconnect network/disable cloud; saved information remains accessible, and local inference availability is represented accurately.
-- **S8:** Restart application; review prior messages, sources, artifacts, categories and recent task outcome.
-- **S9:** Where supported and authorized, sign in with ChatGPT, complete one streamed inference request, then revoke/sign out and verify safe fallback.
-
-### Product-level evaluation signals
-
-Instrument unobtrusively and locally first:
-
-- Time from paste/request to saved, useful artifact.
-- First visible response latency and total task duration.
-- Ingestion and retrieval success rate.
-- User corrections per task, especially wrong classification and irrelevant synthesis.
-- Agent contributions judged useful vs. redundant.
-- Proposal acceptance/rejection and unintended mutation rate.
-- Return usage: can a user find and reuse something they saved earlier?
-- Local vs cloud task quality and latency on the same representative fixture set.
-
-**Critical hypothesis to test:** Does collaborative agent behavior make real work more effective than a single assistant using the same tools? Design the architecture so that simple single-agent comparisons are possible; don't bake in obligatory participation by every agent.
-
 ---
 
-## 11. Acceptance Criteria: What “Shippable Prototype” Means
-
-The MVP is acceptable when all statements below are true (or clearly documented as externally blocked):
-
-- [ ] Existing Swift app and database still work; current user records and Apple Intelligence functionality are preserved.
-- [ ] A persistent, polished, accessible native `#general` conversation exists.
-- [ ] All specialists have meaningfully distinct responsibilities and support explicit `@mentions`.
-- [ ] A user can ingest at least one real URL-based source and inspect stored canonical metadata/content.
-- [ ] A librarian can assign a valid Johnny Decimal category using real persisted category data.
-- [ ] A researcher can generate and persist a grounded summary linked to the ingested source.
-- [ ] A curator can search actual saved material and offer at least one relevant, non-fabricated discovery/cross-link suggestion.
-- [ ] Agents can hand off tasks naturally without obligatory rote dialogue, infinite loops or UI lockups.
-- [ ] A user can interrupt or redirect work and review meaningful, proposed mutations.
-- [ ] Source and artifact relationships, messages and outcomes survive restart.
-- [ ] Basic full-text or existing equivalent search actually retrieves saved content.
-- [ ] The app handles unavailable models, offline operation, malformed source input and task failures without data loss.
-- [ ] Sensitive tokens are never stored in SQLite or printed in logs.
-- [ ] Optional ChatGPT authorization is implemented only through a currently supported route with explicit permission and truthful UX; otherwise clearly isolated and reported as a blocker.
-- [ ] Meaningful automated tests exist; project builds and tests pass on available supported targets or environmental blockers are precisely described.
-- [ ] No placeholder UI, mock retrieval hits or invented citations are represented as working production features.
-
----
-
-## 12. Engineering Quality Bar
+## 10. Engineering Quality Bar
 
 - Use idiomatic modern Swift, Swift concurrency, existing project conventions and native SwiftUI components.
 - Prefer clear type boundaries, actors for mutable shared state, and small dependency-injected services. Avoid global mutable agent state or singleton-driven business logic when practical.
@@ -942,22 +809,7 @@ The MVP is acceptable when all statements below are true (or clearly documented 
 
 ---
 
-## 13. Handoff Format for Codex
-
-After each substantial milestone, maintain a short status in `IMPLEMENTATION_NOTES.md` with completed features, migrations, tests, and remaining gaps. When finishing the execution run, report:
-
-1. **What actually changed** (screens, workflows, runtime services, models, migrations).
-2. **Where it lives** (paths to central source files, not giant pasted code dumps).
-3. **What was verified** (exact build/test commands and outcomes; device/manual checks separately).
-4. **What is incomplete** (especially device-dependent Apple Intelligence testing and ChatGPT OAuth consent/eligibility).
-5. **How to run and demo** a full ingestion → discussion → artifact → retrieval flow.
-6. **Next three product improvements** based on real observed friction rather than speculative infrastructure.
-
-Do not stop once the chat UI renders. A successful run requires the actual knowledge operations behind the interface. If external authentication or hardware availability blocks the cloud path, finish the local-first flow and leave a clean seam and precise integration instructions.
-
----
-
-## 14. Official Reference Pointers (Verify Before Implementing)
+## 11. Official Reference Pointers (Verify Before Implementing)
 
 The following references guide integration. They do not supersede current SDK documentation, app distribution policy, the actual repository, or the tests.
 
@@ -969,9 +821,3 @@ The following references guide integration. They do not supersede current SDK do
 - [OpenAI: models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [OpenAI: current preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
 - [OpenAI: account sessions and token refresh](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
-
----
-
-## Final Instruction
-
-**Go build the smallest real Gleanary experience that demonstrates the promise:** one conversation, a few useful specialists, genuine source ingestion, Johnny Decimal filing, source-grounded synthesis, local persistence, meaningful collaboration, and retrieval. Preserve the working Swift/SQLite/Apple Intelligence application. Make optional ChatGPT integration compliant and testable. Ship a cohesive, delightful prototype, measure it with users, and let actual friction determine the next architectural abstraction.
