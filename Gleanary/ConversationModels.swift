@@ -209,8 +209,14 @@ struct ConversationTask: Identifiable, Sendable {
     let progress: String
     let captureID: UUID?
     let sources: [UUID]
+    /// Where a waiting request sits in the queue; nil once it has started.
+    var queueOrder: Double?
     var active: Bool {
         ["queued", "running", "awaiting_user"].contains(state)
+    }
+
+    var isQueued: Bool {
+        state == "queued"
     }
 }
 

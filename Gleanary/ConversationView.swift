@@ -13,6 +13,7 @@ struct ConversationView: View {
     @State private var filingDocument: MarkdownDocument?
     /// The open document the person removed from the composer, so it isn't offered again.
     @State private var aboutDismissed: UUID?
+    @State private var queueExpanded = true
     @State private var source: SourceCitation?
     @State private var reviewingChanges: ReviewedChangeset?
     @State private var reviewingFiling: SeriesFiling.Status?
@@ -27,6 +28,7 @@ struct ConversationView: View {
     @State private var scrollEdges = ScrollEdges()
     @FocusState private var composing: Bool
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.commandPaletteOpen) private var paletteOpen
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -93,6 +95,12 @@ struct ConversationView: View {
             CaptureSourceView(citation: $0, library: library, openDocument: open)
         }
         .onChange(of: model.composerFocusRequest) { composing = true }
+        .onChange(of: model.documentRequest, initial: true) {
+            if let id = model.documentRequest {
+                model.documentRequest = nil
+                open(id)
+            }
+        }
         .onChange(of: source?.id) {
             if source == nil {
                 composing = true
@@ -612,9 +620,13 @@ struct ConversationView: View {
                 savedItemRow(id)
             }
         }
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+        // A whole-point stroke: a 0.5pt hairline over a translucent fill renders unevenly on
+        // dark backgrounds, heavier on the top and left edges.
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.1), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
     }
@@ -657,9 +669,21 @@ struct ConversationView: View {
     }
 
     private func messageRow(_ message: ConversationMessage) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
+        let queuePosition = message.author == "user"
+            ? message.taskID.flatMap { id in model.queue.firstIndex { $0.id == id } } : nil
+        return VStack(alignment: .leading, spacing: 9) {
             if message.author == "user" {
-                userBubble(message)
+                // A waiting request is dimmed until its turn.
+                userBubble(message).opacity(queuePosition == nil ? 1 : 0.7)
+            }
+            if let queuePosition {
+                Label(
+                    "Queued · \(queuePosition + 1) of \(model.queue.count)",
+                    systemImage: "clock"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.trailing, 4)
             }
             if let taskID = message.taskID, message.author == "user",
                let task = model.tasks.first(where: { $0.id == taskID }),
@@ -1144,22 +1168,6 @@ struct ConversationView: View {
                         .labelStyle(.iconOnly).buttonStyle(.borderless)
                 }.controlSize(.small)
             }
-            if let task = model.activeTask {
-                HStack(spacing: 8) {
-                    ChatWorkingIndicator(color: .secondary)
-                    Text(task.owner.title).fontWeight(.medium).fadesOnChange(task.owner)
-                        .help(task.owner.responsibility)
-                    StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
-                }
-                .font(.caption).foregroundStyle(.secondary)
-                // The composer's send button doubles as Stop; keep Escape without a second control.
-                .background {
-                    Button("Stop Current Task") { Task { await model.cancel() } }
-                        .keyboardShortcut(.escape, modifiers: [])
-                        .hidden().accessibilityHidden(true)
-                }
-                .padding(.horizontal, composerInset)
-            }
             if ConversationRoute.mentionRange(in: model.composer) != nil {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(AgentRole.allCases, id: \.self) { role in
@@ -1178,6 +1186,10 @@ struct ConversationView: View {
                 }.controlSize(.small)
             }
             VStack(alignment: .leading, spacing: 8) {
+                if model.activeTask != nil || !model.queue.isEmpty {
+                    queueStrip
+                    Divider().padding(.horizontal, -12)
+                }
                 if !model.selectedSources.isEmpty || aboutDocument != nil {
                     sourceAttachments
                 }
@@ -1192,8 +1204,9 @@ struct ConversationView: View {
                     .buttonStyle(.plain).disabled(!model.ready || model.running)
                     .accessibilityLabel("Attach document").help("Import a document")
                     TextField(
-                        aboutDocument == nil ? "Ask Gleanary or save something…" :
-                            "Ask about this document…",
+                        aboutDocument != nil ? "Ask about this document…" :
+                            model.running ? "Add to the queue, or ask something…" :
+                            "Ask Gleanary or save something…",
                         text: $model.composer,
                         axis: .vertical
                     )
@@ -1219,9 +1232,9 @@ struct ConversationView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(model.running && draftIsEmpty ? "Stop task" : model
-                        .running ? "Redirect task" : "Send message")
-                    .help(model
-                        .running && draftIsEmpty ? "Stop current task" : "Send message")
+                        .running ? "Add to queue" : "Send message")
+                    .help(model.running && draftIsEmpty ? "Stop current task"
+                        : model.running ? "Run this after the current request" : "Send message")
                     .disabled(!model.ready || (!model.running && draftIsEmpty))
                 }
             }.padding(.horizontal, 12).padding(.vertical, 9)
@@ -1235,6 +1248,112 @@ struct ConversationView: View {
                 ))
         }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
             .frame(maxWidth: .infinity)
+    }
+
+    /// What's running, and what's waiting its turn, at the top of the composer.
+    @ViewBuilder private var queueStrip: some View {
+        let queue = model.queue
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if let task = model.activeTask {
+                    ChatWorkingIndicator(color: .secondary)
+                    Text(task.owner.title).fontWeight(.medium).fadesOnChange(task.owner)
+                        .help(task.owner.responsibility)
+                    StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
+                        .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                    Text("· \(Self.queueTitle(task.request))").foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                } else if model.queuePaused {
+                    Image(systemName: "pause.fill").foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text("Paused").fontWeight(.medium)
+                    Text("· \(queue.count) queued from your last session")
+                        .foregroundStyle(.secondary).lineLimit(1)
+                } else {
+                    Text("\(queue.count) queued").fontWeight(.medium)
+                }
+                Spacer(minLength: 8)
+                if model.queuePaused, model.activeTask == nil {
+                    Button("Clear") { Task { await model.clearQueue() } }
+                        .buttonStyle(.borderless)
+                    Button("Resume") { Task { await model.resumeQueue() } }
+                        .buttonStyle(.borderedProminent)
+                } else if !queue.isEmpty {
+                    Button {
+                        withAnimation(.snappy(duration: 0.2)) { queueExpanded.toggle() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\(queue.count) queued")
+                            Image(systemName: "chevron.down")
+                                .rotationEffect(.degrees(queueExpanded ? 180 : 0))
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.07), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityValue(queueExpanded ? "Expanded" : "Collapsed")
+                    .help(queueExpanded ? "Hide the queue" : "Show the queue")
+                }
+            }
+            .font(.caption)
+            // The composer's send button doubles as Stop; keep Escape without a second control.
+            .background {
+                // Escape closes the palette instead while it's open.
+                if model.activeTask != nil, !paletteOpen {
+                    Button("Stop Current Task") { Task { await model.cancel() } }
+                        .keyboardShortcut(.escape, modifiers: [])
+                        .hidden().accessibilityHidden(true)
+                }
+            }
+            if queueExpanded || model.queuePaused, !queue.isEmpty {
+                VStack(spacing: 0) {
+                    ForEach(Array(queue.enumerated()), id: \.element.id) { index, task in
+                        queueRow(task, index: index, count: queue.count)
+                    }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Queued requests")
+            }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 4)
+    }
+
+    private func queueRow(_ task: ConversationTask, index: Int, count: Int) -> some View {
+        let title = Self.queueTitle(task.request)
+        return HStack(spacing: 8) {
+            Text("\(index + 1)").monospacedDigit().foregroundStyle(.secondary)
+                .frame(minWidth: 14, alignment: .trailing)
+            Text(title).lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Move \(title) earlier", systemImage: "chevron.up") {
+                Task { await model.moveInQueue(task.id, by: -1) }
+            }
+            .disabled(index == 0)
+            Button("Move \(title) later", systemImage: "chevron.down") {
+                Task { await model.moveInQueue(task.id, by: 1) }
+            }
+            .disabled(index == count - 1)
+            Button("Remove \(title) from the queue", systemImage: "xmark") {
+                Task { await model.removeFromQueue(task.id) }
+            }
+        }
+        .labelStyle(.iconOnly).buttonStyle(.borderless)
+        .font(.caption)
+        .padding(.vertical, 3)
+    }
+
+    /// A request as one short line: a link without its scheme, otherwise its first line.
+    nonisolated static func queueTitle(_ request: String) -> String {
+        let line = request.split(whereSeparator: \.isNewline).first.map(String.init) ?? request
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        for scheme in ["https://", "http://"] where trimmed.hasPrefix(scheme) {
+            let rest = trimmed.dropFirst(scheme.count)
+            return String(rest.hasPrefix("www.") ? rest.dropFirst(4) : rest)
+        }
+        return trimmed
     }
 
     /// Documents pinned as context for the next message, shown like attachments in the composer.
@@ -1375,7 +1494,7 @@ struct AddToChatButton: View {
 }
 
 enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
-    case inference, appearance, capture, filing, writing
+    case inference, appearance, capture, filing, writing, keyboard
     var id: String {
         rawValue
     }
@@ -1387,6 +1506,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
         case .capture: "Capture"
         case .filing: "Filing"
         case .writing: "Writing"
+        case .keyboard: "Keyboard"
         }
     }
 
@@ -1397,6 +1517,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
         case .capture: "tray.and.arrow.down"
         case .filing: "folder"
         case .writing: "doc.richtext"
+        case .keyboard: "keyboard"
         }
     }
 }
@@ -1471,6 +1592,13 @@ struct ConversationSettings: View {
                 value: KnowledgeSettingsPage.writing
             ) {
                 WritingSettingsView()
+            }
+            Tab(
+                KnowledgeSettingsPage.keyboard.title,
+                systemImage: KnowledgeSettingsPage.keyboard.symbol,
+                value: KnowledgeSettingsPage.keyboard
+            ) {
+                KeyboardSettingsView()
             }
         }
         .frame(width: Self.size.width, height: Self.size.height)

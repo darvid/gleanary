@@ -3393,6 +3393,163 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(model.messages.filter { $0.author == "user" }.count == 2)
     }
 
+    @Test @MainActor func requestsSentWhileWorkingWaitTheirTurn() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Source", markdown: "Real source content."
+        ))
+        let coordinator = AgentCoordinator(
+            store: store,
+            inference: ConversationFixtureInference(wait: true, script: [
+                "summarize": ConversationPlan(steps: [.init(action: .research)]),
+                "save: A user thought about distributed systems.": ConversationPlan(steps: [.init(
+                    action: .saveNote,
+                    argument: "A user thought about distributed systems."
+                )]),
+            ])
+        )
+        let model = ConversationModel(store: store, coordinator: coordinator)
+        await model.load()
+        model.selectedSources = [note.id]
+        model.composer = "@researcher summarize"
+        await model.send()
+        #expect(model.running)
+        let first = try #require(model.activeTask?.id)
+
+        model.composer = "@librarian save: A user thought about distributed systems."
+        await model.send()
+        // The first request keeps running; the second waits rather than cancelling it.
+        #expect(model.activeTask?.id == first)
+        #expect(model.queue.count == 1)
+        #expect(model.composer.isEmpty)
+
+        // Several pasted links become one queued request each, after what was already waiting.
+        model.composer = "https://example.org/a\nhttps://example.org/b"
+        await model.send()
+        #expect(model.queue.map(\.request) == [
+            "@librarian save: A user thought about distributed systems.",
+            "https://example.org/a", "https://example.org/b",
+        ])
+        for task in model.queue.dropFirst() {
+            await model.removeFromQueue(task.id)
+        }
+
+        // Stopping the current request lets the next one take its turn.
+        await model.cancel()
+        while model.running {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.tasks.first { $0.id == first }?.state == "cancelled")
+        #expect(model.queue.isEmpty)
+        #expect(model.tasks.contains { $0.id != first && $0.state == "succeeded" })
+        // Removed requests keep their messages, marked as removed.
+        #expect(model.messages.filter { $0.author == "user" }.count == 4)
+    }
+
+    @Test @MainActor func queueStripShowsWhatRunsAndWhatWaits() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let note = try await store.save(MarkdownDocument(
+            name: "Source", markdown: "Real source content."
+        ))
+        let coordinator = AgentCoordinator(
+            store: store,
+            inference: ConversationFixtureInference(wait: true, script: [
+                "summarize": ConversationPlan(steps: [.init(action: .research)]),
+            ])
+        )
+        let suite = "gleanary-chat-queue-" + UUID().uuidString
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.set(true, forKey: "starterCategoriesOffered")
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = ConversationModel(store: store, coordinator: coordinator)
+        await model.load()
+        model.selectedSources = [note.id]
+        model.composer = "@researcher summarize"
+        await model.send()
+        model.composer = "https://www.example.org/first-article\nhttps://example.org/second-article"
+        await model.send()
+        #expect(model.queue.count == 2)
+        for dark in [false, true] {
+            let host = NSHostingView(rootView: ConversationView(
+                model: model, library: LibraryModel(store: store)
+            )
+            .defaultAppStorage(defaults)
+            .preferredColorScheme(dark ? .dark : .light)
+            .frame(width: 720, height: 560))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 720, height: 560),
+                styleMask: [], backing: .buffered, defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            try await Task.sleep(for: .milliseconds(250))
+            host.layoutSubtreeIfNeeded()
+            if let directory = ProcessInfo.processInfo.environment["GLEANARY_QUEUE_SCREENSHOTS"] {
+                let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let png = try #require(bitmap.representation(using: .png, properties: [:]))
+                try FileManager.default.createDirectory(
+                    at: URL(filePath: directory), withIntermediateDirectories: true
+                )
+                try png.write(to: URL(filePath: directory)
+                    .appending(path: "queue-\(dark ? "dark" : "light").png"))
+            }
+        }
+        await model.clearQueue()
+        await model.cancel()
+        #expect(!model.running)
+    }
+
+    @Test func queuedRequestsKeepTheirOrderAndSurviveRelaunch() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let running = try await store.beginConversation("first", owner: .assistant)
+        let second = try await store.beginConversation("second", owner: .assistant, queued: true)
+        let third = try await store.beginConversation("third", owner: .assistant, queued: true)
+        func queued() async throws -> [UUID] {
+            try await store.conversationTasks().filter(\.isQueued)
+                .sorted { ($0.queueOrder ?? 0) < ($1.queueOrder ?? 0) }.map(\.id)
+        }
+        #expect(try await queued() == [second, third])
+        try await store.reorderConversationQueue([third, second])
+        #expect(try await queued() == [third, second])
+
+        // A relaunch fails only what was running; the queue waits.
+        try await store.recoverConversation()
+        let tasks = try await store.conversationTasks()
+        #expect(tasks.first { $0.id == running }?.state == "failed")
+        #expect(try await queued() == [third, second])
+
+        #expect(try await store.startQueuedConversationTask(third))
+        #expect(try await !store.startQueuedConversationTask(third))
+        #expect(try await queued() == [second])
+    }
+
+    @Test @MainActor func aQueueFromAnEarlierLaunchWaitsForResumeOrClear() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try await store.beginConversation("first", owner: .assistant, queued: true)
+        _ = try await store.beginConversation("second", owner: .assistant, queued: true)
+        let model = ConversationModel(store: store, coordinator: AgentCoordinator(store: store))
+        await model.load()
+        #expect(model.queuePaused)
+        #expect(!model.running)
+        #expect(model.queue.count == 2)
+
+        await model.moveInQueue(first, by: 1)
+        #expect(model.queue.last?.id == first)
+        await model.removeFromQueue(first)
+        #expect(model.queue.count == 1)
+        #expect(model.tasks.first { $0.id == first }?.state == "cancelled")
+        await model.clearQueue()
+        #expect(model.queue.isEmpty)
+        #expect(!model.queuePaused)
+    }
+
     @Test func outputValidationRejectsInventedEvidenceAndEmbeddedInstructions() throws {
         let evidence = [ResearchEvidence(
             id: "S1E1",
