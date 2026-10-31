@@ -140,17 +140,20 @@ extension DocumentStore {
                     state: row["state"],
                     progress: row["progress"],
                     captureID: capture.map(Self.uuid),
-                    sources: JSONDecoder().decode([UUID].self, from: row["sourceRefs"])
+                    sources: JSONDecoder().decode([UUID].self, from: row["sourceRefs"]),
+                    queueOrder: row["queueOrder"]
                 )
             }
         }
     }
 
+    /// Fails what was running when Gleanary quit. Queued requests never started, so they stay
+    /// queued for the person to resume or clear.
     func recoverConversation() throws {
         try readyDatabase().write { db in
             try db.execute(sql: """
             UPDATE conversation_tasks SET state = 'failed', progress = ?, updatedAt = ?
-            WHERE state IN ('queued','running')
+            WHERE state = 'running'
             """, arguments: [
                 ConversationError.interrupted.localizedDescription,
                 Date().timeIntervalSince1970,
@@ -187,11 +190,14 @@ extension DocumentStore {
         }
     }
 
+    /// Records the request and its message. A queued one waits at the end of the queue until
+    /// `startQueuedConversationTask` runs it.
     func beginConversation(
         _ request: String,
         owner: AgentRole,
         captureID: UUID? = nil,
-        sources: [UUID] = []
+        sources: [UUID] = [],
+        queued: Bool = false
     ) throws -> UUID {
         _ = try ConversationRoute(request, detectsURL: false)
         return try readyDatabase().write { db in
@@ -200,15 +206,21 @@ extension DocumentStore {
             }
             let id = UUID()
             let now = Date().timeIntervalSince1970
+            let order: Double? = queued ? try Double.fetchOne(
+                db,
+                sql: "SELECT coalesce(max(queueOrder), 0) + 1 FROM conversation_tasks WHERE state = 'queued'"
+            ) ?? 1 : nil
             try db.execute(sql: """
-            INSERT INTO conversation_tasks(id, owner, request, state, captureID, sourceRefs, createdAt, updatedAt)
-            VALUES (?, ?, ?, 'running', ?, ?, ?, ?)
+            INSERT INTO conversation_tasks(id, owner, request, state, captureID, sourceRefs, queueOrder, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, arguments: [
                 id.uuidString,
                 owner.rawValue,
                 request,
+                queued ? "queued" : "running",
                 captureID?.uuidString,
                 JSONEncoder().encode(sources),
+                order,
                 now,
                 now,
             ])
@@ -224,6 +236,29 @@ extension DocumentStore {
                 arguments: [id.uuidString, now]
             )
             return id
+        }
+    }
+
+    /// Moves a queued request to running. False when it was removed or cleared meanwhile.
+    func startQueuedConversationTask(_ id: UUID) throws -> Bool {
+        try readyDatabase().write { db in
+            try db.execute(sql: """
+            UPDATE conversation_tasks SET state = 'running', queueOrder = NULL, updatedAt = ?
+            WHERE id = ? AND state = 'queued'
+            """, arguments: [Date().timeIntervalSince1970, id.uuidString])
+            return db.changesCount > 0
+        }
+    }
+
+    /// Puts queued requests in this order; ids no longer queued are skipped.
+    func reorderConversationQueue(_ ids: [UUID]) throws {
+        try readyDatabase().write { db in
+            for (index, id) in ids.enumerated() {
+                try db.execute(
+                    sql: "UPDATE conversation_tasks SET queueOrder = ? WHERE id = ? AND state = 'queued'",
+                    arguments: [Double(index + 1), id.uuidString]
+                )
+            }
         }
     }
 

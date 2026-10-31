@@ -101,39 +101,75 @@ private struct GleanaryCommands: Commands {
     @FocusedValue(\.gleanaryActions) private var actions
     @FocusedValue(\.navigationActions) private var navigation
     @FocusedValue(\.activitySearch) private var activitySearch
+    @FocusedValue(\.commandActions) private var windowActions
+    private let shortcuts = ShortcutSettings.shared
+
     var body: some Commands {
         CommandMenu("Go") {
-            Button("Back") { navigation?.back() }.keyboardShortcut("[")
-                .disabled(navigation?.canGoBack != true)
-            Button("Forward") { navigation?.forward() }.keyboardShortcut("]")
-                .disabled(navigation?.canGoForward != true)
+            item("palette", title: "Command Palette…")
+            Divider()
+            item("back")
+            item("forward")
+            Divider()
+            ForEach(["go-chat", "go-library", "go-tasks", "go-entities", "go-activity",
+                     "go-automations"], id: \.self) { item($0) }
         }
         CommandGroup(replacing: .newItem) {
-            Button(actions?.newItemTitle ?? "New Note") { actions?.newItem() }.keyboardShortcut("n")
-                .disabled(actions?.enabled != true)
-            Button("Attach Documents…") { actions?.attach() }.keyboardShortcut("o")
-                .disabled(actions?.enabled != true)
-            Button("Import Bookmarks…") { actions?.importBookmarks?() }
-                .disabled(actions?.enabled != true || actions?.importBookmarks == nil)
-            Button("Categorize Unfiled…") { actions?.categorize?() }
-                .disabled(actions?.enabled != true || actions?.categorize == nil)
+            item("new-item", title: actions?.newItemTitle ?? "New Note")
+            item("attach")
+            item("bookmarks")
+            item("categorize")
         }
         CommandMenu("Chat") {
-            Button("Send Message") { actions?.sendMessage?() }
-                .keyboardShortcut(.return, modifiers: .command)
-                .disabled(actions?.enabled != true || actions?.sendMessage == nil)
-            Button("Clear Conversation…") { actions?.clearConversation?() }
-                .keyboardShortcut("k", modifiers: .command)
-                .disabled(actions?.enabled != true || actions?.clearConversation == nil)
+            item("send")
+            item("clear")
+        }
+        CommandGroup(after: .sidebar) {
+            item("toggle-sidebar")
+            Divider()
+            item("show-map")
+            item("show-list")
+            item("show-graph")
         }
         CommandGroup(after: .textEditing) {
-            Button("Focus Input") {
-                if let activitySearch {
-                    activitySearch()
-                } else {
-                    actions?.focus()
-                }
-            }.keyboardShortcut("f")
+            item("focus", title: "Focus Input")
+        }
+    }
+
+    /// A menu item for a command: disabled where the focused window can't run it, with the
+    /// shortcut set in Settings › Keyboard.
+    private func item(_ id: String, title: String? = nil) -> some View {
+        let action = CommandRouter.action(
+            id, window: windowActions, actions: actions, navigation: navigation,
+            activitySearch: activitySearch
+        )
+        return Button(title ?? AppCommand.named(id)?.title ?? id) { action?() }
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: id))
+            .disabled(action == nil)
+    }
+}
+
+/// Finds what runs a command in the focused window, whichever view published it.
+@MainActor enum CommandRouter {
+    static func action(
+        _ id: String,
+        window: [String: () -> Void]?,
+        actions: GleanaryActions?,
+        navigation: NavigationActions?,
+        activitySearch: (() -> Void)?
+    ) -> (() -> Void)? {
+        let enabled = actions?.enabled == true
+        switch id {
+        case "back": return navigation?.canGoBack == true ? navigation?.back : nil
+        case "forward": return navigation?.canGoForward == true ? navigation?.forward : nil
+        case "new-item": return enabled ? actions?.newItem : nil
+        case "attach": return enabled ? actions?.attach : nil
+        case "bookmarks": return enabled ? actions?.importBookmarks : nil
+        case "categorize": return enabled ? actions?.categorize : nil
+        case "send": return enabled ? actions?.sendMessage : nil
+        case "clear": return enabled ? actions?.clearConversation : nil
+        case "focus": return activitySearch ?? actions?.focus
+        default: return window?[id]
         }
     }
 }

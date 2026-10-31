@@ -67,6 +67,8 @@ struct ContentView: View {
     /// Atlas navigations already accounted for, so a context change from free zooming isn't one.
     @State private var seenAtlasNavigations = 0
     @FocusState private var searchFocused: Bool
+    @State private var showingPalette = false
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -106,6 +108,13 @@ struct ContentView: View {
     }
 
     var body: some View {
+        windowContent
+            .environment(\.commandPaletteOpen, showingPalette)
+            .focusedSceneValue(\.commandActions, commandActions)
+            .overlay { commandPalette }
+    }
+
+    private var windowContent: some View {
         // Like ChatGPT: one toolbar spans the window, with the sidebar and content below it, so the
         // sidebar toggle never moves and content never scrolls into the titlebar.
         HStack(spacing: 0) {
@@ -156,6 +165,7 @@ struct ContentView: View {
             canGoBack: history.canGoBack, canGoForward: history.canGoForward,
             back: goBack, forward: goForward
         ))
+
         .onChange(of: location, initial: true) { old, new in record(from: old, to: new) }
         .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -524,12 +534,15 @@ struct ContentView: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(id: "navigation", placement: .navigation) {
             HStack(spacing: 0) {
+                // The shortcut lives on View › Toggle Sidebar, so Settings › Keyboard can change
+                // it.
+                let shortcut = ShortcutSettings.shared.shortcut(for: "toggle-sidebar")
+                    .map { " (\($0.display))" } ?? ""
                 Button("Toggle Sidebar", systemImage: "sidebar.left") {
                     sidebarVisible.toggle()
                 }
                 .labelStyle(.iconOnly).buttonStyle(.borderless)
-                .keyboardShortcut("s", modifiers: [.command, .control])
-                .help(sidebarVisible ? "Hide sidebar (⌃⌘S)" : "Show sidebar (⌃⌘S)")
+                .help((sidebarVisible ? "Hide sidebar" : "Show sidebar") + shortcut)
                 if sidebarVisible {
                     // Continues the sidebar's edge through the toolbar, as ChatGPT does.
                     Spacer().frame(width: titleIndent)
@@ -972,6 +985,155 @@ struct ContentView: View {
             state.atlas = savedWindow.atlas
         }
         return state
+    }
+
+    // MARK: Command palette
+
+    /// What this window can run by command id, for menus, shortcuts and the palette.
+    private var commandActions: [String: () -> Void] {
+        var actions: [String: () -> Void] = [
+            "palette": { withAnimation(.snappy(duration: 0.15)) { showingPalette = true } },
+            "settings": { openSettings() },
+            "toggle-sidebar": { sidebarVisible.toggle() },
+            "go-library": { sidebarSelection.wrappedValue = .library(.all) },
+            "go-tasks": { sidebarSelection.wrappedValue = .tasks },
+            "go-entities": { sidebarSelection.wrappedValue = .entities },
+            "go-activity": { sidebarSelection.wrappedValue = .activity },
+            "go-automations": { sidebarSelection.wrappedValue = .automations },
+            "show-map": { showLibrary(as: .map) },
+            "show-list": { showLibrary(as: .list) },
+            "show-graph": { showLibrary(as: .graph) },
+        ]
+        if conversation != nil {
+            actions["go-chat"] = { sidebarSelection.wrappedValue = .conversation }
+        }
+        return actions
+    }
+
+    /// Leaves Chat or another screen for the Library, in the chosen presentation.
+    private func showLibrary(as newPresentation: LibraryPresentation) {
+        readerTarget = nil
+        chatting = false
+        automating = false
+        showingActivity = false
+        showingTasks = false
+        showingEntities = false
+        presentation = newPresentation
+    }
+
+    @ViewBuilder private var commandPalette: some View {
+        if showingPalette {
+            ZStack(alignment: .top) {
+                Color.black.opacity(0.25).ignoresSafeArea()
+                    .onTapGesture { showingPalette = false }
+                    .accessibilityHidden(true)
+                FocusedActionsReader { focusedActions in
+                    CommandPaletteView(
+                        items: paletteItems(focusedActions: focusedActions),
+                        suggested: ["go-library", "new-item", "attach", "show-graph"],
+                        recent: { await paletteDocuments("", limit: 5, section: .recent) },
+                        documents: { await paletteDocuments($0, limit: 40, section: .documents) },
+                        ask: paletteAsk,
+                        close: { showingPalette = false }
+                    )
+                }
+                .padding(.top, 72)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func paletteItems(focusedActions: GleanaryActions?) -> [PaletteItem] {
+        let shortcuts = ShortcutSettings.shared
+        var items: [PaletteItem] = []
+        let places: [(String, String, SidebarItem)] = [
+            ("Library", "books.vertical", .library(.all)),
+            ("Notes", "note.text", .library(.notes)),
+            ("Sources", "doc.text", .library(.sources)),
+            ("Unfiled", "folder.badge.questionmark", .library(.unfiled)),
+            ("Captures", "tray.and.arrow.down", .library(.captures)),
+            ("Archived", "archivebox", .library(.archived)),
+            ("Tasks", "checklist", .tasks),
+            ("Entities", "person.2", .entities),
+            ("Activity", "clock", .activity),
+            ("Automations", "gearshape.2", .automations),
+        ] + (conversation == nil ? [] : [("Chat", "bubble.left", .conversation)])
+        for (title, symbol, destination) in places {
+            items.append(PaletteItem(
+                id: "place-\(title)", section: .places, title: title, subtitle: "Go to",
+                symbol: symbol,
+                run: { sidebarSelection.wrappedValue = destination }
+            ))
+        }
+        for category in categories {
+            items.append(PaletteItem(
+                id: "category-\(category.id)", section: .categories, title: category.label,
+                subtitle: "Show in Library", symbol: "number",
+                run: { sidebarSelection.wrappedValue = .library(.category(category.id)) }
+            ))
+        }
+        let window = commandActions
+        for command in AppCommand.all where !["palette", "stop"].contains(command.id) {
+            guard let action = CommandRouter.action(
+                command.id, window: window, actions: focusedActions,
+                navigation: NavigationActions(
+                    canGoBack: history.canGoBack, canGoForward: history.canGoForward,
+                    back: goBack, forward: goForward
+                ),
+                activitySearch: nil
+            ) else { continue }
+            let title = command.id == "new-item" ? (focusedActions?.newItemTitle ?? "New Note")
+                : command.title
+            items.append(PaletteItem(
+                id: "command-\(command.id)", section: .commands, title: title,
+                symbol: command.symbol, shortcut: shortcuts.shortcut(for: command),
+                keywords: command.keywords, run: action
+            ))
+        }
+        return items
+    }
+
+    private func paletteDocuments(
+        _ query: String, limit: Int, section: PaletteItem.Section
+    ) async -> [PaletteItem] {
+        guard let page = try? await library.store.documentPage(query: query, limit: limit)
+        else { return [] }
+        return page.documents.map { document in
+            let host = document.sourceURL?.host()
+                .map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+            return PaletteItem(
+                id: "document-\(document.id)", section: section, title: document.name,
+                subtitle: [document.kindLabel, host].compactMap(\.self).joined(separator: " · "),
+                symbol: document.kind == "source" ? "doc.text" : "note.text",
+                filing: document.filing,
+                run: { openSavedItem(document.id) },
+                runBeside: conversation.map { conversation in
+                    {
+                        sidebarSelection.wrappedValue = .conversation
+                        conversation.documentRequest = document.id
+                    }
+                }
+            )
+        }
+    }
+
+    /// Free text goes to Chat; links are saved, each queued behind whatever is running.
+    private func paletteAsk(_ text: String) -> PaletteItem? {
+        guard let conversation else { return nil }
+        let links = PastedLinks.isOnlyLinks(text) ? PastedLinks.urls(in: text) : []
+        let title = links.count > 1 ? "Save \(links.count) links"
+            : links.count == 1 ? "Save link" : "Ask Gleanary “\(text)”"
+        let subtitle = links.count > 1 ? "Each one waits its turn in Chat"
+            : links.first.map(\.absoluteString) ?? "Sends to Chat"
+        return PaletteItem(
+            id: "ask", section: .ask, title: title, subtitle: subtitle,
+            symbol: links.isEmpty ? "bubble.left" : "plus",
+            run: {
+                sidebarSelection.wrappedValue = .conversation
+                conversation.composer = text
+                Task { await conversation.send() }
+            }
+        )
     }
 
     // MARK: History
@@ -1948,4 +2110,15 @@ private enum SidebarItem: Hashable {
     case tasks
     case entities
     case library(LibraryScope)
+}
+
+/// Reads the focused screen's actions for the palette alone. ContentView reading them itself
+/// would re-render the whole window each time Chat republishes them, which is every token.
+private struct FocusedActionsReader<Content: View>: View {
+    @FocusedValue(\.gleanaryActions) private var actions
+    @ViewBuilder let content: (GleanaryActions?) -> Content
+
+    var body: some View {
+        content(actions)
+    }
 }

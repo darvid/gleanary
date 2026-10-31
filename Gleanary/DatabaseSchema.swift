@@ -499,6 +499,10 @@ enum DatabaseSchema {
             END;
             """)
         }
+        // Chat requests sent while another runs wait their turn, in an order people can change.
+        migrator.registerMigration("conversation-queue-v1") { db in
+            try db.execute(sql: "ALTER TABLE conversation_tasks ADD COLUMN queueOrder REAL")
+        }
         try migrator.migrate(database)
     }
 

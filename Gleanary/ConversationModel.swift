@@ -28,6 +28,8 @@ final class ConversationModel {
     /// Reply text a provider is still generating, by task. Display only; never persisted.
     private(set) var replyDrafts: [UUID: ReplyDraft] = [:]
     var composer = ""
+    /// A saved document someone asked to open beside Chat, such as from the command palette.
+    var documentRequest: UUID?
     private(set) var composerFocusRequest = UUID()
     var error: String?
     var ready = false
@@ -36,6 +38,8 @@ final class ConversationModel {
     @ObservationIgnored private var conversationEpoch = UUID()
     private var submitting = false
     private(set) var running = false
+    /// Queued requests left from an earlier launch wait for Resume rather than starting alone.
+    private(set) var queuePaused = false
     @ObservationIgnored private var worker: Task<Void, Never>?
     @ObservationIgnored private var activeID: UUID?
     @ObservationIgnored private var loaded = false
@@ -60,6 +64,12 @@ final class ConversationModel {
 
     var activeTask: ConversationTask? {
         tasks.first { $0.id == activeID && $0.active }
+    }
+
+    /// Requests waiting their turn, next first.
+    var queue: [ConversationTask] {
+        tasks.filter(\.isQueued)
+            .sorted { ($0.queueOrder ?? .infinity) < ($1.queueOrder ?? .infinity) }
     }
 
     func isWorking(on taskID: UUID) -> Bool {
@@ -134,6 +144,7 @@ final class ConversationModel {
             _ = try await store.open(loadDocuments: false)
             try await store.recoverConversation()
             await refresh()
+            queuePaused = !queue.isEmpty
             if !customCoordinator {
                 await chatGPT.load()
             }
@@ -235,13 +246,22 @@ final class ConversationModel {
         }
         submitting = true
         defer { submitting = false }
-        if running {
-            await cancel()
-        }
+        // Sent while another request runs, this waits its turn instead of cancelling it.
+        let queues = running
         let request = submittedRequest ?? retry?.request ?? composer
+        // Several pasted links are saved one at a time, each as its own request.
+        let links = PastedLinks.isOnlyLinks(request) ? PastedLinks.urls(in: request) : []
+        if links.count > 1, retry == nil, captureID == nil, sources == nil {
+            await enqueue(links.map(\.absoluteString), startFirst: !queues)
+            return
+        }
         do {
             try await configureInference()
             if let retry, try await store.noteSeriesRun(taskID: retry.id) != nil {
+                guard !queues else {
+                    error = "Retry this series once the current request finishes."
+                    return
+                }
                 try await store.retryNoteSeries(taskID: retry.id)
                 error = nil
                 await refresh()
@@ -268,7 +288,8 @@ final class ConversationModel {
                 request,
                 owner: route.roles[0],
                 captureID: captureID ?? retry?.captureID,
-                sources: context
+                sources: context,
+                queued: queues
             )
             if submittedRequest == nil, retry == nil {
                 composer = ""
@@ -277,23 +298,121 @@ final class ConversationModel {
                 }
             }
             error = nil
+            guard !queues else {
+                await refresh()
+                return
+            }
             activeID = id
             await refresh()
-            let coordinator = coordinator
-            let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
-            run(id) {
-                try await coordinator.execute(
-                    taskID: id,
-                    request: request,
-                    selected: context,
-                    userSelected: userSelected,
-                    existingCaptureID: captureID ?? retry?.captureID,
-                    changed: changed,
-                    streamed: { [weak self] text in await self?.streamReply(text, taskID: id) }
-                )
-            }
+            start(
+                id, request: request, context: context, userSelected: userSelected,
+                captureID: captureID ?? retry?.captureID
+            )
         } catch { self.error = error.localizedDescription }
     }
+
+    /// Queues each link as its own request, starting the first when nothing is running.
+    private func enqueue(_ requests: [String], startFirst: Bool) async {
+        do {
+            let toolDriven = await coordinator.usesConversationTools
+            for request in requests {
+                let route = try ConversationRoute(request, detectsURL: !toolDriven)
+                _ = try await store.beginConversation(
+                    request, owner: route.roles[0], queued: true
+                )
+            }
+            composer = ""
+            error = nil
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+        if startFirst {
+            await startNextQueued()
+        }
+    }
+
+    private func start(
+        _ id: UUID, request: String, context: [UUID], userSelected: Bool, captureID: UUID?
+    ) {
+        let coordinator = coordinator
+        let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+        run(id) {
+            try await coordinator.execute(
+                taskID: id,
+                request: request,
+                selected: context,
+                userSelected: userSelected,
+                existingCaptureID: captureID,
+                changed: changed,
+                streamed: { [weak self] text in await self?.streamReply(text, taskID: id) }
+            )
+        }
+    }
+
+    // MARK: Queue
+
+    /// Starts the next waiting request, unless something is running or the queue is paused.
+    func startNextQueued() async {
+        guard ready, !running, !clearingConversation, !queuePaused else { return }
+        await refresh()
+        guard let next = queue.first else { return }
+        do {
+            guard try await store.startQueuedConversationTask(next.id) else {
+                await startNextQueued()
+                return
+            }
+            try await configureInference()
+            let toolDriven = await coordinator.usesConversationTools
+            let route = try ConversationRoute(next.request, detectsURL: !toolDriven)
+            let capturing = route.url != nil || next.captureID != nil
+            activeID = next.id
+            await refresh()
+            start(
+                next.id, request: next.request, context: capturing ? [] : next.sources,
+                userSelected: !capturing && !next.sources.isEmpty, captureID: next.captureID
+            )
+        } catch {
+            await finish(next.id, state: "failed", progress: error.localizedDescription)
+            await refresh()
+            await startNextQueued()
+        }
+    }
+
+    /// Runs the queue left from an earlier launch.
+    func resumeQueue() async {
+        queuePaused = false
+        await startNextQueued()
+    }
+
+    func removeFromQueue(_ id: UUID) async {
+        await finish(id, state: "cancelled", progress: Self.removedProgress)
+        await refresh()
+        if queue.isEmpty {
+            queuePaused = false
+        }
+    }
+
+    func clearQueue() async {
+        for task in queue {
+            await finish(task.id, state: "cancelled", progress: Self.removedProgress)
+        }
+        queuePaused = false
+        await refresh()
+    }
+
+    /// Moves a waiting request earlier (negative) or later (positive) in the queue.
+    func moveInQueue(_ id: UUID, by offset: Int) async {
+        var ids = queue.map(\.id)
+        guard let index = ids.firstIndex(of: id) else { return }
+        let target = min(max(index + offset, 0), ids.count - 1)
+        guard target != index else { return }
+        ids.remove(at: index)
+        ids.insert(id, at: target)
+        do { try await store.reorderConversationQueue(ids) }
+        catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
+    private static let removedProgress = "Removed from the queue"
 
     /// Runs a task's work in the background, recording cancellation or failure on the task.
     private func run(_ id: UUID, operation: @escaping @Sendable () async throws -> Void) {
@@ -314,6 +433,8 @@ final class ConversationModel {
             activeID = nil
             running = false
             replyDrafts[id] = nil
+            // Whether it finished, failed or was stopped, the next request takes its turn.
+            await startNextQueued()
         }
     }
 
@@ -473,6 +594,7 @@ final class ConversationModel {
             conversationEpoch = UUID()
             messages = []
             tasks = []
+            queuePaused = false
             selectedSources = []
             if discardDraft {
                 composer = ""
