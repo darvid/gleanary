@@ -3423,6 +3423,21 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(markdown.contains("  > They show no care for the user and the surroundings.\n"))
     }
 
+    @Test func linkSuggestionsMatchOnDistinctiveWordsOnly() {
+        // Everyday words like "most" and "over" once tied a PC case video to a Rust style guide.
+        let terms = AgentCoordinator.distinctiveTerms(
+            in: "The Most Over Engineered Case and I LOVE IT"
+        ).map { $0.lowercased() }
+        #expect(!terms.contains("most"))
+        #expect(!terms.contains("over"))
+        #expect(!terms.contains("love"))
+        #expect(terms.contains("case"))
+        #expect(AgentCoordinator.distinctiveTerms(in: "Haven HS360 cooling trade-offs")
+            .map { $0.lowercased() }.contains("hs360"))
+        #expect(AgentCoordinator.distinctiveTerms(in: "Why Everyone Is About To Have Their Own")
+            .isEmpty)
+    }
+
     @Test func detectsPastedLinksAndLinkOnlyMessages() {
         let text = "See https://example.org/a and https://example.org/a or ftp://example.org/b"
         #expect(PastedLinks.urls(in: text).map(\.absoluteString) == ["https://example.org/a"])

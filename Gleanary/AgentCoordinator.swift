@@ -1,4 +1,5 @@
 import Foundation
+import NaturalLanguage
 
 actor AgentCoordinator {
     /// Reads items for entities when you ask in chat; follows the AI provider.
@@ -940,38 +941,19 @@ actor AgentCoordinator {
         query: String,
         changed: @escaping @Sendable () async -> Void
     ) async throws -> Bool {
-        let stop: Set = [
-            "source",
-            "saved",
-            "notes",
-            "research",
-            "summary",
-            "https",
-            "http",
-            "with",
-            "this",
-            "that",
-            "from",
-            "have",
-            "about",
-            "which",
-            "their",
-            "there",
-            "these",
-            "they",
-            "first",
-            "second",
-        ]
-        let words = query.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .filter { $0.count >= 4 && !stop.contains($0.lowercased()) }.prefix(6)
+        let words = Self.distinctiveTerms(in: query)
         let origin = try await store.researchSource(noteID: note.id)
         var matches: [UUID: SearchMatch] = [:]
         var terms: [UUID: Set<String>] = [:]
         for word in words {
-            let response = try await search.search(String(word), limit: 20)
-            for match in response.matches
-                where match.passage.documentID != note.id && match.keywordRank != nil
-            {
+            let response = try await search.search(word, limit: 20)
+            let keywordMatches = response.matches.filter {
+                $0.passage.documentID != note.id && $0.keywordRank != nil
+            }
+            // A word found across much of the library says nothing about these two items.
+            guard Set(keywordMatches.map(\.passage.documentID)).count < Self.commonTermDocuments
+            else { continue }
+            for match in keywordMatches {
                 let id = match.passage.documentID
                 matches[id] = match
                 terms[id, default: []].insert(word.lowercased())
@@ -995,6 +977,36 @@ actor AgentCoordinator {
             return true
         }
         return false
+    }
+
+    /// Matched in this many other documents, a word is too common to suggest a connection.
+    nonisolated static let commonTermDocuments = 8
+
+    /// Words worth matching another item on: nouns and names from the title, not everyday
+    /// words such as "most" or "over" that would tie unrelated items together.
+    nonisolated static func distinctiveTerms(in text: String, limit: Int = 6) -> [String] {
+        let stop: Set = [
+            "source", "saved", "notes", "research", "summary", "https", "http", "everyone",
+            "everything", "something", "anything", "nothing", "thing", "things", "people",
+            "first", "second", "part", "guide", "guides", "video", "article", "review",
+        ]
+        let tagger = NLTagger(tagSchemes: [.lexicalClass])
+        tagger.string = text
+        var terms: [String] = []
+        var seen = Set<String>()
+        tagger.enumerateTags(
+            in: text.startIndex ..< text.endIndex, unit: .word, scheme: .lexicalClass,
+            options: [.omitWhitespace, .omitPunctuation, .joinNames]
+        ) { tag, range in
+            let word = String(text[range])
+            let key = word.lowercased()
+            guard tag == .noun || tag == .otherWord, word.count >= 4,
+                  word.contains(where: \.isLetter), !stop.contains(key),
+                  seen.insert(key).inserted else { return true }
+            terms.append(word)
+            return terms.count < limit
+        }
+        return terms
     }
 
     static func markdownLabel(_ title: String) -> String {
