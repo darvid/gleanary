@@ -111,6 +111,11 @@ struct LibraryGraphView: View {
                 HSplitView {
                     KnowledgeGraphView(
                         graph: graph, openNote: openNote,
+                        excerpt: { id in
+                            guard let document = try? await store.document(id: id)
+                            else { return nil }
+                            return ReferencePeek.excerpt(from: document.markdown)
+                        },
                         showsDocumentLegend: true, camera: $graph.camera
                     )
                     .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)

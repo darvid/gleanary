@@ -1809,8 +1809,10 @@ struct ReferencePeek: View {
     let filing: DecimalCategory?
     let selected: Bool
     let load: () async -> String?
+    var openTitle = "Open"
     let open: () -> Void
-    let toggleSource: () -> Void
+    /// Adds the item to the next Chat message; nil where there's no Chat to add it to.
+    let toggleSource: (() -> Void)?
     @State private var excerpt: String?
     @State private var loaded = false
 
@@ -1837,8 +1839,10 @@ struct ReferencePeek: View {
             Divider()
             HStack {
                 Spacer()
-                Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
-                Button("Open", action: open).keyboardShortcut(.defaultAction)
+                if let toggleSource {
+                    Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
+                }
+                Button(openTitle, action: open).keyboardShortcut(.defaultAction)
             }
         }
         .padding(16)
