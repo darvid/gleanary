@@ -1833,17 +1833,18 @@ struct ReferencePeek: View {
             } else if !loaded {
                 ProgressView().controlSize(.small).accessibilityLabel("Loading preview")
             }
-            if let filing {
-                FilingTag(category: filing)
-            }
-            Divider()
-            HStack {
-                Spacer()
+            // Glass popovers separate by space, not rules: the filing sits beside the actions.
+            HStack(spacing: 8) {
+                if let filing {
+                    FilingTag(category: filing)
+                }
+                Spacer(minLength: 12)
                 if let toggleSource {
                     Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
                 }
                 Button(openTitle, action: open).keyboardShortcut(.defaultAction)
             }
+            .padding(.top, 4)
         }
         .padding(16)
         .frame(width: 360, alignment: .leading)
