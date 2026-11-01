@@ -3,6 +3,8 @@ import SwiftUI
 struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @Bindable var graph: Graph
     let openNote: (UUID) -> Void
+    /// The opening of a saved item's text, for the hover peek.
+    var excerpt: ((UUID) async -> String?)?
     var compact = false
     var showsDocumentLegend = false
     var camera: Binding<GraphCamera?>?
@@ -20,6 +22,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     /// graph keeps fitting as the canvas settles to its size and the layout finishes.
     @State private var adjusted = false
     @State private var hoveredNode: String?
+    /// The node whose peek is showing, after a hover dwell or Space.
+    @State private var peekNode: String?
+    @State private var hoveringPeek = false
+    @State private var peekTimer: Task<Void, Never>?
     @State private var labelCache = GraphLabelCache()
     @FocusState private var focused: Bool
 
@@ -43,6 +49,23 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                         )?.id
                     case .ended: hoveredNode = nil
                     }
+                }
+                .onChange(of: hoveredNode) { _, node in
+                    hoverChanged(to: node)
+                }
+                .popover(
+                    isPresented: Binding(
+                        get: { peekNode != nil },
+                        set: {
+                            if !$0 {
+                                peekNode = nil
+                            }
+                        }
+                    ),
+                    attachmentAnchor: .rect(.rect(peekRect(size: geometry.size))),
+                    arrowEdge: .bottom
+                ) {
+                    peek
                 }
                 .contentShape(Rectangle())
                 .focusable().focusEffectDisabled().focused($focused)
@@ -98,6 +121,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     .downArrow,
                     .return,
                     .escape,
+                    .space,
                 ]) { press in
                     // Modified Return belongs to Save/Search, even when the canvas has focus.
                     guard press.modifiers.isEmpty else { return .ignored }
@@ -108,6 +132,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                         {
                             graph.select(id)
                         }
+                    case .space:
+                        peekTimer?.cancel()
+                        peekNode = peekNode == nil ? keyboardNode ?? graph.selectedID : nil
                     case .escape: keyboardNode = nil; graph.deselect()
                     case .leftArrow, .upArrow: navigate(-1)
                     default: navigate(1)
@@ -157,8 +184,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     hasFitted = true
                 }
             }
-            .onChange(of: scale) { saveCamera() }
-            .onChange(of: pan) { saveCamera() }
+            // The peek is anchored where the node was, so moving the canvas closes it.
+            .onChange(of: scale) { peekNode = nil; saveCamera() }
+            .onChange(of: pan) { peekNode = nil; saveCamera() }
             .onChange(of: graph.cameraReset) {
                 if let saved = camera?.wrappedValue {
                     scale = saved.scale
@@ -571,6 +599,74 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             return 2
         }
         return node.kind == .document ? 1 : 0
+    }
+
+    // MARK: Peek
+
+    @ViewBuilder private var peek: some View {
+        if let id = peekNode, let node = graph.snapshot.nodes.first(where: { $0.id == id }) {
+            ReferencePeek(
+                title: node.label, kind: graph.kindLabel(for: node).capitalized, host: nil,
+                filing: graph.filings(for: node).first, selected: false,
+                load: { [excerpt] in
+                    guard let id = node.noteID, let excerpt else { return nil }
+                    return await excerpt(id)
+                },
+                openTitle: node.noteID == nil ? "Show Details" : "Open",
+                open: {
+                    peekNode = nil
+                    if let noteID = node.noteID {
+                        openNote(noteID)
+                    } else {
+                        keyboardNode = node.id; graph.select(node.id)
+                    }
+                },
+                toggleSource: nil
+            )
+            .onHover { inside in
+                hoveringPeek = inside
+                if !inside {
+                    schedulePeekClose()
+                }
+            }
+        }
+    }
+
+    /// Where the peek points: the node's mark on screen.
+    private func peekRect(size: CGSize) -> CGRect {
+        guard let id = peekNode, let node = graph.geometry.node(for: id),
+              let center = point(id, size: size) else { return .zero }
+        let radius = nodeRadius(node.kind)
+        return CGRect(
+            x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2
+        )
+    }
+
+    private func hoverChanged(to node: String?) {
+        peekTimer?.cancel()
+        guard let node, draggedNode == nil, dragOrigin == nil else {
+            schedulePeekClose()
+            return
+        }
+        guard node != peekNode else { return }
+        // Dwell first, so sweeping across the graph doesn't flash previews.
+        peekTimer = Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            if !Task.isCancelled {
+                peekNode = node
+            }
+        }
+    }
+
+    /// Leaves time to move the pointer from the node into the peek.
+    private func schedulePeekClose() {
+        peekTimer?.cancel()
+        peekTimer = Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            if !Task.isCancelled, hoveredNode == nil, !hoveringPeek {
+                peekNode = nil
+            }
+        }
     }
 
     private func hitNode(_ location: CGPoint, size: CGSize) -> GraphNode? {
