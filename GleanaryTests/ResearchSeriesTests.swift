@@ -722,7 +722,7 @@ private let promptEngineeringRequest = "can you research prompt engineering best
         let session = ChatGPTSession()
         let catalog = try await session.catalog()
         let model = try #require(catalog.first).slug
-        let provider = ChatGPTConversationInference(session: session, model: model)
+        let provider = HostedInference(session: session, model: model)
         let coordinator = AgentCoordinator(store: store, inference: provider)
         await coordinator.filePublishedSeries(run) {}
         let status = try #require(await store.publishedSeriesFiling()[task])
@@ -1117,7 +1117,7 @@ private let promptEngineeringRequest = "can you research prompt engineering best
         }
         let session = ChatGPTSession()
         let choice = try #require(await session.catalog().first)
-        let provider = ChatGPTConversationInference(session: session, model: choice.slug)
+        let provider = HostedInference(session: session, model: choice.slug)
         let coordinator = AgentCoordinator(store: store, inference: provider)
         let task = try await store.beginConversation(promptEngineeringRequest, owner: .assistant)
         print("Public research acceptance: model \(choice.slug); isolated results \(root.path)")

@@ -2,7 +2,7 @@ import Foundation
 
 /// Entity and relationship extraction with ChatGPT: the same prompts and validation as on this
 /// Mac, with a larger context, so it works when ChatGPT is the AI provider.
-extension ChatGPTConversationInference: GraphExtracting {
+extension HostedInference: GraphExtracting {
     /// Each call waits seconds on the model whatever its size, so a few notes run together.
     var concurrentNotes: Int {
         4
@@ -71,20 +71,20 @@ extension ChatGPTConversationInference: GraphExtracting {
         name: String,
         schema: [String: Any]
     ) async throws -> Value {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let value: Value = try await structured(
             prompt: prompt, instructions: instructions, name: name, schema: schema, fence: fence
         )
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return value
     }
 }
 
-extension ChatGPTConversationInference: EntityMatchJudging {
+extension HostedInference: EntityMatchJudging {
     func judgeMatches(_ items: [EntityMatchJudgement.Item]) async throws
         -> [Int: EntityMatchJudgement.Verdict]
     {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let answers: EntityMatchJudgement.Answers = try await structured(
             prompt: EntityMatchJudgement.prompt(items),
             instructions: EntityMatchJudgement.instructions,
@@ -92,7 +92,7 @@ extension ChatGPTConversationInference: EntityMatchJudging {
             schema: EntityMatchJudgement.jsonSchema,
             fence: fence
         )
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return EntityMatchJudgement.verdicts(answers, items: items)
     }
 }

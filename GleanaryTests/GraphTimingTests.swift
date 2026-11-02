@@ -127,7 +127,7 @@ private struct WriteThroughVault: ChatGPTCredentialStoring {
     )
     print("CHATGPT MODEL \(model) of \(connection.models.map(\.slug).joined(separator: ", "))")
     try await timeOneNote(
-        with: ChatGPTConversationInference(session: session, model: model), label: "CHATGPT"
+        with: HostedInference(session: session, model: model), label: "CHATGPT"
     )
 }
 
@@ -194,7 +194,7 @@ func timeReadingOneNoteForEntities() async throws {
     }
     let coordinator = AgentCoordinator(
         store: store,
-        graphProvider: ChatGPTConversationInference(session: session, model: model)
+        graphProvider: HostedInference(session: session, model: model)
     )
     let task = try await store.beginConversation("find entities", owner: .assistant)
     let start = ContinuousClock.now
@@ -244,7 +244,7 @@ func timeReadingOneNoteForEntities() async throws {
         )
     }
     let agent = LibraryAgent(
-        model: ChatGPTConversationInference(session: session, model: model),
+        model: HostedInference(session: session, model: model),
         toolbox: toolbox,
         workflows: workflows
     )

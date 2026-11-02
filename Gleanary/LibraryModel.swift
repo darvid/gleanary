@@ -465,7 +465,11 @@ final class LibraryModel {
     /// Provider-wide reasons a capture's summary failed, as opposed to one page's content.
     nonisolated static let providerProblems: [ChatGPTError] = [
         .modelDenied, .planNotAuthorized, .signInRequired, .usageLimit, .requestRejected,
-    ]
+    ] + InferenceProvider.keyed.flatMap { provider in
+        [ProviderFailure.missingKey, .keyRejected, .rateLimited].map {
+            ChatGPTError.provider(provider.company, $0)
+        }
+    }
 
     nonisolated static func providerProblem(in progress: String) -> String? {
         guard progress.hasPrefix("Saved full text without a summary") else { return nil }
@@ -536,7 +540,8 @@ final class LibraryModel {
         categorizationError = nil
         categorizationStopped = false
         categorizationState = .running
-        categorizationEngine = inference.capabilities.local ? "Apple Intelligence" : "ChatGPT"
+        categorizationEngine = inference.capabilities.local ? "Apple Intelligence"
+            : (inference as? HostedInference)?.api.provider.name ?? "ChatGPT"
         let categorizer = BookmarkCategorizer(store: store, inference: inference)
         categorizationTask = Task { [weak self] in
             do {

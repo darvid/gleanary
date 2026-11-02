@@ -1,6 +1,6 @@
 import Foundation
 
-extension ChatGPTConversationInference: EvidenceSeriesInferring {
+extension HostedInference: EvidenceSeriesInferring {
     func researchSeriesIntent(request: String) async throws -> ResearchSeries.Intent {
         try await seriesResponse(request: request, instructions: """
         Extract the user's research contract, not a publication outline. Return a brief with mode

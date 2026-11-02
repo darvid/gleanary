@@ -1,6 +1,6 @@
 import Foundation
 
-extension ChatGPTConversationInference: NoteSeriesInferring {
+extension HostedInference: NoteSeriesInferring {
     func extractSeriesFacts(_ chunk: ExtractionChunk) async throws -> [ExtractedFact] {
         struct Answer: Decodable { let facts: [ExtractedFact] }
         let answer: Answer = try await seriesResponse(
@@ -488,7 +488,7 @@ extension ChatGPTConversationInference: NoteSeriesInferring {
         name: String,
         schema: [String: Any]
     ) async throws -> Value {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let value: Value = try await structured(
             prompt: request,
             instructions: instructions,
@@ -497,7 +497,7 @@ extension ChatGPTConversationInference: NoteSeriesInferring {
             fence: fence
         )
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return value
     }
 }

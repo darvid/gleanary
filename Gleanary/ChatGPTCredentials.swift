@@ -7,7 +7,8 @@ protocol ChatGPTCredentialStoring: Sendable {
 }
 
 struct KeychainChatGPTCredentials: ChatGPTCredentialStoring {
-    private let service = "app.gleanary.chatgpt.credentials.v1"
+    var service = "app.gleanary.chatgpt.credentials.v1"
+    var account = "registrations"
 
     func load() throws -> Data? {
         var query = baseQuery
@@ -40,7 +41,7 @@ struct KeychainChatGPTCredentials: ChatGPTCredentialStoring {
     private var baseQuery: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service,
-         kSecAttrAccount as String: "registrations",
+         kSecAttrAccount as String: account,
          kSecAttrSynchronizable as String: false]
     }
 }
@@ -114,6 +115,8 @@ enum ChatGPTError: LocalizedError, Equatable {
          invalidReply,
          timedOut, browser,
          busy
+    /// An API-key provider's failure, named for the company that received the request.
+    case provider(String, ProviderFailure)
 
     var errorDescription: String? {
         switch self {
@@ -131,11 +134,12 @@ enum ChatGPTError: LocalizedError, Equatable {
         case .invalidStream: "The ChatGPT response could not be read. Your message and saved sources are retained. Retry."
         case let .unexpectedResponseFormat(format, bytes): "OpenAI returned \(format.rawValue) instead of a model reply (\(bytes) bytes). Reconnect ChatGPT and try again. Your message is saved."
         case let .streamInterrupted(events, last, characters): "ChatGPT disconnected before completing its reply (events: \(events), last: \(last.rawValue), output characters: \(characters)). Your message is saved. Retry."
-        case .invalidOutput: "ChatGPT returned a result that failed its source checks. No research artifact was saved."
-        case .invalidReply: "ChatGPT did not return a complete reply. Retry; your message is saved."
+        case .invalidOutput: "The model returned a result that failed its source checks. No research artifact was saved."
+        case .invalidReply: "The model did not return a complete reply. Retry; your message is saved."
         case .timedOut: "ChatGPT sign-in timed out. Start sign-in again."
         case .browser: "The system browser could not open ChatGPT sign-in. Check your default browser and retry."
         case .busy: "Finish or cancel the current ChatGPT sign-in before starting another."
+        case let .provider(company, failure): failure.message(company)
         }
     }
 
@@ -171,12 +175,28 @@ enum ChatGPTError: LocalizedError, Equatable {
     }
 }
 
+extension ProviderFailure {
+    func message(_ company: String) -> String {
+        switch self {
+        case .missingKey: "Add an API key for \(company) in Settings › AI, or switch to on-device inference."
+        case .keychain: "macOS Keychain could not read or save API keys. Unlock your login keychain and try again."
+        case .keyRejected: "\(company) rejected the API key. Check or replace it in Settings › AI."
+        case .rateLimited: "\(company) rate-limited this request, or the account is out of credit. Wait and retry, or check your usage with \(company)."
+        case .overloaded: "\(company) is overloaded right now. Retry in a moment; your message is saved."
+        case .truncated: "The reply reached the model’s output limit before it finished. Retry, or choose a model with a larger limit."
+        case .refused: "The model declined this request. Your message is saved."
+        case let .rejected(message): "\(company) rejected the request: \(message)"
+        case .unavailable: "\(company) could not complete this request. Retry later; saved sources are retained."
+        }
+    }
+}
+
 protocol ChatGPTTransporting: Sendable {
     func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse)
     func lines(for request: URLRequest) -> AsyncThrowingStream<String, any Error>
 }
 
-private final class ChatGPTNoRedirects: NSObject, URLSessionTaskDelegate {
+final class ChatGPTNoRedirects: NSObject, URLSessionTaskDelegate {
     func urlSession(
         _: URLSession,
         task _: URLSessionTask,

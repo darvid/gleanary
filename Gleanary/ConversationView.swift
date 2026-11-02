@@ -111,7 +111,7 @@ struct ConversationView: View {
             Task { await model.refresh(); await model.didMutate?() }
         }) { status in
             FilingSuggestionsView(library: library, inference: {
-                (try? model.chatGPT.filingInference()) ?? AppleConversationInference()
+                (try? model.providers.filingInference()) ?? AppleConversationInference()
             }, noteIDs: Set(status.noteIDs))
         }
         .sheet(item: $reviewingChanges) { target in
@@ -1613,8 +1613,8 @@ struct ConversationSettings: View {
                                 Button("Stop Task") { Task { await model.cancel() } }
                             }
                         }
-                        ChatGPTSettings(
-                            connection: model.chatGPT,
+                        AISettings(
+                            providers: model.providers,
                             localStatus: library.intelligenceStatus
                         )
                         .disabled(model.running)

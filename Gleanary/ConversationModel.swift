@@ -5,7 +5,11 @@ import Observation
 final class ConversationModel {
     let store: DocumentStore
     let coordinator: AgentCoordinator
-    let chatGPT: ChatGPTConnection
+    let providers: InferenceProviders
+    var chatGPT: ChatGPTConnection {
+        providers.chatGPT
+    }
+
     @ObservationIgnored private let customCoordinator: Bool
     var messages: [ConversationMessage] = []
     var tasks: [ConversationTask] = []
@@ -51,7 +55,7 @@ final class ConversationModel {
         chatGPT: ChatGPTConnection? = nil
     ) {
         self.store = store
-        self.chatGPT = chatGPT ?? ChatGPTConnection()
+        providers = InferenceProviders(chatGPT: chatGPT ?? ChatGPTConnection())
         customCoordinator = coordinator != nil
         self.coordinator = coordinator ??
             AgentCoordinator(
@@ -149,14 +153,14 @@ final class ConversationModel {
     }
 
     private var connectionReady: Bool {
-        customCoordinator || (!chatGPT.busy && !chatGPT.signingIn)
+        customCoordinator || !providers.busy
     }
 
     private func configureInference() async throws {
         if !customCoordinator {
             try await coordinator.setInference(
-                chatGPT.requestInference(),
-                filing: chatGPT.filingInference()
+                providers.requestInference(),
+                filing: providers.filingInference()
             )
         }
     }
@@ -170,7 +174,7 @@ final class ConversationModel {
             await refresh()
             queuePaused = !queue.isEmpty
             if !customCoordinator {
-                await chatGPT.load()
+                await providers.load()
             }
             ready = true
         } catch { self.error = error.localizedDescription; loaded = false }
