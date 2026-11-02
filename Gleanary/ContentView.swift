@@ -110,6 +110,7 @@ struct ContentView: View {
     var body: some View {
         windowContent
             .environment(\.commandPaletteOpen, showingPalette)
+            .environment(\.showCategory) { sidebarSelection.wrappedValue = .library(.category($0)) }
             .focusedSceneValue(\.commandActions, commandActions)
             .overlay { commandPalette }
     }
