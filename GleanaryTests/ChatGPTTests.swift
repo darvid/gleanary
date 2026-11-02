@@ -1842,6 +1842,56 @@ extension ChatGPTTests {
     }
 
     @Test(arguments: [true, false])
+    func hostedSummariesKeepADiagramOnlyWhenEveryLinkHolds(linksHold: Bool) async throws {
+        let (document, evidence) = summaryDocument()
+        let ids = evidence.items.map(\.id)
+        var proposal = EvidenceSummaryDraft(
+            overview: .init(
+                text: "Spaced repetition improves long-term recall.",
+                evidenceIDs: [ids[0]]
+            ),
+            takeaways: []
+        )
+        proposal.diagram = SummaryDiagramProposal(
+            kind: .flowchart,
+            nodes: [
+                .init(id: "n1", label: "Spaced repetition"),
+                .init(id: "n2", label: "Long-term recall"),
+                .init(id: "n3", label: "Children"),
+            ],
+            links: [
+                .init(from: "n1", to: "n2", label: nil, evidenceIDs: [ids[0]]),
+                .init(from: "n1", to: "n3", label: "Did not hold", evidenceIDs: [ids[2]]),
+            ]
+        )
+        let (inference, transport) = try summaryRepairInference([
+            String(decoding: JSONEncoder().encode(proposal), as: UTF8.self),
+            #"{"supported":[true],"reasons":["supported"]}"#,
+            "{\"supported\":[true,\(linksHold)]}",
+        ])
+        let summary = try await inference.summarize(document)
+        #expect(summary == (linksHold ? """
+        Spaced repetition improves long-term recall.
+
+        ```mermaid
+        flowchart TD
+          n0["Spaced repetition"]
+          n1["Long-term recall"]
+          n2["Children"]
+          n0 --> n1
+          n0 -->|"Did not hold"| n2
+        ```
+        """ : "Spaced repetition improves long-term recall."))
+        let requests = await transport.requests
+        #expect(requests.count == 3)
+        let first = try String(decoding: #require(requests.first?.httpBody), as: UTF8.self)
+        #expect(first.contains("\"diagram\""))
+        #expect(try prompt(requests[0]).contains("Diagram: null unless"))
+        #expect(try prompt(requests[2])
+            .contains("From “Spaced repetition”, “Did not hold” leads to “Children”."))
+    }
+
+    @Test(arguments: [true, false])
     func chatGPTSummaryRevisesEachRejectedPointOnce(revisionSupported: Bool) async throws {
         let (document, evidence) = summaryDocument()
         let ids = evidence.items.map(\.id)

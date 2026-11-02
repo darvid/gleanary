@@ -92,6 +92,16 @@ struct LibraryAgent {
     Sources, queued captures completed captures, or pending filing proposals applied changes.
     """)
 
+    /// Hosted models only: the on-device model's context is already full, and Chat draws the
+    /// diagram from the reply's own mermaid code block.
+    static let diagramInstructions = """
+    Diagrams: when an explanation walks through a process, workflow, architecture, decision
+    path or exchange between parties that is easier to follow as a picture, you may add one
+    Mermaid diagram in a mermaid code block: a flowchart or sequenceDiagram, at most 12 nodes,
+    with labels in double quotes. It shows only what the reply already states. Skip it for
+    short answers, lists, and anything prose explains as well.
+    """
+
     /// Offered only where the tools fit: the on-device model's context is already full.
     static let entityEditInstructions = """
     Keep entities current as part of any request about a specific person, organization, tool or
@@ -134,16 +144,18 @@ struct LibraryAgent {
             "role": "user",
             "content": prompt,
         ]))
-        let editsEntities = !(model is AppleConversationInference)
+        let hosted = !(model is AppleConversationInference)
         let loop = try ToolLoop(
             model: model,
             instructions: Self.instructions
-                + (editsEntities ? "\n" + Self.entityEditInstructions : ""),
+                +
+                (hosted ? "\n" + Self.entityEditInstructions + "\n" + Self
+                    .diagramInstructions : ""),
             tools: AgentToolbox.definitions(
                 includingWorkflows: workflows != nil,
                 includingSourceCaptures: sourceCaptures != nil,
                 includingEntityFinder: entityFinder != nil,
-                includingEntityEdits: editsEntities
+                includingEntityEdits: hosted
             )
         )
         let reply = try await loop.run(input: input) { call in

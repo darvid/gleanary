@@ -514,11 +514,11 @@ extension HostedInference: LinkSummarizing {
         let proposal: EvidenceSummaryDraft = try await structured(
             prompt: AppleLinkSummarizer.summaryPrompt(
                 context: context, evidence: evidence,
-                evidenceLimit: EvidenceSummaryDraft.maximumEvidence
+                evidenceLimit: EvidenceSummaryDraft.maximumEvidence, diagram: true
             ),
             instructions: AppleLinkSummarizer.instructions,
             name: "grounded_summary",
-            schema: EvidenceSummaryDraft.jsonSchema(),
+            schema: EvidenceSummaryDraft.jsonSchema(diagram: true),
             fence: fence
         )
         let draft = try proposal.anchored(in: evidence)
@@ -526,10 +526,20 @@ extension HostedInference: LinkSummarizing {
         let review = try await reviewSummary(
             [draft.overview] + draft.takeaways, context: context, reasons: true, fence: fence
         )
-        let verified = try await revisingRejected(
+        var verified = try await revisingRejected(
             draft, review: review, evidence: evidence, context: context, source: text,
             fence: fence
         )
+        // A diagram with one unsupported link would mislead as a whole, so it's kept only when
+        // every link holds.
+        if let diagram = verified.diagram {
+            let links = try await reviewSummary(
+                diagram.claims, context: context, reasons: false, fence: fence
+            )
+            if !links.supported.allSatisfy(\.self) {
+                verified.diagram = nil
+            }
+        }
         try await api.validateFence(fence)
         return try AppleLinkSummarizer.withCaptureLimits(
             verified.markdown(source: text),
@@ -649,7 +659,9 @@ extension HostedInference: LinkSummarizing {
                 supported[index] = again.supported[offset]
             }
         }
-        let result = SummaryDraft(overview: revised[0], takeaways: Array(revised.dropFirst()))
+        let result = SummaryDraft(
+            overview: revised[0], takeaways: Array(revised.dropFirst()), diagram: draft.diagram
+        )
         _ = try result.markdown(source: source)
         return try SummaryVerification(supported: supported).applied(to: result)
     }
