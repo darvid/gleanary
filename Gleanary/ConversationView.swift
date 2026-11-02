@@ -1449,6 +1449,8 @@ struct ConversationView: View {
 
 extension EnvironmentValues {
     @Entry var addToChat: (@MainActor (ChatAttachmentTarget) async -> String?)? = nil
+    /// Shows a category's items in the Library, from wherever its chip appears.
+    @Entry var showCategory: (@MainActor (UUID) -> Void)? = nil
 }
 
 struct AddToChatButton: View {

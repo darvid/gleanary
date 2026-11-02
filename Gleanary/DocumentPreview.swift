@@ -1297,6 +1297,7 @@ private struct FilingRow: View {
     var editor: FilingEditor?
     @State private var step = Step.idle
     @State private var hovered: UUID?
+    @Environment(\.showCategory) private var showCategory
     /// Secondary homes added from "Also fits", so each can be undone.
     @State private var added: Set<UUID> = []
 
@@ -1412,7 +1413,7 @@ private struct FilingRow: View {
     /// A home's chip. With an editor, hovering shows a remove button and right-clicking offers
     /// Make Primary Home and Remove.
     @ViewBuilder private func chip(_ home: DecimalCategory, primary: Bool) -> some View {
-        let base = CategoryChip(category: home, primary: primary)
+        let base = categoryLink(home, primary: primary)
         if editor != nil {
             base
                 .overlay(alignment: .topTrailing) {
@@ -1449,6 +1450,19 @@ private struct FilingRow: View {
                 }
         } else {
             base
+        }
+    }
+
+    /// The chip, which shows the category in the Library where there is one to show.
+    @ViewBuilder private func categoryLink(_ home: DecimalCategory, primary: Bool) -> some View {
+        let chip = CategoryChip(category: home, primary: primary)
+        if let showCategory {
+            Button { showCategory(home.id) } label: { chip }
+                .buttonStyle(.plain).pointerStyle(.link)
+                .help("Show \(home.label) in Library")
+                .accessibilityHint("Shows this category in the Library")
+        } else {
+            chip
         }
     }
 
