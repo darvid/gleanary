@@ -903,14 +903,10 @@ struct MarkdownPreview: View {
                 let fade = index == blocks.count - 1 ? trailingFade : nil
                 if let latex = MathMarkdown.displayFormula(block) {
                     MathBlock(latex: latex, size: nativeFont().pointSize)
+                } else if fade == nil, let diagram = MermaidDiagram.source(block) {
+                    MermaidBlock(source: diagram) { codeBlock(block, fade: nil) }
                 } else if block.hasPrefix("```") {
-                    fading(Text(block.components(separatedBy: "\n").dropFirst().dropLast()
-                            .joined(separator: "\n")), fade)
-                        .font(readingFont
-                            .map { .system(size: $0.size, design: .monospaced) } ?? .body
-                            .monospaced())
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12).background(Color(nsColor: .controlBackgroundColor))
+                    codeBlock(block, fade: fade)
                 } else if let rows = Self.tableRows(block) {
                     ScrollView(.horizontal) {
                         VStack(alignment: .leading, spacing: 0) {
@@ -978,6 +974,16 @@ struct MarkdownPreview: View {
         }
         .font(readingFont?.font ?? font)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func codeBlock(_ block: String, fade: TrailingFade?) -> some View {
+        fading(Text(block.components(separatedBy: "\n").dropFirst().dropLast()
+                .joined(separator: "\n")), fade)
+            .font(readingFont
+                .map { .system(size: $0.size, design: .monospaced) } ?? .body
+                .monospaced())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12).background(Color(nsColor: .controlBackgroundColor))
     }
 
     nonisolated static func blocks(_ markdown: String) -> [String] {
