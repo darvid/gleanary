@@ -1307,15 +1307,19 @@ struct ContentView: View {
                     // total.
                     let issues = library.captureJobs.filter { $0.state == .failed }.count
                     if issues > 0 {
-                        Label(issues.formatted(), systemImage: "exclamationmark.circle.fill")
-                            .labelStyle(.titleAndIcon)
-                            .countsOnChange(issues)
-                            .font(.caption.weight(.medium)).monospacedDigit()
-                            .foregroundStyle(.orange)
-                            .help(issues == 1 ? "1 capture needs attention"
-                                : "\(issues) captures need attention")
-                            .accessibilityLabel(issues == 1 ? "1 capture needs attention"
-                                : "\(issues) captures need attention")
+                        // Not a Label: the sidebar sizes label icons like row icons.
+                        HStack(spacing: 3) {
+                            Image(systemName: "exclamationmark.circle.fill").imageScale(.small)
+                            Text(issues.formatted())
+                        }
+                        .countsOnChange(issues)
+                        .font(.caption.weight(.medium)).monospacedDigit()
+                        .foregroundStyle(.orange)
+                        .help(issues == 1 ? "1 capture needs attention"
+                            : "\(issues) captures need attention")
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(issues == 1 ? "1 capture needs attention"
+                            : "\(issues) captures need attention")
                     }
                 }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
                 HStack {
