@@ -31,6 +31,26 @@ extension DocumentStore {
         }
     }
 
+    /// Starts a new topic: later requests leave earlier messages out of their chat context.
+    /// Nothing is deleted. Skipped before any message or straight after another marker.
+    @discardableResult
+    func startConversationTopic() throws -> Bool {
+        try readyDatabase().write { db in
+            let last = try String.fetchOne(
+                db, sql: "SELECT author FROM conversation_messages ORDER BY sequence DESC LIMIT 1"
+            )
+            guard let last, last != ConversationMessage.topicAuthor else { return false }
+            try db.execute(
+                sql: "INSERT INTO conversation_messages(id, author, text, refs, taskID, createdAt) VALUES (?, ?, '', ?, NULL, ?)",
+                arguments: [
+                    UUID().uuidString, ConversationMessage.topicAuthor,
+                    JSONEncoder().encode([UUID]()), Date().timeIntervalSince1970,
+                ]
+            )
+            return true
+        }
+    }
+
     func conversationRequestSequence(taskID: UUID) throws -> Int64 {
         guard let sequence = try readyDatabase().read({ db in
             try Int64.fetchOne(

@@ -89,6 +89,13 @@ struct ConversationMessage: Identifiable, Sendable {
     let references: [UUID]
     let taskID: UUID?
     let createdAt: Date
+
+    /// The author of a New Topic marker: where later requests' chat context starts.
+    static let topicAuthor = "topic"
+
+    var isTopicBoundary: Bool {
+        author == Self.topicAuthor
+    }
 }
 
 enum ChatAttachmentTarget: Hashable, Sendable {
@@ -173,9 +180,20 @@ enum ConversationChatContext {
     ) -> [ConversationTurn] {
         guard let current = messages.first(where: { $0.taskID == taskID && $0.author == "user" })
         else { return [] }
-        return messages.filter { $0.sequence < current.sequence }.suffix(12).map {
+        return currentTopic(messages.filter { $0.sequence < current.sequence }).suffix(12).map {
             ConversationTurn(author: $0.author, text: String($0.text.prefix(900)))
         }
+    }
+
+    /// The messages since the latest New Topic marker. Earlier topics stay in the transcript
+    /// and reachable through read_conversation; they just stop steering replies.
+    static func currentTopic(
+        _ messages: [ConversationMessage]
+    ) -> ArraySlice<ConversationMessage> {
+        guard let marker = messages.lastIndex(where: \.isTopicBoundary) else {
+            return messages[...]
+        }
+        return messages[messages.index(after: marker)...]
     }
 
     static func instructions(for role: AgentRole) -> String {

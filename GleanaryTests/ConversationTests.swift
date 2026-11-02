@@ -14,7 +14,7 @@ private struct ChatCommandProbe: View {
 
     var body: some View {
         VStack {
-            Button("Probe new item") { actions?.newItem() }
+            Button("Probe new item") { actions?.newItem?() }
                 .keyboardShortcut("n").disabled(actions?.enabled != true)
             Button("Probe clear") { actions?.clearConversation?() }
                 .keyboardShortcut("k").disabled(actions?.clearConversation == nil)
@@ -2474,7 +2474,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(commands?.clearConversation != nil)
         #expect(commands?.sendMessage != nil)
         #expect(commands?.importBookmarks == nil)
-        #expect(commands?.newItemTitle == "New Chat")
+        #expect(commands?.newItemTitle == "New Topic")
         let focus = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: "f",
@@ -2500,57 +2500,22 @@ private struct NoTranscriptProvider: YouTubeProviding {
             .count == 1)
         model.composer = "Keep this unsent draft"
         let visibleWindows = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
-        let clear = try #require(NSEvent.keyEvent(
+        let press = try #require(NSEvent.keyEvent(
             with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
             windowNumber: window.windowNumber, context: nil, characters: shortcut,
             charactersIgnoringModifiers: shortcut, isARepeat: false,
             keyCode: shortcut == "k" ? 40 : 45
         ))
-        #expect(window.performKeyEquivalent(with: clear))
+        #expect(window.performKeyEquivalent(with: press))
         try await Task.sleep(for: .milliseconds(300))
-        #expect(window.attachedSheet != nil || NSApp.windows.contains {
+        let dialogShown = window.attachedSheet != nil || NSApp.windows.contains {
             $0.isVisible && !visibleWindows.contains(ObjectIdentifier($0))
-        })
-        #expect(!model.messages.isEmpty)
-        #expect(model.composer == "Keep this unsent draft")
-        #expect(try await !store.conversationMessages().isEmpty)
-        if shortcut == "n" {
-            let dialog = try #require(window.attachedSheet ?? NSApp.windows.first {
-                $0.isVisible && !visibleWindows.contains(ObjectIdentifier($0))
-            })
-            let dialogView = try #require(dialog.contentView)
-            let cancel = try #require(nativeDialogButton("Cancel", in: dialogView))
-            #expect(nativeDialogButton("Start New Chat", in: dialogView) != nil)
-            cancel.performClick(nil)
-            try await Task.sleep(for: .milliseconds(100))
-            #expect(!model.messages.isEmpty)
-            #expect(model.composer == "Keep this unsent draft")
-            let saved = try await store.documents().map(\.id)
-            #expect(window.performKeyEquivalent(with: focus))
-            try await Task.sleep(for: .milliseconds(50))
-            #expect(window.firstResponder is NSTextView)
-            let beforeNewChat = Set(NSApp.windows.filter(\.isVisible).map(ObjectIdentifier.init))
-            #expect(window.performKeyEquivalent(with: clear))
-            try await Task.sleep(for: .milliseconds(100))
-            let confirmation = try #require(window.attachedSheet ?? NSApp.windows.first {
-                $0.isVisible && !beforeNewChat.contains(ObjectIdentifier($0))
-            })
-            let confirmationView = try #require(confirmation.contentView)
-            let start = try #require(nativeDialogButton("Start New Chat", in: confirmationView))
-            start.performClick(nil)
-            for _ in 0 ..< 80 {
-                if model.messages.isEmpty, model.composer.isEmpty {
-                    break
-                }
-                try await Task.sleep(for: .milliseconds(25))
-            }
-            #expect(model.messages.isEmpty)
-            #expect(model.composer.isEmpty)
-            #expect(model.selectedSources.isEmpty)
-            #expect(try await store.conversationMessages().isEmpty)
-            #expect(try await store.documents().map(\.id) == saved)
-            #expect(window.firstResponder is NSTextView)
         }
+        // Clearing asks first; a new topic deletes nothing, so it just starts.
+        #expect(dialogShown == (shortcut == "k"))
+        #expect(model.messages.contains { $0.text == "Earlier fixture message" })
+        #expect(model.composer == "Keep this unsent draft")
+        #expect(try await store.conversationMessages().last?.isTopicBoundary == (shortcut == "n"))
     }
 
     @MainActor private func nativeDialogButton(_ title: String, in view: NSView) -> NSButton? {
@@ -3578,6 +3543,64 @@ private struct NoTranscriptProvider: YouTubeProviding {
         )])
         let markdown = try research.markdown(evidence: evidence)
         #expect(markdown.contains("  > They show no care for the user and the surroundings.\n"))
+    }
+
+    @Test func aNewTopicStartsChatContextAfterItsMarker() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(try await !store.startConversationTopic())
+        let earlier = try await store.beginConversation("Find design galleries", owner: .assistant)
+        let gallery = try await store.save(MarkdownDocument(
+            name: "Landbook", markdown: "A gallery of landing pages."
+        )).id
+        try await store.postConversation(
+            author: .assistant, text: "Here are three galleries.", references: [gallery],
+            taskID: earlier
+        )
+        #expect(try await store.startConversationTopic())
+        // A second marker straight after the first adds nothing.
+        #expect(try await !store.startConversationTopic())
+        let later = try await store.beginConversation("Explain response schemas", owner: .assistant)
+        let messages = try await store.conversationMessages()
+        #expect(messages.filter(\.isTopicBoundary).count == 1)
+        let history = ConversationChatContext.history(messages, before: later)
+        #expect(history.isEmpty)
+        let topic = ConversationChatContext.currentTopic(messages)
+        #expect(topic.map(\.text) == ["Explain response schemas"])
+        #expect(!topic.flatMap(\.references).contains(gallery))
+        // The earlier request still sees its own context: markers only cut what follows them.
+        #expect(ConversationChatContext.history(messages, before: earlier).isEmpty)
+        try await store.clearConversation()
+        #expect(try await store.conversationMessages().isEmpty)
+    }
+
+    @Test @MainActor func newTopicsWaitForWorkAndAreOfferedAfterAGap() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let task = try await store.beginConversation("Earlier fixture message", owner: .assistant)
+        try await store.updateConversationTask(task, state: "succeeded", progress: "Done")
+        _ = try await store.beginConversation(
+            "Waiting fixture request", owner: .assistant, queued: true
+        )
+        let model = ConversationModel(
+            store: store,
+            coordinator: AgentCoordinator(store: store, inference: ConversationFixtureInference())
+        )
+        await model.load()
+        // A queued request was asked with the earlier context, so no new topic until it's done.
+        #expect(!model.canStartTopic)
+        await model.clearQueue()
+        #expect(model.canStartTopic)
+        let last = try #require(model.messages.last)
+        #expect(!model.offersNewTopic(at: last.createdAt.addingTimeInterval(60)))
+        #expect(model.offersNewTopic(
+            at: last.createdAt.addingTimeInterval(ConversationModel.topicGap)
+        ))
+        await model.startTopic()
+        #expect(model.messages.last?.isTopicBoundary == true)
+        #expect(model.messages.contains { $0.text == "Earlier fixture message" })
+        #expect(!model.canStartTopic)
+        #expect(!model.offersNewTopic(at: .distantFuture))
     }
 
     @Test func linkSuggestionsMatchOnDistinctiveWordsOnly() {

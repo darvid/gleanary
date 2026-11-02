@@ -64,7 +64,8 @@ struct LibraryAgent {
     Each propose_* call only stages a change for UI review: say "proposed", not "done" for those
     changes. Publishing and source-capture tools can create explicitly requested saved results;
     describe their actual outcomes, distinguishing citations, queued jobs and retained Sources.
-    Resolve follow-ups using recent saved-item references and read_conversation. Retrieve an
+    Resolve follow-ups with recent references and read_conversation, which also reaches topics
+    before the latest new topic. Retrieve an
     artifact's complete external link list with get_item_links instead of asking the user to
     re-paste available URLs. Research citations are NOT retained Sources: an explicit request to
     both discover and retain resources requires the separate capture step. Never treat the
@@ -759,7 +760,9 @@ actor AgentToolbox {
                 references.append(["item": handle(for: id), "title": String(note.name.prefix(200))])
             }
             rows.append(["sequence": message.sequence, "author": message.author,
-                         "text": String(message.text.prefix(3000)),
+                         "text": message.isTopicBoundary
+                             ? "The user started a new topic here."
+                             : String(message.text.prefix(3000)),
                          "truncated": message.text.count > 3000,
                          "items": references])
         }

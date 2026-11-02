@@ -75,7 +75,8 @@ struct GleanaryApp: App {
 
 struct GleanaryActions {
     let enabled: Bool
-    let newItem: () -> Void
+    /// Nil while the screen can't make one, such as a new topic while Chat is working.
+    let newItem: (() -> Void)?
     let attach: () -> Void
     let focus: () -> Void
     var newItemTitle = "New Note"

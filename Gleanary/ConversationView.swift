@@ -19,7 +19,8 @@ struct ConversationView: View {
     @State private var reviewingFiling: SeriesFiling.Status?
     @State private var importing = false
     @State private var confirmingClear = false
-    @State private var startingNewChat = false
+    /// The last message whose gap you dismissed the New Topic offer for.
+    @State private var dismissedTopicOffer: UUID?
     @State private var starterCategories = false
     @AppStorage("starterCategoriesOffered") private var starterCategoriesOffered = false
     @State private var followLatest = true
@@ -129,30 +130,20 @@ struct ConversationView: View {
             }
         }
         .confirmationDialog(
-            startingNewChat ? "Start a new chat?" : "Clear conversation?",
+            "Clear conversation?",
             isPresented: $confirmingClear,
             titleVisibility: .visible
         ) {
-            Button(startingNewChat ? "Start New Chat" : "Clear conversation", role: .destructive) {
-                let discardDraft = startingNewChat
+            Button("Clear conversation", role: .destructive) {
                 Task {
-                    guard await model.clearConversation(discardDraft: discardDraft) else { return }
-                    if discardDraft {
-                        showingPreview = false
-                        preview.selectedID = nil
-                        followLatest = true
-                        userScrolling = false
-                        feedPosition = ScrollPosition(edge: .bottom)
-                    }
+                    guard await model.clearConversation() else { return }
                     composing = true
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(
-                startingNewChat
-                    ? "Messages, recent chat context, attachments and your unsent draft will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain."
-                    : "Messages and recent chat context will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain."
+                "Messages and recent chat context will be deleted. The current task will be cancelled and pending proposals dismissed. Saved notes, sources and applied connections will remain. To change the subject without deleting anything, start a new topic instead."
             )
         }
         .onChange(of: scenePhase) {
@@ -175,12 +166,13 @@ struct ConversationView: View {
     }
 
     private var sceneActions: GleanaryActions {
+        let newTopic: (() -> Void)? = model.canStartTopic ? { startTopic() } : nil
         var actions = GleanaryActions(
             enabled: model.ready && !model.clearingConversation,
-            newItem: { requestClear(startNewChat: true) },
+            newItem: newTopic,
             attach: { importing = true },
             focus: { composing = true },
-            newItemTitle: "New Chat"
+            newItemTitle: "New Topic"
         )
         if canClearConversation {
             actions.clearConversation = { requestClear() }
@@ -316,9 +308,16 @@ struct ConversationView: View {
         )
     }
 
-    private func requestClear(startNewChat: Bool = false) {
-        startingNewChat = startNewChat
+    private func requestClear() {
         confirmingClear = true
+    }
+
+    private func startTopic() {
+        Task {
+            await model.startTopic()
+            followLatest = true
+            composing = true
+        }
     }
 
     private var canClearConversation: Bool {
@@ -338,6 +337,8 @@ struct ConversationView: View {
             Menu("More", systemImage: "ellipsis") {
                 SettingsLink { Label("Settings…", systemImage: "gearshape") }
                 Divider()
+                Button("New Topic", systemImage: "plus.bubble", action: startTopic)
+                    .disabled(!model.canStartTopic)
                 Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
                     requestClear()
                 }
@@ -356,17 +357,25 @@ struct ConversationView: View {
                         followLatest = false; Task { await model.loadOlder() }
                     }
                 }
+                let topicStart = model.messages.last(where: \.isTopicBoundary)?.sequence
                 ForEach(ConversationFeedEntry.entries(
                     in: model.messages,
                     drafting: Set(model.replyDrafts.keys)
                 )) { entry in
-                    if let message = entry.userMessage {
-                        messageRow(message)
-                            .id(entry.id)
-                    } else {
-                        response(entry)
-                            .id(entry.id)
+                    Group {
+                        if let marker = entry.messages.first, marker.isTopicBoundary {
+                            topicDivider(marker)
+                        } else if let message = entry.userMessage {
+                            messageRow(message)
+                        } else {
+                            response(entry)
+                        }
                     }
+                    .id(entry.id)
+                    // Earlier topics fade back: still readable, no longer steering replies.
+                    .opacity(topicStart.map { start in
+                        (entry.messages.last?.sequence ?? .max) < start ? 0.6 : 1
+                    } ?? 1)
                 }
             }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
         }
@@ -1151,8 +1160,54 @@ struct ConversationView: View {
         .accessibilityLabel(isNew ? "New category \(label)" : "Existing category \(label)")
     }
 
+    /// Where a new topic starts, as a quiet pill rather than a rule.
+    private func topicDivider(_ marker: ConversationMessage) -> some View {
+        Label {
+            Text("New topic").fontWeight(.semibold).foregroundStyle(.primary.opacity(0.85))
+                + Text(" · " + marker.createdAt.formatted(.relative(presentation: .named)))
+        } icon: {
+            Image(systemName: "plus.bubble")
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .padding(.horizontal, 12).padding(.vertical, 5)
+        .background(Color.primary.opacity(0.07), in: Capsule())
+        .frame(maxWidth: .infinity)
+        .help("Replies after this leave earlier messages out, unless you refer back to them")
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    /// After a long gap, a quiet offer to start a new topic above the composer.
+    private var topicOffer: some View {
+        // Re-evaluated every few minutes, so an idle window still notices the gap.
+        TimelineView(.periodic(from: .now, by: 300)) { timeline in
+            if let last = model.messages.last, last.id != dismissedTopicOffer,
+               model.offersNewTopic(at: timeline.date)
+            {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock").foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(
+                        "Last message \(last.createdAt.formatted(.relative(presentation: .named)))"
+                    )
+                    .foregroundStyle(.secondary)
+                    Button("Start a new topic", action: startTopic).buttonStyle(.link)
+                    Button("Dismiss", systemImage: "xmark") { dismissedTopicOffer = last.id }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Keep going on the same topic")
+                }
+                .font(.callout)
+                .padding(.leading, 12).padding(.trailing, 8).padding(.vertical, 5)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .accessibilityElement(children: .contain)
+            }
+        }
+    }
+
     private var composer: some View {
         VStack(alignment: .leading, spacing: 10) {
+            topicOffer
             if let error = model.error {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary)
