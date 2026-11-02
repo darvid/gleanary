@@ -367,8 +367,8 @@ struct ContentView: View {
         .task {
             // The chat Writer's own model, asked for when the digest runs: it loads ChatGPT's
             // models if they aren't yet, and says why when ChatGPT can't be used.
-            guard let chatGPT = conversation?.chatGPT else { return }
-            library.useWriter { try await chatGPT.requestInference() }
+            guard let providers = conversation?.providers else { return }
+            library.useWriter { try await providers.requestInference() }
         }
         .onChange(of: scope) {
             selection = []; preview.selectedID = nil; page = 0
@@ -630,41 +630,39 @@ struct ContentView: View {
     }
 
     private var summarizerKey: String {
-        guard let chatGPT = conversation?.chatGPT else { return "apple" }
-        // Until accounts and models load, `useChatGPT` and the model aren't settled yet.
-        guard chatGPT.loaded, !chatGPT.busy else { return "pending" }
-        return chatGPT.useChatGPT ? "chatgpt:" + chatGPT.selectedModel : "apple"
+        // Until accounts, keys and models load, the provider and model aren't settled yet.
+        conversation?.providers.engineKey ?? "apple"
     }
 
-    /// ChatGPT when it's enabled, else Apple Intelligence. An enabled ChatGPT that can't be used
+    /// The chosen hosted provider, else Apple Intelligence. A hosted provider that can't be used
     /// fails summaries with its reason rather than quietly switching engines.
     private func linkSummarizer() -> any LinkSummarizing {
-        guard let chatGPT = conversation?.chatGPT, chatGPT.useChatGPT else {
+        guard let providers = conversation?.providers, providers.selected != .apple else {
             return AppleLinkSummarizer()
         }
-        if chatGPT.models.isEmpty {
-            return DeferredChatGPTSummarizer(connection: chatGPT)
+        let name = providers.selected.name
+        if providers.needsModels {
+            return DeferredHostedSummarizer(engineName: name, providers: providers)
         }
         do {
-            return try chatGPT.inference() as? any LinkSummarizing ?? AppleLinkSummarizer()
+            return try providers.inference() as? any LinkSummarizing ?? AppleLinkSummarizer()
         } catch {
-            return UnavailableSummarizer(engineName: "ChatGPT", error: error)
+            return UnavailableSummarizer(engineName: name, error: error)
         }
     }
 
-    /// The cross-linker's judge follows the provider too. An enabled ChatGPT that can't be used
+    /// The cross-linker's judge follows the provider too. A hosted provider that can't be used
     /// leaves none, so the automation says so instead of quietly switching to Apple.
     private func linkJudge() -> (any LinkJudging)? {
-        guard let chatGPT = conversation?.chatGPT, chatGPT.useChatGPT else {
+        guard let providers = conversation?.providers, providers.selected != .apple else {
             return AppleConversationInference()
         }
-        return (try? chatGPT.inference()) as? any LinkJudging
+        return (try? providers.inference()) as? any LinkJudging
     }
 
-    /// ChatGPT's filing model when ChatGPT is connected and enabled; otherwise Apple
-    /// Intelligence.
+    /// The hosted provider's filing model when one is chosen; otherwise Apple Intelligence.
     private func currentInference() -> any ConversationInferring {
-        (try? conversation?.chatGPT.filingInference()) ?? AppleConversationInference()
+        (try? conversation?.providers.filingInference()) ?? AppleConversationInference()
     }
 
     /// Gap from the toggle to the sidebar's edge, given the toggle's place beside the traffic

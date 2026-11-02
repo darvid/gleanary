@@ -304,7 +304,7 @@ private func turn(_ calls: AgentCall...) -> AgentTurn {
 
     @Test func requestBodyCarriesToolsWithoutStoredState() throws {
         let tools = try AgentToolbox.definitions()
-        let body = try ChatGPTConversationInference.agentRequestBody(
+        let body = try OpenAIResponsesAPI.agentRequestBody(
             model: "fixture-model", instructions: "Help.", input: [
                 JSONSerialization.data(withJSONObject: ["role": "user", "content": "hi"]),
             ], tools: tools

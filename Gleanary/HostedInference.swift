@@ -1,11 +1,28 @@
 import Foundation
 
-struct ChatGPTConversationInference: ConversationInferring {
-    let session: ChatGPTSession
+/// Inference with a hosted model: ChatGPT, or a provider reached with an API key. Every
+/// feature is built here from `api`'s generate calls, so providers share the prompts, schemas
+/// and evidence checks.
+struct HostedInference: ConversationInferring {
+    let api: any HostedModelAPI
     let model: String
+
+    init(api: any HostedModelAPI, model: String) {
+        self.api = api
+        self.model = model
+    }
+
+    init(session: ChatGPTSession, model: String) {
+        self.init(api: OpenAIResponsesAPI(session: session), model: model)
+    }
+
     var capabilities: InferenceCapabilities {
-        InferenceCapabilities(
-            identifier: "openai.responses/\(model)/grounded-v1",
+        let format = switch api.provider {
+        case .chatGPT, .openAI: "openai.responses"
+        default: api.provider.rawValue
+        }
+        return InferenceCapabilities(
+            identifier: "\(format)/\(model)/grounded-v1",
             local: false,
             structured: true,
             streaming: true
@@ -16,7 +33,7 @@ struct ChatGPTConversationInference: ConversationInferring {
         request: String,
         context: ConversationPlanningContext
     ) async throws -> ConversationPlan {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let json = try await response(
             prompt: context.prompt(request: request),
             instructions: ConversationPlan.instructions(purpose: context.purpose),
@@ -25,7 +42,7 @@ struct ChatGPTConversationInference: ConversationInferring {
             fence: fence
         ) { _ in }
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return try ConversationPlan.decode(Data(json.utf8), context: context)
     }
 
@@ -35,7 +52,7 @@ struct ChatGPTConversationInference: ConversationInferring {
         withSamples: Bool,
         progress: @escaping @Sendable ([FolderMapping.Answer]) -> Void
     ) async throws -> [FolderMapping.Answer] {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let json = try await response(
             prompt: FolderMapping.prompt(
                 folders: folders, categories: categories, withSamples: withSamples
@@ -46,7 +63,7 @@ struct ChatGPTConversationInference: ConversationInferring {
             fence: fence
         ) { partial in progress(FolderMapping.completedAnswers(inPartial: partial)) }
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         do { return try FolderMapping.decode(Data(json.utf8)) }
         catch { throw ChatGPTError.invalidOutput }
     }
@@ -56,7 +73,7 @@ struct ChatGPTConversationInference: ConversationInferring {
         categories: [DecimalCategory],
         examples: [UUID: [String]]
     ) async throws -> [BookmarkClassification.Answer] {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let json = try await response(
             prompt: BookmarkClassification.prompt(
                 items: items, categories: categories, examples: examples, local: false
@@ -67,7 +84,7 @@ struct ChatGPTConversationInference: ConversationInferring {
             fence: fence
         ) { _ in }
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         do {
             return try BookmarkClassification.decode(
                 Data(json.utf8), items: items, categories: categories
@@ -83,21 +100,19 @@ struct ChatGPTConversationInference: ConversationInferring {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let fence = try await session.authorizationFence()
-                    let body = try Self.chatRequestBody(
-                        model: model,
+                    let fence = try await api.authorizationFence()
+                    let request = try Self.chatRequest(
                         question: question,
                         role: role,
                         history: history
                     )
-                    let request = try await authorizedRequest(body: body, fence: fence)
                     continuation.yield(.progress("Replying…"))
-                    let text = try await consume(request) { _ in }
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    let text = try await api.generate(request, model: model, fence: fence) { _ in }
+                        .text.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !text.isEmpty,
                           text.count <= 16000 else { throw ChatGPTError.invalidReply }
                     try Task.checkCancellation()
-                    try await session.validateFence(fence)
+                    try await api.validateFence(fence)
                     continuation.yield(.result(text))
                     continuation.finish()
                 } catch is CancellationError { continuation.finish(throwing: CancellationError()) }
@@ -108,19 +123,18 @@ struct ChatGPTConversationInference: ConversationInferring {
         }
     }
 
-    static func chatRequestBody(
-        model: String,
+    static func chatRequest(
         question: String,
         role: AgentRole,
         history: [ConversationTurn]
-    ) throws -> Data {
+    ) throws -> HostedRequest {
         let input = history.suffix(12).map {
             ["role": $0.apiRole, "content": String($0.contextText.prefix(1000))]
         } + [["role": "user", "content": String(question.prefix(4000))]]
-        return try JSONSerialization.data(withJSONObject: [
-            "model": model, "store": false, "stream": true,
-            "instructions": ConversationChatContext.instructions(for: role), "input": input,
-        ])
+        return try HostedRequest(
+            instructions: ConversationChatContext.instructions(for: role),
+            input: input.map { try JSONSerialization.data(withJSONObject: $0) }
+        )
     }
 
     func research(
@@ -140,7 +154,7 @@ struct ChatGPTConversationInference: ConversationInferring {
                     }
                     let evidence = AppleConversationInference.evidence(sources, question: question)
                     guard !evidence.isEmpty else { throw ConversationError.missingSource }
-                    let fence = try await session.authorizationFence()
+                    let fence = try await api.authorizationFence()
                     continuation
                         .yield(
                             .progress(
@@ -194,7 +208,7 @@ struct ChatGPTConversationInference: ConversationInferring {
                     guard let verified = result.keeping(verification.supported)
                     else { throw ChatGPTError.invalidOutput }
                     try Task.checkCancellation()
-                    try await session.validateFence(fence)
+                    try await api.validateFence(fence)
                     try continuation.yield(.result(verified.markdown(evidence: evidence)))
                     continuation.finish()
                 } catch is CancellationError { continuation.finish(throwing: CancellationError()) }
@@ -212,75 +226,13 @@ struct ChatGPTConversationInference: ConversationInferring {
         instructions: String,
         name: String,
         schema: [String: Any],
-        fence: (accountID: String, epoch: UUID),
-        progress: @Sendable (String) -> Void
+        fence: InferenceFence,
+        progress: @escaping @Sendable (String) -> Void
     ) async throws -> String {
-        let body = try Self.requestBody(
-            model: model,
-            prompt: prompt,
-            instructions: instructions,
-            name: name,
-            schema: schema
+        let request = try HostedRequest.prompt(
+            prompt, instructions: instructions, name: name, schema: schema
         )
-        let request = try await authorizedRequest(body: body, fence: fence)
-        return try await consume(request, progress: progress)
-    }
-
-    func authorizedRequest(
-        body: Data,
-        fence: (accountID: String, epoch: UUID)
-    ) async throws -> URLRequest {
-        try await session.validateFence(fence)
-        var request = try URLRequest(url: Self.responsesURL())
-        request.httpMethod = "POST"
-        try await request.setValue(
-            "Bearer " + (session.accessToken()),
-            forHTTPHeaderField: "Authorization"
-        )
-        try await session.validateFence(fence)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.httpBody = body
-        return request
-    }
-
-    private func consume(
-        _ request: URLRequest,
-        progress: @Sendable (String) -> Void
-    ) async throws -> String {
-        var decoder = ChatGPTSSEDecoder()
-        var lastProgress = 0
-        for try await line in session.transport.lines(for: request) {
-            try Task.checkCancellation()
-            if let result = try decoder.consume(line) {
-                return result
-            }
-            if decoder.text.count - lastProgress >= 120 {
-                lastProgress = decoder.text.count
-                progress(decoder.text)
-            }
-        }
-        return try decoder.finish()
-    }
-
-    static func requestBody(
-        model: String,
-        prompt: String,
-        instructions: String,
-        name: String,
-        schema: [String: Any]
-    ) throws -> Data {
-        // Plan-usage preview forbids persisted Responses state and several ordinary API parameters.
-        try JSONSerialization.data(withJSONObject: [
-            "model": model, "store": false, "stream": true, "instructions": instructions,
-            "input": [["role": "user", "content": prompt]],
-            "text": ["format": [
-                "type": "json_schema",
-                "name": name,
-                "strict": true,
-                "schema": schema,
-            ]],
-        ])
+        return try await api.generate(request, model: model, fence: fence) { progress($0) }.text
     }
 
     static func researchSchema(ids: [String]) -> [String: Any] {
@@ -303,15 +255,9 @@ struct ChatGPTConversationInference: ConversationInferring {
             ],
         ]]
     }
-
-    private static func responsesURL() throws -> URL {
-        guard let url = URL(string: "https://api.openai.com/v1/responses")
-        else { throw ChatGPTError.server }
-        return url
-    }
 }
 
-extension ChatGPTConversationInference: AgentResponding {
+extension HostedInference: AgentResponding {
     func agentTurn(instructions: String, input: [Data], tools: Data) async throws -> AgentTurn {
         try await agentTurn(instructions: instructions, input: input, tools: tools) { _ in }
     }
@@ -322,42 +268,13 @@ extension ChatGPTConversationInference: AgentResponding {
         tools: Data,
         text: @escaping @Sendable (String) async -> Void
     ) async throws -> AgentTurn {
-        let fence = try await session.authorizationFence()
-        let body = try Self.agentRequestBody(
-            model: model, instructions: instructions, input: input, tools: tools
+        let fence = try await api.authorizationFence()
+        let turn = try await api.generate(
+            HostedRequest(instructions: instructions, input: input, tools: tools),
+            model: model, fence: fence, text: text
         )
-        let request = try await authorizedRequest(body: body, fence: fence)
-        var decoder = ChatGPTAgentDecoder()
-        for try await line in session.transport.lines(for: request) {
-            try Task.checkCancellation()
-            let streamed = decoder.streamedText
-            if let turn = try decoder.consume(line) {
-                try await session.validateFence(fence)
-                return turn
-            }
-            if decoder.streamedText != streamed {
-                await text(decoder.streamedText)
-            }
-        }
-        if let turn = try decoder.consume("") {
-            return turn
-        }
-        throw ChatGPTError.invalidStream
-    }
-
-    static func agentRequestBody(
-        model: String,
-        instructions: String,
-        input: [Data],
-        tools: Data
-    ) throws -> Data {
-        // Plan usage requires store: false, so every turn resends the whole exchange.
-        let items = try input.map { try JSONSerialization.jsonObject(with: $0) }
-        return try JSONSerialization.data(withJSONObject: [
-            "model": model, "store": false, "stream": true, "instructions": instructions,
-            "input": items, "tools": JSONSerialization.jsonObject(with: tools),
-            "tool_choice": "auto", "parallel_tool_calls": true,
-        ])
+        try await api.validateFence(fence)
+        return turn
     }
 }
 
@@ -559,15 +476,15 @@ struct ChatGPTSSEDecoder {
 /// Grounded link summaries with ChatGPT: the same evidence IDs, prompts, verification and output
 /// as Apple Intelligence, without its small context. Only very long sources are first narrowed
 /// to key excerpts section by section, so nothing past the opening is silently dropped.
-extension ChatGPTConversationInference: LinkSummarizing {
+extension HostedInference: LinkSummarizing {
     static let summarySection = 60000
 
     var engineName: String {
-        "ChatGPT"
+        api.provider.name
     }
 
     func summarize(_ document: CapturedDocument) async throws -> String {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let context = "Title: \(document.title)\nCaptured coverage: \(document.coverage.label)"
         var text = document.evidenceBlocks.map(\.text).joined(separator: "\n\n")
         while text.count > Self.summarySection {
@@ -613,7 +530,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
             draft, review: review, evidence: evidence, context: context, source: text,
             fence: fence
         )
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return try AppleLinkSummarizer.withCaptureLimits(
             verified.markdown(source: text),
             coverage: document.coverage
@@ -624,7 +541,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
         _ points: [SummaryDraft.Point],
         context: String,
         reasons: Bool,
-        fence: (accountID: String, epoch: UUID)
+        fence: InferenceFence
     ) async throws -> SummaryVerification {
         var supported: [Bool] = []
         var explained: [String] = []
@@ -663,7 +580,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
         evidence: SummaryEvidence,
         context: String,
         source: String,
-        fence: (accountID: String, epoch: UUID)
+        fence: InferenceFence
     ) async throws -> SummaryDraft {
         let points = [draft.overview] + draft.takeaways
         try review.validate(count: points.count)
@@ -739,7 +656,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
 
     func researchTitle(for summary: String) async throws -> String {
         do {
-            let fence = try await session.authorizationFence()
+            let fence = try await api.authorizationFence()
             let evidence = ResearchNoteTitle.evidence(for: summary)
             guard !evidence.items.isEmpty else { throw LinkSummaryError.noEvidence }
             let proposal: EvidenceSummaryDraft = try await structured(
@@ -758,7 +675,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
             )
             let verified = try review.applied(to: draft)
             try Task.checkCancellation()
-            try await session.validateFence(fence)
+            try await api.validateFence(fence)
             return try ResearchNoteTitle.validate(verified)
         } catch LinkSummaryError.invalidOutput {
             throw ChatGPTError.invalidOutput
@@ -770,7 +687,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
         instructions: String,
         name: String,
         schema: [String: Any],
-        fence: (accountID: String, epoch: UUID)
+        fence: InferenceFence
     ) async throws -> Value {
         let json = try await response(
             prompt: prompt, instructions: instructions, name: name, schema: schema, fence: fence
@@ -781,7 +698,7 @@ extension ChatGPTConversationInference: LinkSummarizing {
     }
 }
 
-extension ChatGPTConversationInference: LinkJudging {
+extension HostedInference: LinkJudging {
     var local: Bool {
         false
     }
@@ -790,7 +707,7 @@ extension ChatGPTConversationInference: LinkJudging {
         _ item: LinkJudgement.Item,
         candidates: [LinkJudgement.Item]
     ) async throws -> [LinkJudgement.Answer] {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let json = try await response(
             prompt: LinkJudgement.prompt(item: item, candidates: candidates),
             instructions: LinkJudgement.instructions,
@@ -799,15 +716,15 @@ extension ChatGPTConversationInference: LinkJudging {
             fence: fence
         ) { _ in }
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         do { return try LinkJudgement.decode(Data(json.utf8), candidates: candidates) }
         catch { throw ChatGPTError.invalidOutput }
     }
 }
 
-extension ChatGPTConversationInference: RecommendationJudging {
+extension HostedInference: RecommendationJudging {
     func judgeIntents(_ items: [RecommendationJudgement.Item]) async throws -> [Int: LinkIntent] {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let json = try await response(
             prompt: RecommendationJudgement.prompt(items),
             instructions: RecommendationJudgement.instructions,
@@ -816,7 +733,7 @@ extension ChatGPTConversationInference: RecommendationJudging {
             fence: fence
         ) { _ in }
         try Task.checkCancellation()
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         do { return try RecommendationJudgement.decode(Data(json.utf8), items: items) }
         catch { throw ChatGPTError.invalidOutput }
     }
@@ -824,9 +741,9 @@ extension ChatGPTConversationInference: RecommendationJudging {
 
 /// The Writer's gather plan and per-section extraction with ChatGPT. Each call carries one
 /// section of one source.
-extension ChatGPTConversationInference: WriterInferring {
+extension HostedInference: WriterInferring {
     func brief(request: String, categories: [DecimalCategory]) async throws -> WriterBrief {
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let brief: WriterBrief = try await structured(
             prompt: WriterBrief.prompt(request: request, categories: categories),
             instructions: WriterBrief.instructions,
@@ -834,13 +751,13 @@ extension ChatGPTConversationInference: WriterInferring {
             schema: WriterBrief.jsonSchema(categories: categories),
             fence: fence
         )
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return brief
     }
 
     func extractFacts(_ chunk: ExtractionChunk) async throws -> [ExtractedFact] {
         struct Facts: Decodable { let facts: [ExtractedFact] }
-        let fence = try await session.authorizationFence()
+        let fence = try await api.authorizationFence()
         let result: Facts = try await structured(
             prompt: chunk.prompt,
             instructions: ExtractionChunk.instructions,
@@ -848,7 +765,7 @@ extension ChatGPTConversationInference: WriterInferring {
             schema: ExtractionChunk.jsonSchema(fields: chunk.fields),
             fence: fence
         )
-        try await session.validateFence(fence)
+        try await api.validateFence(fence)
         return result.facts
     }
 }

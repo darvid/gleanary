@@ -248,7 +248,7 @@ struct WebResearchTests {
     }
 
     @Test func requestUsesHostedSearchAndNoPersistedResponseState() throws {
-        let body = try ChatGPTConversationInference.webResearchRequestBody(
+        let body = try OpenAIResponsesAPI.webResearchRequestBody(
             model: "fixture-model",
             question: "Find current public information",
             sources: []
@@ -261,7 +261,7 @@ struct WebResearchTests {
         #expect(json["previous_response_id"] == nil)
         #expect(json["background"] == nil)
         #expect(json["max_tool_calls"] == nil)
-        let library = try ChatGPTConversationInference.requestBody(
+        let library = try OpenAIResponsesAPI.requestBody(
             model: "fixture",
             prompt: "Summarize",
             instructions: "Saved sources only",
@@ -282,9 +282,11 @@ struct WebResearchTests {
             transport: transport,
             hostID: "urn:uuid:fixture"
         )
-        let provider = ChatGPTConversationInference(session: session, model: "fixture")
+        let provider = HostedInference(session: session, model: "fixture")
         let answer = try await provider.researchWeb(question: "Public topic", sources: []) { _ in }
-        #expect(try answer == result())
+        var expected = try result()
+        expected.engine = "ChatGPT"
+        #expect(answer == expected)
         #expect(await transport.requests.count == 1)
         _ = try await session.signOut()
         await #expect(throws: ChatGPTError.self) {
@@ -585,7 +587,7 @@ struct WebResearchTests {
         _ = try await store.open()
         let session = ChatGPTSession()
         let model = try #require(await session.catalog().first)
-        let provider = ChatGPTConversationInference(session: session, model: model.slug)
+        let provider = HostedInference(session: session, model: model.slug)
         let request = "Search the web for the official Python website. In one sentence, state its URL and cite the source."
         let task = try await store.beginConversation(request, owner: .researcher)
         let coordinator = AgentCoordinator(store: store, inference: provider)

@@ -354,7 +354,7 @@ Preserve originals (or reproducible URLs and retrieval metadata) and provenance.
 
 ---
 
-## 6. Apple Intelligence + Optional ChatGPT Inference
+## 6. Apple Intelligence + Optional Hosted Inference
 
 ### 6.1 Provider-neutral application logic
 
@@ -414,6 +414,23 @@ For a qualifying open-source/local client, follow the current primary documentat
 **Provider selection UX:** Default to the already working local provider when available; offer an optional `Connect ChatGPT` action with truthful permission/data-sharing language. Provide a user-visible selected provider and a clear indicator when source excerpts are sent to the cloud. Do not silently transmit the entire knowledge base or background-query cloud models merely because sign-in succeeded.
 
 **Performance:** Do not assume ChatGPT is always lower-latency. Record first-token latency, total task duration, quality and failures per provider. Cloud models may improve complex synthesis even when local models handle short classification faster.
+
+**API-key providers:** OpenAI (API key), Anthropic, Google Gemini and
+OpenRouter run through `HostedInference`, which builds every feature
+from one provider call (`HostedModelAPI.generate`) plus optional web
+search. The tool loop keeps its history in Responses item shapes; each
+client translates them (Claude content blocks, Gemini parts with thought
+signatures, Chat Completions tool messages). Structured output uses each
+provider's documented mechanism: strict JSON schema, a forced Claude
+tool, or Gemini's response schema limited to its supported keywords.
+
+- Keys live in one Keychain item, are checked by listing models before
+  they're saved, and are never logged or shown again beyond the last
+  four characters. Replacing or removing a key cancels work started
+  with it.
+- Choosing a provider asks to share once, naming the company; removing
+  its key withdraws that permission.
+- Failures name the company and never silently switch providers.
 
 ### 6.4 Provider policies and graceful degradation
 

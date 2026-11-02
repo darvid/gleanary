@@ -215,7 +215,7 @@ struct ChatGPTTests {
             )],
             categories: [home]
         )
-        let plan = try await ChatGPTConversationInference(session: session, model: "fixture-model")
+        let plan = try await HostedInference(session: session, model: "fixture-model")
             .plan(
                 request: "Could we organize it better?",
                 context: context
@@ -236,7 +236,7 @@ struct ChatGPTTests {
         #expect(json["text"] != nil)
         _ = try await session.signOut()
         await #expect(throws: ChatGPTError.self) {
-            _ = try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            _ = try await HostedInference(session: session, model: "fixture-model")
                 .plan(
                     request: "File this",
                     context: context
@@ -726,12 +726,12 @@ struct ChatGPTTests {
     }
 
     @Test func responseBodyUsesOnlySupportedStatelessPreviewFields() throws {
-        let body = try ChatGPTConversationInference.requestBody(
+        let body = try OpenAIResponsesAPI.requestBody(
             model: "fixture",
             prompt: "Fixture question",
             instructions: "Fixture instructions",
             name: "grounded_research",
-            schema: ChatGPTConversationInference.researchSchema(ids: ["E1"])
+            schema: HostedInference.researchSchema(ids: ["E1"])
         )
         let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(Set(json.keys) == ["model", "store", "stream", "instructions", "input", "text"])
@@ -768,7 +768,7 @@ struct ChatGPTTests {
             transport: transport,
             hostID: "fixture"
         )
-        let provider = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let provider = HostedInference(session: session, model: "fixture-model")
         let sourceID = UUID()
         let quote = "Examples demonstrate expected output formats."
         let text = quote + " UNCITABLE_PAGE_DETAIL must not become a planning fact."
@@ -890,7 +890,7 @@ struct ChatGPTTests {
         let session = try ChatGPTSession(vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
             accounts: [account], activeID: account.id
         )), transport: transport, hostID: "fixture")
-        let provider = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let provider = HostedInference(session: session, model: "fixture-model")
         let entry = NoteSeries.Entry(
             id: UUID(),
             title: "Multimodal Prompting",
@@ -984,7 +984,7 @@ struct ChatGPTTests {
         let session = try ChatGPTSession(vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
             accounts: [account], activeID: account.id
         )), transport: transport, hostID: "fixture")
-        let provider = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let provider = HostedInference(session: session, model: "fixture-model")
         let entry = NoteSeries.Entry(
             id: UUID(),
             title: "PRIVATE_FIXTURE_TITLE",
@@ -1087,7 +1087,7 @@ struct ChatGPTTests {
         let session = try ChatGPTSession(vault: MemoryChatGPTVault(ChatGPTCredentialRecords(
             accounts: [account], activeID: account.id
         )), transport: transport, hostID: "fixture")
-        let provider = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let provider = HostedInference(session: session, model: "fixture-model")
         let entry = NoteSeries.Entry(
             id: UUID(),
             title: "Test examples",
@@ -1154,7 +1154,7 @@ struct ChatGPTTests {
             transport: transport,
             hostID: "fixture"
         )
-        let provider = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let provider = HostedInference(session: session, model: "fixture-model")
         var result: String?
         for try await event in provider.reply(question: "hello", role: role, history: [
             ConversationTurn(author: "user", text: "My name is Morgan."),
@@ -1207,7 +1207,7 @@ struct ChatGPTTests {
                 )]
             )
         )
-        let inference = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let inference = HostedInference(session: session, model: "fixture-model")
         var results: [String] = []
         do {
             for try await event in inference.research(
@@ -1467,7 +1467,7 @@ struct ChatGPTTests {
         connection.setConsent(true)
         connection.setEnabled(true)
         let host = NSHostingView(rootView: ScrollView {
-            ChatGPTSettings(connection: connection).padding(24)
+            AISettings(providers: InferenceProviders(chatGPT: connection)).padding(24)
         }.preferredColorScheme(dark ? .dark : .light)
             .background(Color(nsColor: .windowBackgroundColor)))
         host.frame = NSRect(x: 0, y: 0, width: 640, height: 640)
@@ -1546,11 +1546,15 @@ struct ChatGPTTests {
         let connection = ChatGPTConnection(session: session, preferences: preferences)
         await connection.load()
         for scheme in [ColorScheme.light, .dark] {
-            let view = NSHostingView(rootView: ChatGPTSettings(connection: connection).padding(24)
-                .environment(
-                    \.colorScheme,
-                    scheme
-                ))
+            let view =
+                NSHostingView(
+                    rootView: AISettings(providers: InferenceProviders(chatGPT: connection))
+                        .padding(24)
+                        .environment(
+                            \.colorScheme,
+                            scheme
+                        )
+                )
             view.frame = NSRect(x: 0, y: 0, width: 600, height: 610)
             view.layoutSubtreeIfNeeded()
             let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
@@ -1566,19 +1570,23 @@ struct ChatGPTTests {
         }
         connection.accounts = []
         connection.activeID = nil
-        let empty = NSHostingView(rootView: ChatGPTSettings(connection: connection).padding(24))
-        empty.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        let empty = NSHostingView(
+            rootView: AISettings(providers: InferenceProviders(chatGPT: connection)).padding(24)
+        )
+        // The AI tab scrolls, so only its width is fixed: the settings window less padding.
+        empty.frame = NSRect(x: 0, y: 0, width: 632, height: 900)
         empty.layoutSubtreeIfNeeded()
-        #expect(empty.fittingSize.height <= 400)
+        #expect(empty.fittingSize.height > 0)
         connection.signingIn = true
-        let signingIn = NSHostingView(rootView: ChatGPTSettings(connection: connection)
-            .padding(24)
-            .background(Color(nsColor: .windowBackgroundColor))
-            .environment(\.colorScheme, .dark))
+        let signingIn = NSHostingView(rootView: AISettings(
+            providers: InferenceProviders(chatGPT: connection)
+        )
+        .padding(24)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.colorScheme, .dark))
         signingIn.appearance = NSAppearance(named: .darkAqua)
-        signingIn.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        signingIn.frame = NSRect(x: 0, y: 0, width: 632, height: 900)
         signingIn.layoutSubtreeIfNeeded()
-        #expect(signingIn.fittingSize.height <= 400)
         let bitmap = try #require(signingIn.bitmapImageRepForCachingDisplay(in: signingIn.bounds))
         signingIn.cacheDisplay(in: signingIn.bounds, to: bitmap)
         if let path = ProcessInfo.processInfo.environment["GLEANARY_CHATGPT_SCREENSHOT"],
@@ -1748,7 +1756,7 @@ extension ChatGPTTests {
             transport: transport,
             hostID: "fixture"
         )
-        let summary = try await ChatGPTConversationInference(
+        let summary = try await HostedInference(
             session: session,
             model: "fixture-model"
         )
@@ -1800,7 +1808,7 @@ extension ChatGPTTests {
     }
 
     private func summaryRepairInference(_ outputs: [String]) throws
-        -> (ChatGPTConversationInference, FixtureChatGPTStream)
+        -> (HostedInference, FixtureChatGPTStream)
     {
         let account = registration()
         let transport = try FixtureChatGPTStream(outputs)
@@ -1809,7 +1817,7 @@ extension ChatGPTTests {
                 accounts: [account], activeID: account.id
             )), transport: transport, hostID: "fixture"
         )
-        return (ChatGPTConversationInference(session: session, model: "fixture-model"), transport)
+        return (HostedInference(session: session, model: "fixture-model"), transport)
     }
 
     private func summaryRevision(_ points: [(text: String, ids: [String])]) throws -> String {
@@ -1959,7 +1967,7 @@ extension ChatGPTTests {
             )),
             transport: transport, hostID: "fixture"
         )
-        let inference = ChatGPTConversationInference(session: session, model: "fixture-model")
+        let inference = HostedInference(session: session, model: "fixture-model")
         #expect(try await inference.researchTitle(
             for: "The source describes version control designed for coding agents."
         ) == "Agent-focused version control")
@@ -1995,7 +2003,7 @@ extension ChatGPTTests {
             transport: transport, hostID: "fixture"
         )
         await #expect(throws: ChatGPTError.invalidOutput) {
-            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            try await HostedInference(session: session, model: "fixture-model")
                 .researchTitle(for: "The source describes a prototype.")
         }
         #expect(await transport.requests.count == 1)
@@ -2020,7 +2028,7 @@ extension ChatGPTTests {
             transport: transport, hostID: "fixture"
         )
         await #expect(throws: LinkSummaryError.unsupportedSummary) {
-            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            try await HostedInference(session: session, model: "fixture-model")
                 .researchTitle(for: "The source describes a prototype.")
         }
         _ = try await session.signOut()
@@ -2070,7 +2078,7 @@ extension ChatGPTTests {
                 text: text
             )]
         )
-        let summary = try await ChatGPTConversationInference(
+        let summary = try await HostedInference(
             session: session,
             model: "fixture-model"
         ).summarize(document)
@@ -2127,7 +2135,7 @@ extension ChatGPTTests {
             )]
         )
         await #expect(throws: LinkSummaryError.invalidOutput) {
-            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            try await HostedInference(session: session, model: "fixture-model")
                 .summarize(document)
         }
         #expect(await transport.requests.count == 2)
@@ -2142,7 +2150,7 @@ extension ChatGPTTests {
             .joined(separator: " ")
         let sections = AppleLinkSummarizer.chunks(
             text,
-            limit: ChatGPTConversationInference.summarySection
+            limit: HostedInference.summarySection
         )
         #expect(sections.count > 1)
         let selected = sections
@@ -2182,7 +2190,7 @@ extension ChatGPTTests {
                 text: text
             )]
         )
-        #expect(try await ChatGPTConversationInference(session: session, model: "fixture-model")
+        #expect(try await HostedInference(session: session, model: "fixture-model")
             .summarize(document) == "The final finding remains available.")
         let requests = await transport.requests
         #expect(requests.count == sections.count + 2)
@@ -2208,7 +2216,7 @@ extension ChatGPTTests {
             hostID: "fixture"
         )
         await #expect(throws: LinkSummaryError.evidenceMismatch) {
-            try await ChatGPTConversationInference(session: session, model: "fixture-model")
+            try await HostedInference(session: session, model: "fixture-model")
                 .summarize(document)
         }
         _ = try await session.signOut()

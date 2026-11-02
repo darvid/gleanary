@@ -177,9 +177,9 @@ final class ChatGPTConnection {
     /// Falls back to Apple Intelligence when ChatGPT is off, like `inference()`.
     func filingInference() throws -> any ConversationInferring {
         let chat = try inference()
-        guard chat is ChatGPTConversationInference, !filingModel.isEmpty,
+        guard chat is HostedInference, !filingModel.isEmpty,
               models.contains(where: { $0.slug == filingModel }) else { return chat }
-        return ChatGPTConversationInference(session: session, model: filingModel)
+        return HostedInference(session: session, model: filingModel)
     }
 
     func setConsent(_ consent: Bool) {
@@ -198,7 +198,7 @@ final class ChatGPTConnection {
         guard models.contains(where: { $0.slug == selectedModel })
         else { throw ChatGPTError.modelDenied }
         preferences.set(selectedModel, forKey: "chatgpt.model." + (activeID ?? ""))
-        return ChatGPTConversationInference(session: session, model: selectedModel)
+        return HostedInference(session: session, model: selectedModel)
     }
 
     /// `inference()` for a request made now. Models load once at startup, and a fetch that failed

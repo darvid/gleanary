@@ -2687,7 +2687,7 @@ private actor SeriesFixture: ConversationInferring, NoteSeriesInferring, WriterI
     func liveSIWCChoosesCoverageDrivenBreadthWithoutANoteCount() async throws {
         let session = ChatGPTSession()
         let choice = try #require(await session.catalog().first)
-        let provider = ChatGPTConversationInference(session: session, model: choice.slug)
+        let provider = HostedInference(session: session, model: choice.slug)
         let brief = NoteSeries.Brief(query: "distributed systems", mode: .fillGaps)
         let broadRequest = "Research distributed systems and build a connected foundational-to-advanced note collection. Cover architectures and communication, time and ordering, replication, consistency, consensus, transactions, sharding, failure handling, coordination, security, performance, stream processing, testing and operations. Choose scope from meaningful concepts, not an arbitrary note quota; identify important coverage left outside this run."
         let broad = try await provider.seriesOutline(
@@ -2754,7 +2754,7 @@ private actor SeriesFixture: ConversationInferring, NoteSeriesInferring, WriterI
         }
         let session = ChatGPTSession()
         let choice = try #require(await session.catalog().first)
-        let provider = ChatGPTConversationInference(session: session, model: choice.slug)
+        let provider = HostedInference(session: session, model: choice.slug)
         let coordinator = AgentCoordinator(store: store, inference: provider)
         let request = "Research prompt engineering and write a series of two connected notes: reuse my existing note on writing clear instructions if sufficient, and cover evaluating prompts as the other topic. Use the web to research evaluation methods."
         let task: UUID
