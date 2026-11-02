@@ -188,7 +188,7 @@ enum MermaidError: Error {
           securityLevel: 'strict',
           theme: dark ? 'dark' : 'neutral',
           fontFamily: '-apple-system, "SF Pro Text", "Helvetica Neue", sans-serif',
-          themeVariables: { fontSize: '14px', background: background }
+          themeVariables: { fontSize: '14px', background: background, edgeLabelBackground: background }
         });
         const id = 'gleanary-diagram-' + (++count);
         try {

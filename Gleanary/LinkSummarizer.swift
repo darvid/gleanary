@@ -126,7 +126,8 @@ actor AppleLinkSummarizer: LinkSummarizing {
     static func summaryPrompt(
         context: String,
         evidence: SummaryEvidence,
-        evidenceLimit: Int = EvidenceSummaryDraft.onDeviceEvidence
+        evidenceLimit: Int = EvidenceSummaryDraft.onDeviceEvidence,
+        diagram: Bool = false
     ) -> String {
         """
         Match the summary's detail to the substance of the captured source, not a point quota.
@@ -146,7 +147,7 @@ actor AppleLinkSummarizer: LinkSummarizing {
         number, format, cause or purpose, must be stated in those excerpts or in the title. Leave
         out details the cited excerpts don't state rather than filling them in.
         All prose fields are plain text, not Markdown, except formulas: \(formulaRule)
-        Return only the requested schema.
+        \(diagram ? SummaryDiagramProposal.rule + "\n" : "")Return only the requested schema.
 
         \(context)
 
@@ -553,6 +554,8 @@ struct EvidenceSummaryDraft: Codable {
 
     let overview: Point
     let takeaways: [Point]
+    /// Only hosted summaries ask for one.
+    var diagram: SummaryDiagramProposal?
 
     func anchored(in evidence: SummaryEvidence) throws -> SummaryDraft {
         func point(_ point: Point) throws -> SummaryDraft.Point {
@@ -566,7 +569,10 @@ struct EvidenceSummaryDraft: Codable {
                 section: point.section.map(Self.prose).flatMap { $0.isEmpty ? nil : $0 }
             )
         }
-        return try SummaryDraft(overview: point(overview), takeaways: takeaways.map(point))
+        return try SummaryDraft(
+            overview: point(overview), takeaways: takeaways.map(point),
+            diagram: diagram?.anchored(in: evidence)
+        )
     }
 
     private static func prose(_ text: String) -> String {
@@ -574,15 +580,21 @@ struct EvidenceSummaryDraft: Codable {
     }
 
     /// IDs are checked by `anchored(in:)`, not enumerated: long sources have hundreds.
-    static func jsonSchema(maximumTakeaways: Int = SummaryPolicy
-        .maximumTakeaways) -> [String: Any]
-    {
-        [
-            "type": "object",
-            "properties": ["overview": pointSchema, "takeaways": ["type": "array",
-                                                                  "items": pointSchema,
-                                                                  "maxItems": maximumTakeaways]],
-            "required": ["overview", "takeaways"],
+    static func jsonSchema(
+        maximumTakeaways: Int = SummaryPolicy.maximumTakeaways,
+        diagram: Bool = false
+    ) -> [String: Any] {
+        var properties: [String: Any] = [
+            "overview": pointSchema,
+            "takeaways": ["type": "array", "items": pointSchema, "maxItems": maximumTakeaways],
+        ]
+        var required = ["overview", "takeaways"]
+        if diagram {
+            properties["diagram"] = SummaryDiagramProposal.jsonSchema
+            required.append("diagram")
+        }
+        return [
+            "type": "object", "properties": properties, "required": required,
             "additionalProperties": false,
         ]
     }
@@ -657,6 +669,7 @@ struct SummaryDraft: Codable {
 
     let overview: Point
     let takeaways: [Point]
+    var diagram: SummaryDiagram?
 
     func markdown(source: String) throws -> String {
         let points = [overview] + takeaways
@@ -683,11 +696,14 @@ struct SummaryDraft: Codable {
                 )
             throw LinkSummaryError.invalidOutput
         }
-        guard points.allSatisfy({ $0.quotes.allSatisfy(source.contains) })
+        guard (points + (diagram?.claims ?? []))
+            .allSatisfy({ $0.quotes.allSatisfy(source.contains) })
         else { throw LinkSummaryError.evidenceMismatch }
-        guard !takeaways.isEmpty else { return overview.text }
+        // The diagram follows the overview it illustrates.
+        let lead = overview.text + (diagram.map { "\n\n```mermaid\n\($0.mermaid)\n```" } ?? "")
+        guard !takeaways.isEmpty else { return lead }
         guard takeaways.contains(where: { $0.section != nil }) else {
-            return overview.text + "\n\n## Key takeaways\n\n" +
+            return lead + "\n\n## Key takeaways\n\n" +
                 takeaways.map { "- " + $0.text }.joined(separator: "\n")
         }
         var order: [String] = []
@@ -699,7 +715,7 @@ struct SummaryDraft: Codable {
             }
             grouped[heading, default: []].append("- " + point.text)
         }
-        return overview.text + "\n\n" + order.map { heading in
+        return lead + "\n\n" + order.map { heading in
             "## " + heading + "\n\n" + (grouped[heading] ?? []).joined(separator: "\n")
         }.joined(separator: "\n\n")
     }
@@ -719,7 +735,8 @@ struct SummaryVerification: Codable {
             overview: draft.overview,
             takeaways: draft.takeaways.enumerated().compactMap { offset, point in
                 supported[offset + 1] && point.unquotedFormulas.isEmpty ? point : nil
-            }
+            },
+            diagram: draft.diagram
         )
     }
 
