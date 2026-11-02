@@ -284,7 +284,11 @@ final class ConversationModel {
             return
         }
         do {
-            try await configureInference()
+            // A queued request picks up the current provider when it starts; the running task
+            // keeps the one it began with.
+            if !queues {
+                try await configureInference()
+            }
             if let retry, try await store.noteSeriesRun(taskID: retry.id) != nil {
                 guard !queues else {
                     error = "Retry this series once the current request finishes."
