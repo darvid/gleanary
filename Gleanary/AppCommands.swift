@@ -201,8 +201,8 @@ struct AppCommand: Identifiable, Hashable, Sendable {
             symbol: "gearshape.2"
         ),
         Self(
-            id: "new-item", title: "New Note or Chat", group: .file, symbol: "square.and.pencil",
-            defaultShortcut: KeyShortcut("n")
+            id: "new-item", title: "New Note or Topic", group: .file, symbol: "square.and.pencil",
+            defaultShortcut: KeyShortcut("n"), keywords: "chat subject"
         ),
         Self(
             id: "attach", title: "Attach Documents…", group: .file, symbol: "paperclip",

@@ -76,6 +76,30 @@ final class ConversationModel {
         running && activeID == taskID
     }
 
+    /// How long Chat waits after the last message before offering a new topic.
+    static let topicGap: TimeInterval = 6 * 60 * 60
+
+    /// A new topic needs something before it, and waits for work in flight, which was asked
+    /// with the earlier context.
+    var canStartTopic: Bool {
+        ready && !running && queue.isEmpty && !clearingConversation
+            && messages.last.map { !$0.isTopicBoundary } == true
+    }
+
+    /// Whether to offer a new topic: it's been a while since the last message.
+    func offersNewTopic(at now: Date) -> Bool {
+        guard canStartTopic, let last = messages.last else { return false }
+        return now.timeIntervalSince(last.createdAt) >= Self.topicGap
+    }
+
+    func startTopic() async {
+        guard canStartTopic else { return }
+        do {
+            try await store.startConversationTopic()
+            await refresh()
+        } catch { self.error = error.localizedDescription }
+    }
+
     func saveAcquisition(_ candidate: AcquisitionCandidate) async {
         savingAcquisitions.insert(candidate.id)
         defer { savingAcquisitions.remove(candidate.id) }

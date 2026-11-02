@@ -231,7 +231,9 @@ capture retry and resuming an approved scope remain application-owned.
   from source content. Reading links does not enqueue captures. Models
   cannot approve, reject, or undo protected changes. Those stay in the
   UI; existing evidence checks and atomic publication remain mandatory.
-- Preserve saved-item references in recent conversation context. Offer
+- Preserve saved-item references in recent conversation context. A New
+  Topic marker ends that context: history and recent references start
+  after the latest marker, and nothing is deleted. Offer
   bounded, read-only conversation retrieval for older messages and full
   external-link enumeration for saved artifacts. Truncated chat excerpts
   are not grounds to ask the user to re-paste recoverable resources.
