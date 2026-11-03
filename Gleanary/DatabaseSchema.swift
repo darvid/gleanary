@@ -505,6 +505,26 @@ enum DatabaseSchema {
         }
         // Unsorted items are unfiled; the built-in Inbox category goes away.
         migrator.registerMigration("remove-inbox-v1", migrate: DocumentStore.removeInbox)
+        // Research audits (RESEARCH_GAPS.md): the confirmed scope and criteria, and the report.
+        // Chat-only, so clearing the conversation removes them with their tasks.
+        migrator.registerMigration("research-audit-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE research_audits (
+                taskID TEXT PRIMARY KEY NOT NULL
+                    REFERENCES conversation_tasks(id) ON DELETE CASCADE,
+                request TEXT NOT NULL,
+                brief TEXT NOT NULL,
+                candidates TEXT NOT NULL,
+                selection TEXT NOT NULL,
+                scopeLimit INTEGER NOT NULL,
+                status TEXT NOT NULL
+                    CHECK(status IN ('awaiting','auditing','completed','cancelled')),
+                report TEXT,
+                createdAt REAL NOT NULL,
+                updatedAt REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(database)
     }
 

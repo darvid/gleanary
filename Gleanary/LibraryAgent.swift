@@ -94,6 +94,14 @@ struct LibraryAgent {
 
     /// Hosted models only: the on-device model's context is already full, and Chat draws the
     /// diagram from the reply's own mermaid code block.
+    static let auditInstructions = """
+    Research audits: when the user asks what their research or saved items are missing, what
+    their sources don't cover or establish, which of their questions remain unanswered, or to
+    audit or check for gaps, start audit_research instead of answering from reads. It checks
+    the evidence item by item and searches for hidden answers before reporting a gap, which
+    reads and general knowledge can't do. Don't list gaps yourself.
+    """
+
     static let diagramInstructions = """
     Diagrams: when an explanation walks through a process, workflow, architecture, decision
     path or exchange between parties that is easier to follow as a picture, you may add one
@@ -150,12 +158,13 @@ struct LibraryAgent {
             instructions: Self.instructions
                 +
                 (hosted ? "\n" + Self.entityEditInstructions + "\n" + Self
-                    .diagramInstructions : ""),
+                    .diagramInstructions + "\n" + Self.auditInstructions : ""),
             tools: AgentToolbox.definitions(
                 includingWorkflows: workflows != nil,
                 includingSourceCaptures: sourceCaptures != nil,
                 includingEntityFinder: entityFinder != nil,
-                includingEntityEdits: hosted
+                includingEntityEdits: hosted,
+                includingAudits: hosted
             )
         )
         let reply = try await loop.run(input: input) { call in
@@ -287,7 +296,8 @@ actor AgentToolbox {
         includingWorkflows: Bool = false,
         includingSourceCaptures: Bool = false,
         includingEntityFinder: Bool = false,
-        includingEntityEdits: Bool = false
+        includingEntityEdits: Bool = false,
+        includingAudits: Bool = false
     ) throws -> Data {
         func tool(
             _ name: String,
@@ -381,7 +391,7 @@ actor AgentToolbox {
             ),
         ]
         if includingWorkflows {
-            tools.append(ConversationWorkflows.definition)
+            tools.append(ConversationWorkflows.definition(audits: includingAudits))
         }
         if includingSourceCaptures {
             tools.append(ConversationSourceCaptures.definition)

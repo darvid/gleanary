@@ -108,7 +108,7 @@ extension AgentCoordinator {
                 progress: failure,
                 event: "failed"
             )
-        } else if try await store.writerRequest(taskID: taskID)?.status != .awaiting {
+        } else if try await !store.awaitsConfirmation(taskID) {
             try await store.updateConversationTask(
                 taskID,
                 state: "succeeded",
@@ -178,9 +178,13 @@ extension AgentCoordinator {
                 kind: "note"
             )
             created.append(note.id)
+        case .auditResearch:
+            try await auditResearch(
+                taskID: taskID, request: request, selected: ids, changed: changed
+            )
         case .research, .webResearch, .compose, .refresh, .researchSeries: break
         }
-        if action != .ingest, action != .saveNote {
+        if action != .ingest, action != .saveNote, arguments.workflow != .auditResearch {
             var references = ids
             try await dispatch(
                 .init(action: action, targets: ids, argument: route.text),
@@ -197,7 +201,7 @@ extension AgentCoordinator {
         var seen = Set<UUID>()
         let references = (created + messages.flatMap(\.references))
             .filter { seen.insert($0).inserted }
-        let awaiting = try await store.writerRequest(taskID: taskID)?.status == .awaiting
+        let awaiting = try await store.awaitsConfirmation(taskID)
         return await ConversationWorkflows.Result(
             status: awaiting ? "awaiting_user" : "completed",
             messages: messages

@@ -18,6 +18,8 @@ final class ConversationModel {
     var agentChanges: [UUID: [AgentChange]] = [:]
     /// Writer scopes waiting for confirmation, by task.
     var writerScopes: [UUID: WriterRequest] = [:]
+    /// Research audits waiting for confirmation or finished, by task.
+    var audits: [UUID: ResearchAudit] = [:]
     var categories: [DecimalCategory] = []
     var seriesFiling: [UUID: SeriesFiling.Status] = [:]
     var selectedSources: [UUID] = []
@@ -197,6 +199,10 @@ final class ConversationModel {
                 store.awaitingWriterRequests().map { ($0.taskID, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
+            let updatedAudits = try await Dictionary(
+                store.conversationAudits().map { ($0.taskID, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
             var updatedTitles = titles
             let referenceIDs = Set(updatedMessages
                 .flatMap(\.references) + selectedSources + updatedProposals
@@ -224,6 +230,7 @@ final class ConversationModel {
             categories = updatedCategories
             seriesFiling = updatedFiling
             writerScopes = updatedScopes
+            audits = updatedAudits
             titles = updatedTitles
             referenceDetails = updatedReferences
             capturedLinks = updatedLinks
@@ -559,6 +566,47 @@ final class ConversationModel {
             let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
             run(taskID) { try await coordinator.continueCompose(taskID: taskID, changed: changed) }
         } catch { self.error = error.localizedDescription }
+    }
+
+    // MARK: Research audits
+
+    /// Confirms an audit's items and criteria and resumes its task: read, search and report.
+    func confirmAudit(_ taskID: UUID, selection: [UUID], accepted: Set<String>) async {
+        guard ready, !submitting, !running else {
+            error = "Finish or stop the current task before running the audit."
+            return
+        }
+        do {
+            try await configureInference()
+            try await store.confirmResearchAudit(
+                taskID: taskID, selection: selection, accepted: accepted
+            )
+            error = nil
+            await refresh()
+            let coordinator = coordinator
+            let changed: @Sendable () async -> Void = { [weak self] in await self?.refresh() }
+            run(taskID) { try await coordinator.continueAudit(taskID: taskID, changed: changed) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func cancelAudit(_ taskID: UUID) async {
+        do {
+            try await store.setResearchAuditStatus(taskID, .cancelled)
+            try await store.updateConversationTask(
+                taskID, state: "cancelled", progress: "Cancelled before anything was read",
+                event: "cancelled"
+            )
+        } catch { self.error = error.localizedDescription }
+        await refresh()
+    }
+
+    func setAuditFindingDismissed(_ taskID: UUID, dimensionID: String, dismissed: Bool) async {
+        do {
+            try await store.setAuditFindingDismissed(
+                taskID: taskID, dimensionID: dimensionID, dismissed: dismissed
+            )
+        } catch { self.error = error.localizedDescription }
+        await refresh()
     }
 
     /// Dismisses a gathered scope; nothing was read or saved.
