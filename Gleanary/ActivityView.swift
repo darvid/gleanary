@@ -4,6 +4,11 @@ struct ActivityView: View {
     let store: DocumentStore
     var open: (UUID) -> Void
     var openSource: (SourceCitation) -> Void = { _ in }
+    /// Proposals waiting in the automations review queue.
+    var pendingReviews = 0
+    var reviewChanges: () -> Void = {}
+    /// Puts back what an automation run applied; returns what to tell the person, if anything.
+    var undoRun: (UUID) async -> String? = { _ in nil }
     @State private var model: ActivityModel
     @State private var choosingDate = false
     @FocusState private var searchFocused: Bool
@@ -12,11 +17,17 @@ struct ActivityView: View {
         store: DocumentStore,
         open: @escaping (UUID) -> Void,
         openSource: @escaping (SourceCitation) -> Void = { _ in },
+        pendingReviews: Int = 0,
+        reviewChanges: @escaping () -> Void = {},
+        undoRun: @escaping (UUID) async -> String? = { _ in nil },
         model: ActivityModel? = nil
     ) {
         self.store = store
         self.open = open
         self.openSource = openSource
+        self.pendingReviews = pendingReviews
+        self.reviewChanges = reviewChanges
+        self.undoRun = undoRun
         _model = State(initialValue: model ?? ActivityModel(store: store))
     }
 
@@ -33,6 +44,7 @@ struct ActivityView: View {
             return .systemAction
         })
         .task { await model.observe() }
+        .onDisappear { model.markLooked() }
         .task(id: model.query) {
             do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             await model.reload()
@@ -46,6 +58,9 @@ struct ActivityView: View {
         VStack(spacing: 0) {
             controls.padding(18)
             Divider()
+            if model.query.day == nil, let recap = model.recap {
+                recapView(recap).padding([.horizontal, .top], 14).padding(.bottom, 8)
+            }
             if let error = model.error {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -75,11 +90,15 @@ struct ActivityView: View {
                     ForEach(model.days) { day in
                         Section {
                             ForEach(day.groups) { group in
+                                if group.id == seenGroupID {
+                                    seenDivider
+                                }
                                 ActivityGroupRow(
                                     group: group,
                                     query: model.query,
                                     store: store,
-                                    generation: model.generation
+                                    generation: model.generation,
+                                    undoRun: undoRun
                                 )
                             }
                         } header: {
@@ -111,6 +130,57 @@ struct ActivityView: View {
         }
     }
 
+    /// The first row from before the last visit, when newer rows sit above it.
+    private var seenGroupID: String? {
+        guard let lastLooked = model.lastLooked else { return nil }
+        let groups = model.days.flatMap(\.groups)
+        guard let index = groups.firstIndex(where: { $0.latest.date < lastLooked }), index > 0
+        else { return nil }
+        return groups[index].id
+    }
+
+    private var seenDivider: some View {
+        HStack(spacing: 8) {
+            VStack { Divider() }
+            Text("Before your last visit").font(.caption.weight(.medium)).fixedSize()
+            VStack { Divider() }
+        }
+        .foregroundStyle(.secondary).padding(.vertical, 2)
+        .selectionDisabled().accessibilityElement(children: .combine)
+    }
+
+    private var recapHeading: String {
+        guard let lastLooked = model.lastLooked else { return "This week" }
+        guard Date().timeIntervalSince(lastLooked) >= 60 else { return "Since your last visit" }
+        return "Since your last visit "
+            + lastLooked.formatted(.relative(presentation: .named, unitsStyle: .wide))
+    }
+
+    private func recapView(_ recap: ActivityRecap) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(recapHeading)
+                .font(.callout.weight(.semibold))
+            Text(recap.isEmpty ? "Nothing new." : recap.sentence.prefix(1).uppercased()
+                + recap.sentence.dropFirst() + ".")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .fadesOnChange(recap.sentence)
+            if pendingReviews > 0 {
+                Button(
+                    pendingReviews == 1 ? "1 change waiting for review"
+                        : "\(pendingReviews.formatted()) changes waiting for review",
+                    action: reviewChanges
+                )
+                .buttonStyle(.link).font(.callout)
+                .help("Open Automations to review proposed changes")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+    }
+
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
@@ -127,6 +197,10 @@ struct ActivityView: View {
                 Color(nsColor: .controlBackgroundColor),
                 in: RoundedRectangle(cornerRadius: 7)
             )
+            Picker("Who", selection: $model.query.scope) {
+                ForEach(ActivityScope.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().accessibilityLabel("Who made the change")
             HStack {
                 Picker("Event type", selection: $model.query.filter) {
                     ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
@@ -254,7 +328,10 @@ private struct ActivityGroupRow: View {
     let query: ActivityQuery
     let store: DocumentStore
     let generation: Int
+    let undoRun: (UUID) async -> String?
     @State private var expanded = false
+    @State private var undoing = false
+    @State private var undoMessage: String?
     @State private var events: [ActivityEvent] = []
     @State private var requestToken = UUID()
     @State private var loading = false
@@ -262,19 +339,24 @@ private struct ActivityGroupRow: View {
 
     var body: some View {
         if group.count == 1 {
-            ActivityEventRow(event: group.latest).tag(group.latest.id)
+            ActivityEventRow(event: group.latest, group: group).tag(group.latest.id)
+                .contextMenu { undoButton }
         } else {
             // A row like any single event, so grouped and single changes line up under the day.
             Button { expanded.toggle() } label: {
                 ActivityEventRow(
                     event: group.latest,
-                    summary: (group.latest.batchLabel ?? group.latest.kind.label)
+                    group: group,
+                    title: group.title,
+                    summary: group.isItem ? group.itemSummary
+                        : group.context ?? (group.latest.batchLabel ?? group.latest.kind.label)
                         + " · \(group.count.formatted()) changes",
                     expanded: expanded
                 )
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .contextMenu { undoButton }
             .accessibilityHint(expanded ? "Hides these changes" : "Shows these changes")
             .task(id: expanded ? generation : -1) {
                 guard expanded else { return }
@@ -285,7 +367,11 @@ private struct ActivityGroupRow: View {
             }
             if expanded {
                 Group {
-                    ForEach(events) { ActivityEventRow(event: $0).tag($0.id) }
+                    ForEach(events) { event in
+                        ActivityEventRow(
+                            event: event, item: group.isItem ? group.title : nil
+                        ).tag(event.id)
+                    }
                     if loading {
                         WorkingProgress()
                     }
@@ -297,9 +383,29 @@ private struct ActivityGroupRow: View {
                             Task { await loadMore() }
                         }
                     }
+                    undoButton.buttonStyle(.link)
+                    if let undoMessage {
+                        Text(undoMessage).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.leading, 28)
             }
+        }
+    }
+
+    @ViewBuilder private var undoButton: some View {
+        if let runID = group.runID, group.automation?.undoable == true {
+            Button("Undo This Run") {
+                undoing = true
+                Task {
+                    undoMessage = await undoRun(runID)
+                    undoing = false
+                }
+            }
+            .disabled(undoing)
+            .help(
+                "Put back what this \(group.actorName.lowercased()) run changed, where the item hasn't changed since"
+            )
         }
     }
 
@@ -330,18 +436,76 @@ private struct ActivityGroupRow: View {
 
 private struct ActivityEventRow: View {
     let event: ActivityEvent
+    /// The unit of work this row heads, for who did it and why; nil inside an expanded group.
+    var group: ActivityGroup?
+    /// Replaces the item's title, for a row standing for several changes.
+    var title: String?
     /// Replaces the kind and detail line, for a row standing for several changes.
     var summary: String?
     /// Whether a group's changes are showing; nil for a single change.
     var expanded: Bool?
+    /// The item an expanded row's changes are all about, so each change leads with what
+    /// happened and names a note only when it's another one, such as a summary.
+    var item: String?
+    @Environment(\.colorScheme) private var colorScheme
+
+    /// The category named on this line, as "code name", when the line is about filing.
+    private var category: String? {
+        if summary != nil {
+            return group?.isItem == true ? group?.filedUnder : nil
+        }
+        return [.filed, .unfiled, .primaryHome].contains(event.kind) ? event.detail : nil
+    }
+
+    /// The summary line, with the category in its Atlas colour, as in the sidebar.
+    private var summaryText: Text {
+        let line = summary ??
+            (event.kind == .filed ? event.detail.map { "Filed under " + $0 } : nil)
+            ?? event.kind.label + (event.detail.map { " · " + $0 } ?? "")
+        guard let category, let range = line.range(of: category, options: .backwards),
+              let code = category.split(separator: " ").first
+        else { return Text(line) }
+        let ink = AtlasPalette.ink(
+            AtlasHierarchy.hue(for: String(code)),
+            dark: colorScheme == .dark
+        )
+        let dot = Text(Image(systemName: "circle.fill")).font(.system(size: 7)).foregroundStyle(ink)
+        let name = Text(category).foregroundStyle(ink)
+        return Text("\(line[..<range.lowerBound])\(dot) \(name)\(line[range.upperBound...])")
+    }
 
     var body: some View {
+        if let item {
+            change(in: item)
+        } else {
+            row
+        }
+    }
+
+    /// One change inside an expanded item: what happened, on one line.
+    private func change(in item: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: event.kind.symbol).foregroundStyle(.secondary)
+                .frame(width: 18).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                summaryText.font(.callout).lineLimit(2)
+                if event.displayTitle != item {
+                    Text(event.displayTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Text("\(event.actorLabel) · \(event.date.formatted(.dateTime.hour().minute()))")
+                .font(.caption).foregroundStyle(.secondary).fixedSize()
+        }.padding(.vertical, 3).accessibilityElement(children: .combine)
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.kind.symbol).foregroundStyle(.secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(event.displayTitle).font(.body.weight(.medium)).lineLimit(2)
+                    Text(title ?? event.displayTitle).font(.body.weight(.medium)).lineLimit(2)
                     if let expanded {
                         Spacer()
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold))
@@ -351,10 +515,20 @@ private struct ActivityEventRow: View {
                             .accessibilityHidden(true)
                     }
                 }
-                Text(summary ?? event.kind.label + (event.detail.map { " · " + $0 } ?? ""))
-                    .font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                summaryText.font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                if let context = group?.context, context != summary {
+                    Text(context).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                }
                 HStack {
-                    Text(event.actorLabel)
+                    if let group {
+                        Label(
+                            group.actorName,
+                            systemImage: group.automation?.symbol
+                                ?? (group.byYou ? "person" : "sparkles")
+                        )
+                    } else {
+                        Text(event.actorLabel)
+                    }
                     Spacer()
                     Text(event.date, format: .dateTime.hour().minute())
                 }.font(.caption).foregroundStyle(.secondary)

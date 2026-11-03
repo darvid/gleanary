@@ -14,13 +14,31 @@ final class ActivityModel {
     private(set) var inspection: ActivityInspection?
     private(set) var inspecting = false
     private(set) var inspectionError: String?
+    private(set) var recap: ActivityRecap?
+    /// When this person last left Activity, or a week ago on a first visit. Fixed for the
+    /// visit, so the "since you last looked" line doesn't move while they read.
+    let lastLooked: Date?
     var selection: Int64?
     @ObservationIgnored private let store: DocumentStore
+    @ObservationIgnored private let defaults: UserDefaults
+    static let lastLookedKey = "activityLastLooked"
     private var token = UUID()
     private var inspectionToken = UUID()
 
-    init(store: DocumentStore) {
+    init(store: DocumentStore, defaults: UserDefaults = .standard) {
         self.store = store
+        self.defaults = defaults
+        let stored = defaults.double(forKey: Self.lastLookedKey)
+        lastLooked = stored > 0 ? Date(timeIntervalSince1970: stored) : nil
+    }
+
+    /// The start of the recap: the last visit, or the past week on a first one.
+    var recapStart: Date {
+        lastLooked ?? Date().addingTimeInterval(-7 * 24 * 60 * 60)
+    }
+
+    func markLooked(at date: Date = Date()) {
+        defaults.set(date.timeIntervalSince1970, forKey: Self.lastLookedKey)
     }
 
     func reload() async {
@@ -30,7 +48,9 @@ final class ActivityModel {
         error = nil
         do {
             let page = try await store.activityPage(query: query)
+            let recap = try await store.activityRecap(since: recapStart)
             guard expected == token, !Task.isCancelled else { return }
+            self.recap = recap
             days = page.days
             hasMore = page.hasMore
             trackingSince = page.trackingSince
