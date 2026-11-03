@@ -38,6 +38,8 @@ import SwiftUI
     private(set) var loading = false
     private(set) var error: String?
     private(set) var categories: [DecimalCategory] = []
+    /// Entities extraction found in this note's current text, for linking their mentions.
+    private(set) var entities: [EntityLinkTarget] = []
     private(set) var related: [DocumentSummary] = []
     private(set) var sources: [DocumentSummary] = []
     private(set) var summaries: [DocumentSummary] = []
@@ -64,7 +66,7 @@ import SwiftUI
             retainedSource = nil
             generatedSummary = false
             canGenerateSummary = false
-            categories = []; related = []; sources = []; summaries = []
+            categories = []; related = []; sources = []; summaries = []; entities = []
             links = []; coverage = nil; warnings = []
             authorProvider = nil
             details = LibraryItemDetails()
@@ -103,7 +105,10 @@ import SwiftUI
                 .filter { showsCapturedSource || $0.id != id } : []
             let featuredIDs = Set((provenance + summaries).map(\.id))
             let isComposed = try await store.isComposedDocument(id)
+            // A missing entity list only means no links, never a failed preview.
+            let mentioned = await (try? store.entities(in: [id], limit: 200)) ?? []
             guard !Task.isCancelled, selectedID == id, loadToken == token else { return }
+            entities = mentioned.map(EntityLinkTarget.init)
             citation = source
             retainedSource = captured
             generatedSummary = summary
@@ -237,6 +242,7 @@ struct DocumentPreview: View {
                     notice: model.warnings.isEmpty ? nil : model.warnings.joined(separator: " "),
                     notebookBackground: readingKind == .notes
                 )
+                .environment(\.entityLinks, model.entities)
             } else {
                 GeometryReader { viewport in
                     ScrollView {
@@ -281,6 +287,11 @@ struct DocumentPreview: View {
                                 MarkdownPreview(
                                     markdown: model.displayedMarkdown ?? document.markdown,
                                     readingFont: readingFont
+                                )
+                                // Extraction read the note's text, not the captured original.
+                                .environment(
+                                    \.entityLinks,
+                                    model.showsCapturedSource ? [] : model.entities
                                 )
                                 .textSelection(.enabled)
                             }
@@ -895,12 +906,17 @@ struct MarkdownPreview: View {
     var trailingFade: TrailingFade?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.tintedCategories) private var tintedCategories
+    @Environment(\.entityLinks) private var entityLinks
 
     var body: some View {
         let blocks = Self.blocks(markdown)
+        let mentions = entityLinks.isEmpty ? [:] : EntityLinking.firstMentions(
+            in: blocks, targets: entityLinks, linkable: Self.linksEntities
+        )
         VStack(alignment: .leading, spacing: 14) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 let fade = index == blocks.count - 1 ? trailingFade : nil
+                let entities = mentions[index] ?? []
                 if let latex = MathMarkdown.displayFormula(block) {
                     MathBlock(latex: latex, size: nativeFont().pointSize)
                 } else if fade == nil, let diagram = MermaidDiagram.source(block) {
@@ -947,8 +963,11 @@ struct MarkdownPreview: View {
                 } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
                     HStack(alignment: .top, spacing: 10) {
                         Text("•").foregroundStyle(.tint).accessibilityHidden(true)
-                        inlineText(String(block.dropFirst(2)), lineSpacing: 3, fade: fade)
-                            .lineSpacing(3)
+                        inlineText(
+                            String(block.dropFirst(2)), lineSpacing: 3, fade: fade,
+                            entities: entities
+                        )
+                        .lineSpacing(3)
                     }
                 } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
                           let marker = block.firstIndex(of: ".")
@@ -958,17 +977,21 @@ struct MarkdownPreview: View {
                         inlineText(
                             String(block[block.index(after: marker)...])
                                 .trimmingCharacters(in: .whitespaces),
-                            fade: fade
+                            fade: fade, entities: entities
                         )
                     }
                 } else if let quote = Self.quoteText(block) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "quote.opening").font(.caption).accessibilityHidden(true)
-                        inlineText(quote, lineSpacing: 4, color: .secondaryLabelColor, fade: fade)
-                            .lineSpacing(4)
+                        inlineText(
+                            quote, lineSpacing: 4, color: .secondaryLabelColor, fade: fade,
+                            entities: entities
+                        )
+                        .lineSpacing(4)
                     }.foregroundStyle(.secondary).padding(.leading, 12)
                 } else {
-                    inlineText(block, lineSpacing: 4, fade: fade).lineSpacing(4)
+                    inlineText(block, lineSpacing: 4, fade: fade, entities: entities)
+                        .lineSpacing(4)
                 }
             }
         }
@@ -1121,9 +1144,10 @@ struct MarkdownPreview: View {
 
     @ViewBuilder private func inlineText(
         _ source: String, nativeFont: NSFont? = nil, lineSpacing: CGFloat = 0,
-        color: NSColor = .labelColor, fade: TrailingFade? = nil
+        color: NSColor = .labelColor, fade: TrailingFade? = nil,
+        entities: [EntityLinkTarget] = []
     ) -> some View {
-        let (text, formulas) = tintedInline(source)
+        let (text, formulas) = tintedInline(source, entities: entities)
         let font = nativeFont ?? self.nativeFont()
         // Linked text is AppKit-drawn, so it streams in without the fade.
         if text.runs.contains(where: { $0.link != nil }) {
@@ -1137,6 +1161,12 @@ struct MarkdownPreview: View {
                 secondary: color == .secondaryLabelColor, dark: colorScheme == .dark
             ), fade)
         }
+    }
+
+    /// Body text only: headings, code, tables, formulas and diagrams keep their mentions plain.
+    nonisolated static func linksEntities(_ block: String) -> Bool {
+        !block.hasPrefix("```") && !block.hasPrefix("#") && tableRows(block) == nil
+            && MathMarkdown.displayFormula(block) == nil
     }
 
     @ViewBuilder private func fading(_ text: Text, _ fade: TrailingFade?) -> some View {
@@ -1158,8 +1188,14 @@ struct MarkdownPreview: View {
         return NSFont(descriptor: descriptor, size: base.pointSize * scale) ?? base
     }
 
-    private func tintedInline(_ source: String) -> (AttributedString, [MathMarkdown.Formula]) {
+    private func tintedInline(
+        _ source: String,
+        entities: [EntityLinkTarget] = []
+    ) -> (AttributedString, [MathMarkdown.Formula]) {
         var (text, formulas) = Self.inline(source)
+        if !entities.isEmpty {
+            EntityLinking.link(in: &text, targets: entities)
+        }
         if !tintedCategories.isEmpty {
             Self.tintCategories(
                 in: &text, categories: tintedCategories, dark: colorScheme == .dark

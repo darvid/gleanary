@@ -115,6 +115,15 @@ import SwiftUI
         } catch { self.error = "That change couldn't be saved. Try again." }
     }
 
+    /// Shows one entity: selected, with the list searched to its name so it's listed whatever
+    /// page it would fall on.
+    func focus(_ entity: EntityFocus) {
+        kind = nil
+        showHidden = false
+        selectedID = entity.id
+        query = entity.name
+    }
+
     func loadMentions() async {
         guard let selectedID else {
             mentions = []
@@ -132,14 +141,18 @@ struct EntitiesView: View {
     @State private var renaming = false
     @State private var draftName = ""
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readingInBackground = false
+    /// An entity a link asked to show: searched for by name and selected.
+    var focus: EntityFocus?
     var open: (UUID) -> Void
 
     init(
         store: DocumentStore,
         judge: (any EntityMatchJudging)? = nil,
+        focus: EntityFocus? = nil,
         open: @escaping (UUID) -> Void
     ) {
         _model = State(initialValue: EntitiesModel(store: store, judge: judge))
+        self.focus = focus
         self.open = open
     }
 
@@ -158,6 +171,10 @@ struct EntitiesView: View {
             DuplicateReview(model: model)
         }
         .onChange(of: model.selectedID) { Task { await model.loadMentions() } }
+        .onChange(of: focus?.request, initial: true) {
+            guard let focus else { return }
+            model.focus(focus)
+        }
     }
 
     /// Filters on top, then the list flush with the pane, as in Mail or Notes.

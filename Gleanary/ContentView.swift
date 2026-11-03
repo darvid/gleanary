@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var showingActivity = false
     @State private var showingTasks = false
     @State private var showingEntities = false
+    /// The entity an entity link asked Entities to show.
+    @State private var entityFocus: EntityFocus?
     @State private var taskView = WorkspaceTaskView.inbox
     @State private var showingTemplates = false
     @State private var editingProfile: NoteProfile?
@@ -217,6 +219,10 @@ struct ContentView: View {
             }
             if let id = NoteLink.id(from: url) {
                 selection = [id]; preview.selectedID = id
+                return .handled
+            }
+            if let entity = EntityLink.target(from: url) {
+                showEntity(entity)
                 return .handled
             }
             return .systemAction
@@ -431,6 +437,10 @@ struct ContentView: View {
                 openSavedItem(id)
                 return .handled
             }
+            if let entity = EntityLink.target(from: url) {
+                showEntity(entity)
+                return .handled
+            }
             return .systemAction
         })
         .task(id: "\(target)/\(library.documentGrid.generation)") {
@@ -500,6 +510,7 @@ struct ContentView: View {
                 EntitiesView(
                     store: library.store,
                     judge: currentInference() as? any EntityMatchJudging,
+                    focus: entityFocus,
                     open: openSavedItem
                 )
             } else {
@@ -1007,6 +1018,17 @@ struct ContentView: View {
             actions["go-chat"] = { sidebarSelection.wrappedValue = .conversation }
         }
         return actions
+    }
+
+    /// An entity link from the reader: leaves the reader for Entities, on that entity.
+    private func showEntity(_ entity: EntityFocus) {
+        readerTarget = nil
+        chatting = false
+        automating = false
+        showingActivity = false
+        showingTasks = false
+        entityFocus = entity
+        showingEntities = true
     }
 
     /// Leaves Chat or another screen for the Library, in the chosen presentation.
