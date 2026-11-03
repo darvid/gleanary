@@ -1350,7 +1350,7 @@ struct ChatGPTTests {
             chatGPT: connection
         )
         await model.load()
-        #expect(model.categories.map(\.code) == ["10"])
+        #expect(model.categories.isEmpty)
         let library = LibraryModel(store: store)
         for page in KnowledgeSettingsPage.allCases {
             for scheme in [ColorScheme.light, .dark] {

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Runs built-in automations. Items come from fixed store selectors, never from a model, and
-/// what a run may change is decided here: the inbox summarizer, bookmark fetcher, failed-capture
+/// what a run may change is decided here: the summary backfill, bookmark fetcher, failed-capture
 /// retry and weekly digest apply their work; the link checker, cross-linker and unfiled filer
 /// can only propose changes for review.
 actor AutomationEngine {
@@ -92,7 +92,7 @@ actor AutomationEngine {
 
     private func perform(_ config: AutomationConfig, _ run: inout AutomationRun) async throws {
         switch config.kind {
-        case .inboxSummarizer: try await summarizeInbox(config, &run)
+        case .summaryBackfill: try await backfillSummaries(config, &run)
         case .linkChecker: try await checkLinks(config, &run)
         case .crossLinker: try await crossLink(config, &run)
         case .bookmarkFetcher: try await fetchBookmarks(config, &run)
@@ -108,8 +108,8 @@ actor AutomationEngine {
     func backlog(_ config: AutomationConfig) async throws -> Int {
         let now = dependencies.now()
         return switch config.kind {
-        case .inboxSummarizer:
-            try await store.inboxSummaryBacklog(
+        case .summaryBackfill:
+            try await store.summaryBacklog(
                 retryBefore: now.addingTimeInterval(-Self.retryAfter)
             )
         case .linkChecker:
@@ -155,9 +155,9 @@ actor AutomationEngine {
         return min(largestBatch, max(config.batchLimit, needed))
     }
 
-    // MARK: Inbox summarizer
+    // MARK: Summary backfill
 
-    private func summarizeInbox(
+    private func backfillSummaries(
         _ config: AutomationConfig,
         _ run: inout AutomationRun
     ) async throws {
@@ -167,7 +167,7 @@ actor AutomationEngine {
             return
         }
         var budget = try await remainingCalls(config)
-        let ids = try await store.inboxSummaryCandidates(
+        let ids = try await store.summaryCandidates(
             limit: config.batchLimit,
             retryBefore: dependencies.now().addingTimeInterval(-Self.retryAfter)
         )
@@ -183,7 +183,7 @@ actor AutomationEngine {
                 try await store.recordAppliedChange(
                     AgentChangeDraft(
                         kind: .summary, noteID: id, before: document.markdown,
-                        after: summarized.markdown, reason: "Summarized by the inbox summarizer.",
+                        after: summarized.markdown, reason: "Summarized by the summary backfill.",
                         baseRevision: document.revision
                     ),
                     appliedRevision: summarized.revision,

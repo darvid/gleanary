@@ -11,7 +11,7 @@ struct StarterPack: Identifiable, Sendable, Hashable {
     let id: String
     let title: String
     let symbol: String
-    /// The area name, written as its `X0` category. Nil packs extend the built-in 10–19 Inbox area.
+    /// The area name, written as its `X0` category. Nil packs fill the 10s as Essentials.
     let area: String?
     let entries: [Entry]
 
@@ -145,8 +145,7 @@ struct StarterPlan: Sendable, Equatable {
             return placed
         }
 
-        // Essentials fill the Inbox area; other packs take tens blocks in the order they were
-        // chosen.
+        // Essentials fill the 10s; other packs take tens blocks in the order they were chosen.
         for pack in packs.filter({ $0.area == nil }) + packs.filter({ $0.area != nil }) {
             let placed: [Category]
             if let area = pack.area {
@@ -157,12 +156,14 @@ struct StarterPlan: Sendable, Equatable {
                 placed = take([header], codes: ["\(block)0"])
                     + take(pack.entries, codes: (1 ... 9).map { "\(block)\($0)" })
             } else {
-                placed = take(pack.entries, codes: (11 ... 19).map(String.init))
+                let header = StarterPack.Entry(key: "area:\(pack.id)", name: pack.title)
+                placed = take([header], codes: ["10"])
+                    + take(pack.entries, codes: (11 ... 19).map(String.init))
             }
             if !placed.isEmpty {
                 areas.append(Area(
                     packID: pack.id,
-                    title: pack.area ?? "Inbox & essentials",
+                    title: pack.area ?? pack.title,
                     categories: placed
                 ))
             }

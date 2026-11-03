@@ -167,7 +167,7 @@ private func turn(_ calls: AgentCall...) -> AgentTurn {
             "item": "i1", "category_code": "31.09", "reason": "",
         ]))
         let duplicate = await toolbox.run(call("h", "propose_category", [
-            "code": "39", "name": "Inbox", "reason": "",
+            "code": "39", "name": "Agent Architectures", "reason": "",
         ]))
         #expect(duplicate.contains("already exists"))
         #expect(await toolbox.changes.map(\.kind) == [.title, .category, .filing])

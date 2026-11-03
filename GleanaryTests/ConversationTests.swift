@@ -404,8 +404,8 @@ private struct NoTranscriptProvider: YouTubeProviding {
         try await reopened.reviewProposal(proposal.id, action: "apply")
         try await reopened.reviewProposal(proposal.id, action: "apply")
         #expect(try await reopened.categories(for: note.id).first?.id == home.id)
-        // Filed somewhere real, it leaves Inbox; Undo puts it back.
-        #expect(try await !reopened.categories(for: note.id).contains(inbox))
+        // The old home stays as a secondary one; Undo restores it alone.
+        #expect(try await reopened.categories(for: note.id).contains(inbox))
         try await reopened.reviewProposal(proposal.id, action: "undo")
         #expect(try await reopened.categories(for: note.id) == [inbox])
         #expect(try await reopened.document(id: note.id) == note)
@@ -1284,17 +1284,16 @@ private struct NoTranscriptProvider: YouTubeProviding {
         "Distributed systems coordinate workers through replication and consensus.",
         "Wildflowers grow in a sheltered meadow during the warm season."
     ])
-    func newCapturesFileUsingContentAndExplainInboxFallback(text: String) async throws {
+    func newCapturesFileUsingContentAndStayUnfiledWithoutAFit(text: String) async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let request = "https://example.org/article"
         let expected = text.hasPrefix("Agent") ? "31.04" : text
-            .hasPrefix("Distributed") ? "31.01" : "10"
+            .hasPrefix("Distributed") ? "31.01" : nil
         let coordinator = AgentCoordinator(
             store: store,
             fetcher: FilingContentFetcher(text: text),
-            inference: ConversationFixtureInference(classificationCode: expected == "10" ? nil :
-                expected)
+            inference: ConversationFixtureInference(classificationCode: expected)
         )
         let task = try await store.beginConversation(request, owner: .assistant)
         try await coordinator.execute(taskID: task, request: request, selected: [], changed: {})
@@ -1302,9 +1301,10 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let saved = try #require(messages.first { $0.author == "librarian" })
         let id = try #require(saved.references.first)
         #expect(try await store.categories(for: id).first?.code == expected)
-        #expect(saved.text.contains("No confident filing home") == (expected == "10"))
-        let inbox = try #require(await store.categories().first { $0.code == "10" })
-        try await store.fileNote(id, categoryID: inbox.id, includeSources: true)
+        #expect(saved.text.contains("No confident filing home") == (expected == nil))
+        // Capturing it again keeps a home chosen meanwhile.
+        let general = try #require(await store.categories().first { $0.code == "10" })
+        try await store.fileNote(id, categoryID: general.id, includeSources: true)
         let duplicate = try await store.beginConversation(request, owner: .assistant)
         try await coordinator.execute(
             taskID: duplicate,
@@ -1338,7 +1338,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(try await store.categories(for: id).isEmpty)
     }
 
-    @Test func uncertainCaptureStaysInInboxAndOffersAlternativeHomes() async throws {
+    @Test func uncertainCaptureStaysUnfiledAndOffersAlternativeHomes() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let request = "https://example.org/article"
@@ -1355,7 +1355,7 @@ private struct NoTranscriptProvider: YouTubeProviding {
         let saved = try #require(await store.conversationMessages()
             .first { $0.author == "librarian" })
         let id = try #require(saved.references.first)
-        #expect(try await store.categories(for: id).map(\.code) == ["10"])
+        #expect(try await store.categories(for: id).isEmpty)
         #expect(saved.text.contains("apply one of the suggested homes"))
         let pending = try await store.proposals().filter { $0.left == id }
         #expect(pending.allSatisfy { $0.status == "pending" })
@@ -1394,14 +1394,6 @@ private struct NoTranscriptProvider: YouTubeProviding {
             "requestedHome",
             "requestedHomeMatch",
         ])
-    }
-
-    @Test func newLibrariesStartWithOnlyTheInboxCategory() async throws {
-        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let store = DocumentStore(url: root.appending(path: "library.sqlite"))
-        _ = try await store.open()
-        #expect(try await store.categories().map(\.label) == ["10 Inbox"])
     }
 
     @Test(arguments: AgentRole
@@ -3245,11 +3237,6 @@ private struct NoTranscriptProvider: YouTubeProviding {
         try await store.saveCategory(id: categories[0].id, code: "10", name: "Reading inbox")
         #expect(try await store.categories(for: note.id).first?.name == "Reading inbox")
         await #expect(throws: ConversationError.self) { try await store.saveCategory(
-            id: categories[0].id,
-            code: "11",
-            name: "Reading inbox"
-        ) }
-        await #expect(throws: ConversationError.self) { try await store.saveCategory(
             code: "bad",
             name: "No"
         ) }
@@ -3981,57 +3968,52 @@ extension ConversationTests {
         #expect(try await codes().isEmpty)
     }
 
-    @Test func filingSomewhereElseLeavesInbox() async throws {
+    @Test func removingInboxLeavesItsItemsUnfiledOrInTheirOtherHomes() async throws {
         let (root, store) = try await fixture()
         defer { try? FileManager.default.removeItem(at: root) }
-        let byCode = try await Dictionary(uniqueKeysWithValues: store.categories().map { (
-            $0.code,
-            $0.id
-        ) })
-        let inbox = try #require(byCode["10"])
-        func inInbox() async throws -> MarkdownDocument {
-            let note = try await store.save(MarkdownDocument(
-                name: "Item",
-                markdown: UUID().uuidString
-            ))
-            try await store.fileNote(note.id, categoryID: inbox)
-            return note
+        let agents = try #require(await store.categories().first { $0.code == "31.04" })
+        let inbox = DecimalCategory.legacyInboxID.uuidString
+        let only = try await store.save(MarkdownDocument(name: "Only", markdown: "One."))
+        let both = try await store.save(MarkdownDocument(name: "Both", markdown: "Two."))
+        func restoreInbox(areaBelow: Bool) async throws {
+            try await store.readyDatabase().write { db in
+                try db.execute(sql: "DELETE FROM decimal_categories WHERE code = '10'")
+                try db.execute(sql: """
+                INSERT INTO decimal_categories VALUES (?, '10', 'Inbox')
+                """, arguments: [inbox])
+                if areaBelow {
+                    try db.execute(sql: """
+                    INSERT INTO decimal_categories VALUES (?, '11', 'Ideas')
+                    """, arguments: [UUID().uuidString])
+                }
+                try db.execute(sql: "DELETE FROM note_categories")
+                try db.execute(sql: """
+                INSERT INTO note_categories VALUES (?1, ?3, 1), (?2, ?3, 1), (?2, ?4, 0)
+                """, arguments: [
+                    only.id.uuidString, both.id.uuidString, inbox, agents.id.uuidString,
+                ])
+            }
         }
-        // Change… in the filing column.
-        let manual = try await inInbox()
-        try await store.fileNote(manual.id, categoryID: #require(byCode["31.04"]))
-        #expect(try await store.categories(for: manual.id).map(\.code) == ["31.04"])
 
-        // File Here and the library agent's filing changes, with Undo putting Inbox back.
-        let agent = try await inInbox()
-        let batch = UUID()
-        try await store.saveAgentChanges([AgentChangeDraft(
-            kind: .filing, noteID: agent.id, code: "31.01", before: "10 Inbox",
-            after: "31.01 Distributed Systems", reason: ""
-        )], taskID: batch)
-        let ids = try await store.agentChanges(taskID: batch).map(\.id)
-        _ = try await store.applyAgentChanges(ids)
-        #expect(try await store.categories(for: agent.id).map(\.code) == ["31.01"])
-        _ = try await store.undoAgentChanges(ids)
-        #expect(try await store.categories(for: agent.id).map(\.code) == ["10"])
+        try await restoreInbox(areaBelow: false)
+        try await store.readyDatabase().write { try DocumentStore.removeInbox(in: $0) }
+        #expect(try await store.categories(for: only.id).isEmpty)
+        #expect(try await store.categories(for: both.id) == [agents])
+        #expect(try await !store.categories().contains { $0.code == "10" })
 
-        // A filing proposal applied from chat.
-        let chat = try await inInbox()
-        let task = try await store.beginConversation("file it", owner: .librarian)
-        let home = try #require(await store.categories().first { $0.code == "31.04" })
-        let proposal = try await store.proposeFiling(
-            noteID: chat.id, category: home, rationale: "", taskID: task
-        )
-        try await store.reviewProposal(proposal, action: "apply")
-        #expect(try await store.categories(for: chat.id).map(\.code) == ["31.04"])
-        try await store.reviewProposal(proposal, action: "undo")
-        #expect(try await store.categories(for: chat.id).map(\.code) == ["10"])
+        // With categories in the 10s, code 10 stays as their area.
+        try await restoreInbox(areaBelow: true)
+        try await store.readyDatabase().write { try DocumentStore.removeInbox(in: $0) }
+        #expect(try await store.categories(for: only.id).isEmpty)
+        #expect(try await store.categories(for: both.id) == [agents])
+        #expect(try await store.categories().first { $0.code == "10" }?.name == "Essentials")
     }
 }
 
 extension DocumentStore {
-    /// Fixture categories from the spec's example scheme; new libraries only include Inbox.
+    /// Fixture categories from the spec's example scheme; new libraries start with none.
     func seedExampleCategories() throws {
+        try saveCategory(code: "10", name: "General")
         try saveCategory(code: "31", name: "Computing")
         try saveCategory(code: "31.01", name: "Distributed Systems")
         try saveCategory(code: "31.04", name: "Agent Architectures")

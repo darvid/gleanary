@@ -477,9 +477,6 @@ extension DocumentStore {
                 sql: "SELECT code FROM decimal_categories WHERE id = ?",
                 arguments: [id.uuidString]
             )
-            if current == DecimalCategory.inboxCode, code != DecimalCategory.inboxCode {
-                throw ConversationError.inboxCategory
-            }
             let taken = try Row.fetchAll(db, sql: "SELECT id, code, name FROM decimal_categories")
                 .contains {
                     let other: String = $0["id"], otherCode: String = $0["code"]
@@ -569,43 +566,62 @@ extension DocumentStore {
     /// lowest-coded remaining category as primary; items filed nowhere else become unfiled.
     /// Pending proposals into this category go stale when reviewed.
     func deleteCategory(_ id: UUID) throws {
-        try readyDatabase().write { db in
-            let code = try String.fetchOne(
+        try readyDatabase().write { db in try Self.deleteCategory(id, in: db) }
+    }
+
+    static func deleteCategory(_ id: UUID, in db: Database) throws {
+        for (table, column) in [
+            ("note_categories", "noteID"),
+            ("source_categories", "sourceID"),
+        ] {
+            let homeless = try String.fetchAll(
                 db,
-                sql: "SELECT code FROM decimal_categories WHERE id = ?",
+                sql: "SELECT \(column) FROM \(table) WHERE categoryID = ? AND isPrimary = 1",
                 arguments: [id.uuidString]
             )
-            if code == DecimalCategory.inboxCode {
-                throw ConversationError.inboxCategory
-            }
-            for (table, column) in [
-                ("note_categories", "noteID"),
-                ("source_categories", "sourceID"),
-            ] {
-                let homeless = try String.fetchAll(
-                    db,
-                    sql: "SELECT \(column) FROM \(table) WHERE categoryID = ? AND isPrimary = 1",
-                    arguments: [id.uuidString]
-                )
-                try db.execute(
-                    sql: "DELETE FROM \(table) WHERE categoryID = ?",
-                    arguments: [id.uuidString]
-                )
-                for item in homeless {
-                    try db.execute(sql: """
-                    UPDATE \(table) SET isPrimary = 1 WHERE \(column) = ?1 AND categoryID = (
-                        SELECT m.categoryID FROM \(table) m
-                        JOIN decimal_categories c ON c.id = m.categoryID
-                        WHERE m.\(column) = ?1 ORDER BY c.code LIMIT 1
-                    )
-                    """, arguments: [item])
-                }
-            }
             try db.execute(
-                sql: "DELETE FROM decimal_categories WHERE id = ?",
+                sql: "DELETE FROM \(table) WHERE categoryID = ?",
                 arguments: [id.uuidString]
             )
+            for item in homeless {
+                try db.execute(sql: """
+                UPDATE \(table) SET isPrimary = 1 WHERE \(column) = ?1 AND categoryID = (
+                    SELECT m.categoryID FROM \(table) m
+                    JOIN decimal_categories c ON c.id = m.categoryID
+                    WHERE m.\(column) = ?1 ORDER BY c.code LIMIT 1
+                )
+                """, arguments: [item])
+            }
         }
+        try db.execute(
+            sql: "DELETE FROM decimal_categories WHERE id = ?",
+            arguments: [id.uuidString]
+        )
+    }
+
+    /// Unsorted items are unfiled rather than filed in a built-in Inbox. Items only in Inbox
+    /// become unfiled and the others keep their remaining homes. Where categories sit in the
+    /// 10s beneath it, code 10 stays as their area, renamed Essentials if it was still Inbox.
+    static func removeInbox(in db: Database) throws {
+        let inbox = DecimalCategory.legacyInboxID
+        let hasArea = try Bool.fetchOne(db, sql: """
+        SELECT EXISTS(SELECT 1 FROM decimal_categories WHERE code GLOB '1[1-9]*')
+        """) ?? false
+        guard hasArea else {
+            try deleteCategory(inbox, in: db)
+            return
+        }
+        // Clears its memberships the same way deleting would, then puts the area back.
+        let name = try String.fetchOne(
+            db, sql: "SELECT name FROM decimal_categories WHERE id = ?",
+            arguments: [inbox.uuidString]
+        )
+        guard let name else { return }
+        try deleteCategory(inbox, in: db)
+        try db.execute(
+            sql: "INSERT OR IGNORE INTO decimal_categories(id, code, name) VALUES (?, '10', ?)",
+            arguments: [inbox.uuidString, name == "Inbox" ? "Essentials" : name]
+        )
     }
 
     /// Adds a secondary home, leaving the primary as it is. False when the item was already
@@ -716,9 +732,6 @@ extension DocumentStore {
             try db.execute(sql: """
             INSERT INTO note_categories VALUES (?, ?, ?) ON CONFLICT(noteID, categoryID) DO UPDATE SET isPrimary = excluded.isPrimary
             """, arguments: [noteID.uuidString, categoryID.uuidString, primary])
-            if primary {
-                try Self.leaveInbox(noteID, filedIn: categoryID, in: db)
-            }
             if includeSources {
                 for source in try String.fetchAll(
                     db,
@@ -960,37 +973,17 @@ extension DocumentStore {
         }
     }
 
-    /// Filing somewhere else also leaves Inbox, which only means "not sorted yet".
+    /// Filing somewhere makes that the primary home and keeps the others as secondary.
     private static func filedMemberships(
         _ before: [FilingMembership],
-        destination: UUID,
-        inbox: UUID?
+        destination: UUID
     ) -> [FilingMembership] {
-        let result = before.filter {
-            $0.categoryID != destination && $0.categoryID != inbox
-        }.map { FilingMembership(
+        let result = before.filter { $0.categoryID != destination }.map { FilingMembership(
             categoryID: $0.categoryID,
             primary: false
         ) }
             + [FilingMembership(categoryID: destination, primary: true)]
         return result.sorted { $0.categoryID.uuidString < $1.categoryID.uuidString }
-    }
-
-    /// The built-in Inbox, which filing elsewhere leaves.
-    static func inboxID(in db: Database) throws -> UUID? {
-        try String.fetchOne(
-            db, sql: "SELECT id FROM decimal_categories WHERE code = ?",
-            arguments: [DecimalCategory.inboxCode]
-        ).flatMap(UUID.init(uuidString:))
-    }
-
-    /// Leaves Inbox once the item has a real home.
-    static func leaveInbox(_ noteID: UUID, filedIn categoryID: UUID, in db: Database) throws {
-        guard let inbox = try inboxID(in: db), inbox != categoryID else { return }
-        try db.execute(
-            sql: "DELETE FROM note_categories WHERE noteID = ? AND categoryID = ?",
-            arguments: [noteID.uuidString, inbox.uuidString]
-        )
     }
 
     static func replaceMemberships(
@@ -1034,7 +1027,12 @@ extension DocumentStore {
         action: String,
         in db: Database
     ) throws -> Bool {
-        let inbox = try inboxID(in: db)
+        // Filings applied before Inbox went away may remember it; it no longer exists.
+        var change = change
+        change.before.removeAll { $0.categoryID == DecimalCategory.legacyInboxID }
+        change.sources = change.sources.mapValues {
+            $0.filter { $0.categoryID != DecimalCategory.legacyInboxID }
+        }
         let proposal: String = row["id"], status: String = row["status"]
         if action == "reject", status == "pending" {
             try db.execute(
@@ -1049,8 +1047,7 @@ extension DocumentStore {
         let revision: String = row["leftRevision"]
         let expected = undo ? filedMemberships(
             change.before,
-            destination: change.destination,
-            inbox: inbox
+            destination: change.destination
         ) :
             change.before
         var valid = try String.fetchOne(
@@ -1082,8 +1079,7 @@ extension DocumentStore {
         for (source, before) in change.sources {
             let expected = undo ? filedMemberships(
                 before,
-                destination: change.destination,
-                inbox: inbox
+                destination: change.destination
             ) : before
             valid = try valid && filingMemberships(
                 table: "source_categories",
@@ -1113,8 +1109,7 @@ extension DocumentStore {
         try replaceMemberships(
             undo ? change.before : filedMemberships(
                 change.before,
-                destination: change.destination,
-                inbox: inbox
+                destination: change.destination
             ),
             table: "note_categories",
             column: "noteID",
@@ -1125,8 +1120,7 @@ extension DocumentStore {
             try replaceMemberships(
                 undo ? before : filedMemberships(
                     before,
-                    destination: change.destination,
-                    inbox: inbox
+                    destination: change.destination
                 ),
                 table: "source_categories",
                 column: "sourceID",

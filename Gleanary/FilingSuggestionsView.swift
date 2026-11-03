@@ -266,14 +266,14 @@ struct FilingSuggestionsView: View {
         }
     }
 
-    /// The Inbox area's next code, else the first empty area's `X0`.
+    /// The 10s area's next code, else the first empty area's `X0`.
     static func nextCode(in categories: [DecimalCategory]) -> String {
         let areas = CategoryArea.group(categories)
         if let code = areas.first(where: { $0.digit == 1 })?.nextFreeCode {
             return code
         }
         let used = Set(areas.map(\.digit))
-        if let digit = (2 ... 9).first(where: { !used.contains($0) }) {
+        if let digit = (1 ... 9).first(where: { !used.contains($0) }) {
             return "\(digit)0"
         }
         return areas.lazy.compactMap(\.nextFreeCode).first ?? ""

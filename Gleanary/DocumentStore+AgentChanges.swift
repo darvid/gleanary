@@ -304,9 +304,6 @@ extension DocumentStore {
         INSERT INTO note_categories VALUES (?, ?, 1)
         ON CONFLICT(noteID, categoryID) DO UPDATE SET isPrimary = 1
         """, arguments: [noteID, categoryID])
-        if let destination = UUID(uuidString: categoryID) {
-            try leaveInbox(note.id, filedIn: destination, in: db)
-        }
         try db.execute(
             sql: "UPDATE agent_changes SET status = 'applied', snapshot = ? WHERE id = ?",
             arguments: [
@@ -402,7 +399,9 @@ extension DocumentStore {
               ) else { return false }
         try replaceMemberships(
             previous
-                .map { try FilingMembership(categoryID: uuid($0.categoryID), primary: $0.primary) },
+                .map { try FilingMembership(categoryID: uuid($0.categoryID), primary: $0.primary) }
+                // A filing from before Inbox went away may remember it.
+                .filter { $0.categoryID != DecimalCategory.legacyInboxID },
             table: "note_categories", column: "noteID", id: note.id, in: db
         )
         return true

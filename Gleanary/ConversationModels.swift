@@ -246,12 +246,11 @@ struct DecimalCategory: Identifiable, Sendable, Equatable {
         "\(code) \(name)"
     }
 
-    /// The built-in fallback home; filing looks it up by this code.
-    var isInbox: Bool {
-        code == Self.inboxCode
-    }
-
-    static let inboxCode = "10"
+    /// The Inbox that new libraries once started with. Unsorted items are now simply unfiled;
+    /// a migration removes it, and undoing an older filing ignores memberships in it.
+    static let legacyInboxID = UUID(uuid: (
+        0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01
+    ))
 
     /// The area digit: 3 for 30, 31 and 31.04.
     var area: Int {
@@ -302,7 +301,7 @@ struct ResearchSource: Sendable {
 enum ConversationError: LocalizedError {
     case invalidCategory, staleProposal, missingSource, invalidOutput, invalidReply, interrupted,
          busy,
-         multipleURLs, invalidPlan, categoryTaken, inboxCategory, webResearchUnavailable,
+         multipleURLs, invalidPlan, categoryTaken, webResearchUnavailable,
          uncitedWebResearch
     var errorDescription: String? {
         switch self {
@@ -317,7 +316,6 @@ enum ConversationError: LocalizedError {
         case .busy: "Cancel the current conversation task before starting another."
         case .multipleURLs: "Save one URL per message. Select saved sources to compare them."
         case .categoryTaken: "Another category already uses that code or name."
-        case .inboxCategory: "Inbox keeps code 10 because unfiled material falls back to it. It can be renamed but not renumbered or deleted."
         case .invalidPlan: "The request plan was incomplete or referenced unavailable records. No requested changes were applied. Try clarifying the request."
         }
     }
@@ -654,8 +652,8 @@ struct ConversationPlan: Codable, Sendable {
         equivalent home; never create a duplicate of an existing category.
         newCategoryCode: only when no supplied category matches requestedHome, suggest an unused
         code for it beside related categories (for example 31.05 under 31); otherwise leave it empty.
-        Existing filing is context, not proof that a placeholder home is appropriate. Use Inbox
-        only when no topical category fits. Never invent a category, hierarchy, tags or permission.
+        Existing filing is context, not proof that a placeholder home is appropriate. Leave
+        categoryCode empty when no topical category fits; the item stays unfiled. Never invent a category, hierarchy, tags or permission.
         This is a suggestion only, not an applied mutation. The application owns review and writes.
         """
     }
@@ -743,8 +741,8 @@ struct FilingChange: Codable, Sendable {
     let destination: UUID
     let destinationLabel: String
     let previousLabel: String
-    let before: [FilingMembership]
-    let sources: [UUID: [FilingMembership]]
+    var before: [FilingMembership]
+    var sources: [UUID: [FilingMembership]]
     /// Set when applying also creates the destination; undo removes it again if unused.
     var newCategory: ConversationPlan.NewCategory?
 }

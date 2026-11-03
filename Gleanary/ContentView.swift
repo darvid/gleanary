@@ -1366,7 +1366,7 @@ struct ContentView: View {
                         DisclosureGroup(isExpanded: areaExpanded(area.digit)) {
                             ForEach(members) { filingRow($0, icon: nil) }
                         } label: {
-                            filingRow(header, icon: header.isInbox ? "tray" : "folder")
+                            filingRow(header, icon: "folder")
                         }
                     } else {
                         ForEach(area.categories) { filingRow($0, icon: "folder") }

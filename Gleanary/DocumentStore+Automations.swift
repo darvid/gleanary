@@ -287,10 +287,10 @@ extension DocumentStore {
 
     // MARK: Selectors
 
-    /// Inbox items holding fetched full text and no summary, newest first. An item whose
-    /// summary failed waits until `retryBefore` before it's tried again.
-    func inboxSummaryCandidates(limit: Int, retryBefore: Date) throws -> [UUID] {
-        let (sql, arguments) = Self.inboxSummaryQuery(retryBefore: retryBefore)
+    /// Items holding fetched full text and no summary, filed or not, newest first. An item
+    /// whose summary failed waits until `retryBefore` before it's tried again.
+    func summaryCandidates(limit: Int, retryBefore: Date) throws -> [UUID] {
+        let (sql, arguments) = Self.summaryQuery(retryBefore: retryBefore)
         return try readyDatabase().read { db in
             try String.fetchAll(
                 db, sql: "SELECT n.id \(sql) ORDER BY n.createdAt DESC, n.id LIMIT ?",
@@ -336,8 +336,8 @@ extension DocumentStore {
     }
 
     /// How many items each selector would return without a limit, counted in SQLite.
-    func inboxSummaryBacklog(retryBefore: Date) throws -> Int {
-        try count(Self.inboxSummaryQuery(retryBefore: retryBefore))
+    func summaryBacklog(retryBefore: Date) throws -> Int {
+        try count(Self.summaryQuery(retryBefore: retryBefore))
     }
 
     func linkCheckBacklog(checkedBefore: Date, retryBefore: Date) throws -> Int {
@@ -407,13 +407,11 @@ extension DocumentStore {
         ic.checkedAt, n.id
     """
 
-    private static func inboxSummaryQuery(retryBefore: Date)
+    private static func summaryQuery(retryBefore: Date)
         -> (sql: String, arguments: StatementArguments)
     {
         ("""
         FROM notes n
-        JOIN note_categories nc ON nc.noteID = n.id AND nc.isPrimary = 1
-        JOIN decimal_categories dc ON dc.id = nc.categoryID AND dc.code = ?
         WHERE n.deletedAt IS NULL AND n.archivedAt IS NULL AND n.sourceURL IS NOT NULL
             AND NOT (\(legacySummarySQL))
             AND EXISTS (SELECT 1 FROM captures c WHERE c.noteID = n.id
@@ -421,7 +419,7 @@ extension DocumentStore {
                 AND coalesce(json_extract(CAST(c.document AS TEXT), '$.coverage'), '') != 'bookmark')
             AND NOT EXISTS (SELECT 1 FROM item_checks ic WHERE ic.noteID = n.id
                 AND ic.kind = 'summary' AND ic.state = 'failed' AND ic.checkedAt > ?)
-        """, [DecimalCategory.inboxCode, retryBefore.timeIntervalSince1970])
+        """, [retryBefore.timeIntervalSince1970])
     }
 
     private static func linkCheckQuery(checkedBefore: Date, retryBefore: Date)
@@ -691,7 +689,7 @@ extension DocumentStore {
         }
     }
 
-    /// Writes an automation's new note in the Inbox, recording it as the run's change so Undo
+    /// Writes an automation's new note, unfiled, recording it as the run's change so Undo
     /// removes it. One transaction, so a note never exists without its Undo.
     func writeAutomationNote(
         _ document: MarkdownDocument,
@@ -701,12 +699,6 @@ extension DocumentStore {
     ) throws -> MarkdownDocument {
         try activityWrite(actor: "automation", batchID: runID, label: "Automation changes") { db in
             let note = try Self.writeNote(document, graph: false, in: db)
-            if let inbox = try String.fetchOne(
-                db, sql: "SELECT id FROM decimal_categories WHERE code = ?",
-                arguments: [DecimalCategory.inboxCode]
-            ) {
-                try Self.fileImported(note.id, categoryID: Self.uuid(inbox), in: db)
-            }
             try Self.insertAppliedChange(
                 AgentChangeDraft(
                     kind: .note, noteID: note.id, before: "", after: note.name, reason: reason
