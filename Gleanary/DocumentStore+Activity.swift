@@ -24,8 +24,11 @@ extension DocumentStore {
             FROM grouped g
             JOIN keyed k ON k.sequence = g.latest
             LEFT JOIN automation_runs r ON r.id = k.groupID
+            -- A page can link to itself; that says nothing about why it was saved.
             LEFT JOIN acquisition_candidates saved ON saved.savedNoteID = k.subject
+                AND saved.foundInNoteID IS NOT k.subject
             LEFT JOIN acquisition_candidates queued ON queued.captureJobID = k.groupID
+                AND queued.foundInNoteID IS NOT k.subject
             LEFT JOIN notes o ON o.id = coalesce(saved.foundInNoteID, queued.foundInNoteID)
                 AND o.deletedAt IS NULL
             LEFT JOIN notes subject ON subject.id = k.subject AND k.workKey GLOB 'note:*'

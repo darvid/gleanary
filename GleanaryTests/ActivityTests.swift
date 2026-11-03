@@ -656,6 +656,26 @@ struct ActivityTests {
         #expect(try await store.activityEvents(in: row, query: ActivityQuery()).count == row.count)
     }
 
+    @Test func aPageLinkingToItselfIsNotAReasonForSavingIt() async throws {
+        let fixture = try ActivityFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let note = try await fixture.store.save(MarkdownDocument(
+            name: "Synthetic self-linking page", markdown: "Text"
+        ))
+        let pool = try await fixture.store.readyDatabase()
+        try await pool.write { db in
+            try db.execute(sql: """
+            INSERT INTO acquisition_candidates(id, identity, url, title, foundInNoteID, context,
+                provenance, hop, score, state, reason, automatic, savedNoteID, createdAt,
+                updatedAt)
+            VALUES (?, 'url:https://example.org/self', 'https://example.org/self', 'Self', ?, '',
+                'creatorLink', 1, 1, 'queued', 'Linked', 1, ?, 0, 0)
+            """, arguments: [UUID().uuidString, note.id.uuidString, note.id.uuidString])
+        }
+        let group = try #require(try await fixture.store.activityPage().days.first?.groups.first)
+        #expect(group.context == nil)
+    }
+
     @Test func headlinesNameWhoAndEveryKindOfWork() {
         let event = ActivityEvent(
             id: 1, date: Date(), kind: .sourceSaved, noteID: nil, relatedID: nil,

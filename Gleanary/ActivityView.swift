@@ -514,7 +514,9 @@ private struct ActivityEventRow: View {
             AtlasHierarchy.hue(for: String(code)),
             dark: colorScheme == .dark
         )
-        let dot = Text(Image(systemName: "circle.fill")).font(.system(size: 7)).foregroundStyle(ink)
+        // A small symbol sits on the baseline; raised to the middle of the digits beside it.
+        let dot = Text(Image(systemName: "circle.fill")).font(.system(size: 7))
+            .baselineOffset(1.5).foregroundStyle(ink)
         let name = Text(category).foregroundStyle(ink)
         return Text("\(line[..<range.lowerBound])\(dot) \(name)\(line[range.upperBound...])")
     }
