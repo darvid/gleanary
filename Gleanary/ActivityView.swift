@@ -65,11 +65,8 @@ struct ActivityView<Intake: View>: View {
 
     private var timeline: some View {
         VStack(spacing: 0) {
-            controls.padding(18)
+            controls.padding(.horizontal, 14).padding(.vertical, 12)
             Divider()
-            if model.query.day == nil, let recap = model.recap {
-                recapView(recap).padding([.horizontal, .top], 14).padding(.bottom, 8)
-            }
             if let error = model.error {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(error, systemImage: "exclamationmark.triangle")
@@ -96,6 +93,11 @@ struct ActivityView<Intake: View>: View {
                 }
             } else {
                 List(selection: $model.selection) {
+                    // Content, not a control: it scrolls away with the timeline.
+                    if model.query.day == nil, let recap = model.recap {
+                        recapView(recap).padding(.vertical, 6)
+                            .listRowSeparator(.hidden).selectionDisabled()
+                    }
                     if showsIntake {
                         intake
                     }
@@ -198,35 +200,45 @@ struct ActivityView<Intake: View>: View {
         .accessibilityElement(children: .contain)
     }
 
+    /// Two rows: search with what and when, then who. A picked date adds a row to step
+    /// through days.
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search activity", text: $model.query.search)
-                    .textFieldStyle(.plain).focused($searchFocused)
-                if !model.query.search.isEmpty {
-                    Button("Clear Search", systemImage: "xmark.circle.fill") {
-                        model.query.search = ""
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Search activity", text: $model.query.search)
+                        .textFieldStyle(.plain).focused($searchFocused)
+                    if !model.query.search.isEmpty {
+                        Button("Clear Search", systemImage: "xmark.circle.fill") {
+                            model.query.search = ""
+                        }
+                        .labelStyle(.iconOnly).buttonStyle(.borderless)
                     }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
+                }.padding(7).frame(maxWidth: .infinity).background(
+                    Color(nsColor: .controlBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 7)
+                )
+                Menu {
+                    Picker("Event type", selection: $model.query.filter) {
+                        ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.inline).labelsHidden()
+                } label: {
+                    Label(
+                        model.query.filter.rawValue,
+                        systemImage: model.query.filter == .all
+                            ? "line.3.horizontal.decrease.circle"
+                            : "line.3.horizontal.decrease.circle.fill"
+                    )
                 }
-            }.padding(8).background(
-                Color(nsColor: .controlBackgroundColor),
-                in: RoundedRectangle(cornerRadius: 7)
-            )
-            Picker("Who", selection: $model.query.scope) {
-                ForEach(ActivityScope.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().accessibilityLabel("Who made the change")
-            HStack {
-                Picker("Event type", selection: $model.query.filter) {
-                    ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
-                }.labelsHidden().accessibilityLabel("Event type")
-                Spacer(minLength: 4)
-                Button("Today") { model.query.day = Calendar.current.startOfDay(for: Date()) }
-                    .help("Show today’s activity")
+                .labelStyle(.iconOnly).menuIndicator(.hidden).fixedSize()
+                .help("Event type: \(model.query.filter.rawValue)")
+                .accessibilityLabel("Event type")
+                .accessibilityValue(model.query.filter.rawValue)
+                // Its popover has Today and Yesterday, so there's no separate Today button.
                 Button("Jump to Date", systemImage: "calendar") { choosingDate = true }
-                    .labelStyle(.iconOnly)
+                    .labelStyle(.iconOnly).fixedSize()
+                    .help("Show one day’s activity")
                     .popover(isPresented: $choosingDate) {
                         ActivityDateJump(
                             date: model.query.day ?? Date(),
@@ -238,6 +250,11 @@ struct ActivityView<Intake: View>: View {
                         )
                     }
             }
+            Picker("Who", selection: $model.query.scope) {
+                ForEach(ActivityScope.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden()
+            .accessibilityLabel("Who made the change")
             if let day = model.query.day {
                 HStack {
                     Button("Previous Day", systemImage: "chevron.left") { moveDay(-1) }
