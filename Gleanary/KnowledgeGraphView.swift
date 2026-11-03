@@ -11,6 +11,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.pages
     @State private var scale = 1.0
     @State private var pan = CGSize.zero
     @State private var dragOrigin: CGSize?
@@ -330,7 +331,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 )
             }
             if node.kind == .document {
-                GraphDocumentMark(isSource: graph.isSource(node)).draw(
+                GraphDocumentMark(isSource: graph.isSource(node), style: markStyle).draw(
                     in: &context, rect: rect, increasedContrast: contrast == .increased, ink: color
                 )
             } else {
@@ -375,7 +376,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             let style = graph.nodeStyle(for: node)
             shapes[style, default: GraphDrawingBatch()].append(nodePath(node, in: rect).cgPath)
             if node.kind == .document, radius >= 6 {
-                let mark = GraphDocumentMark(isSource: style.isSource)
+                let mark = GraphDocumentMark(isSource: style.isSource, style: markStyle)
                 if style.isSource {
                     folds[style, default: GraphDrawingBatch()].append(mark.fold(in: rect).cgPath)
                 } else {
@@ -563,7 +564,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     }
 
     private func nodePath(_ node: GraphNode, in rect: CGRect) -> Path {
-        switch node.kind {
+        if markStyle != .pages, node.kind != .document {
+            return GraphMarkStyle.triangle(in: rect)
+        }
+        return switch node.kind {
         case .concept:
             Path(ellipseIn: rect)
         case .person:
@@ -587,7 +591,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                 path.closeSubpath()
             }
         case .document:
-            GraphDocumentMark(isSource: graph.isSource(node)).path(in: rect)
+            GraphDocumentMark(isSource: graph.isSource(node), style: markStyle).path(in: rect)
         }
     }
 
@@ -621,7 +625,9 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                         keyboardNode = node.id; graph.select(node.id)
                     }
                 },
-                toggleSource: nil
+                toggleSource: nil,
+                chatTarget: node.noteID.map(ChatAttachmentTarget.note),
+                addedToChat: { peekNode = nil }
             )
             .onHover { inside in
                 hoveringPeek = inside

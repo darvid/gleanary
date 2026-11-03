@@ -58,6 +58,16 @@ struct NativeYouTubeProvider: YouTubeProviding {
     }
 
     func transcript(for target: MediaTarget) async throws -> VideoTranscript {
+        // YouTube sometimes fails a caption request it serves a moment later, and a capture
+        // without its transcript loses the whole point of saving a video.
+        for delay in [1, 3] {
+            do { return try await fetchTranscript(for: target) }
+            catch MediaError.blocked { try await Task.sleep(for: .seconds(delay)) }
+        }
+        return try await fetchTranscript(for: target)
+    }
+
+    private func fetchTranscript(for target: MediaTarget) async throws -> VideoTranscript {
         do {
             let result: FetchedTranscript
             do { result = try await YouTubeTranscript.fetch(

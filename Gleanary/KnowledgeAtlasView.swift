@@ -28,6 +28,7 @@ struct KnowledgeAtlasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.pages
     @Environment(\.displayScale) private var displayScale
     @State private var query = ""
     @AppStorage("atlasHidesEmptyCategories") private var hidesEmpty = false
@@ -268,7 +269,8 @@ struct KnowledgeAtlasView: View {
                         hoveredID: atlas.hoveredID, matchCounts: atlas.matchCounts,
                         thumbnails: atlas.thumbnails,
                         dark: colorScheme == .dark, highContrast: contrast == .increased,
-                        keyboardFocused: canvasFocused, displayScale: displayScale
+                        keyboardFocused: canvasFocused, markStyle: markStyle,
+                        displayScale: displayScale
                     ).draw(in: &context, size: size)
                 }
             }
