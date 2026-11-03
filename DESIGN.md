@@ -300,14 +300,16 @@ button radius. Code blocks use a rectangular control surface.
   summarizing and filing one source is one row ("Saved · Summarized ·
   Filed under 18.01 Enterprise sales"). A reason line comes from the run
   or the source a save was found in. An automation run's row offers Undo
-  This Run. A recap above the list counts what changed since the last
-  visit, split between you and Gleanary, and links to proposals waiting
+  This Run. A recap, the list's first row so it scrolls away, counts
+  what changed since the last visit, split between you and Gleanary, and
+  links to proposals waiting
   for review; a divider marks where the last visit ended. Captures that
   failed (Needs Attention) or are still saving (Saving) are pinned at
   the top of the list with their actions, so a source moves from saving
   to the timeline without changing pages.
-  An Everyone / You / Gleanary control, search, event-type filters,
-  Today, and a date picker narrow the list.
+  Fixed controls stay to two rows: search with an event-type menu and a
+  date button (its popover has Today and Yesterday), then an Everyone /
+  You / Gleanary control. A picked date adds a row to step through days.
   Date jumps use a native date field and Today/Yesterday shortcuts. Empty
   results fill the list column so controls stay above and the tracking
   note stays below; only the empty-state message is centered.
