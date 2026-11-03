@@ -60,13 +60,7 @@ extension DocumentStore {
                 audit.stale = report.revisions.contains { live[$0.key] != $0.value }
                     || cited.contains { live[$0] == nil }
                 for index in report.results.indices {
-                    let result = report.results[index]
-                    report.results[index] = DimensionResult(
-                        dimension: result.dimension, coverage: result.coverage,
-                        evidence: result.evidence.filter { live[$0.itemID] != nil },
-                        searches: result.searches, searchedItems: result.searchedItems,
-                        limitations: result.limitations, dismissed: result.dismissed
-                    )
+                    report.results[index].evidence.removeAll { live[$0.itemID] == nil }
                 }
                 audit.report = report
                 return audit
@@ -89,7 +83,7 @@ extension DocumentStore {
                   Set(selection).isSubset(of: audit.candidates.map(\.id)),
                   !accepted.isEmpty, accepted.isSubset(of: proposed)
             else { throw WriterError.scopeChanged }
-            guard selection.count <= audit.scopeLimit else { throw WriterError.needsChatGPT }
+            guard selection.count <= audit.scopeLimit else { throw WriterError.scopeChanged }
             let now = Date().timeIntervalSince1970
             try db.execute(sql: """
             UPDATE conversation_tasks SET state = 'running', progress = 'Starting', updatedAt = ?
@@ -159,12 +153,63 @@ extension DocumentStore {
                   let index = report.results.firstIndex(where: { $0.id == dimensionID })
             else { throw WriterError.scopeChanged }
             report.results[index].dismissed = dismissed
+            let request: String = row["request"]
+            if let fingerprint = ResearchAudit
+                .fingerprint(report.results[index], request: request)
+            {
+                if dismissed {
+                    try db.execute(sql: """
+                    INSERT OR REPLACE INTO audit_dismissals(fingerprint, cited, dismissedAt)
+                    VALUES (?, ?, ?)
+                    """, arguments: [
+                        fingerprint, ResearchAudit.cited(report.results[index]),
+                        Date().timeIntervalSince1970,
+                    ])
+                } else {
+                    try db.execute(
+                        sql: "DELETE FROM audit_dismissals WHERE fingerprint = ?",
+                        arguments: [fingerprint]
+                    )
+                }
+            }
             try db.execute(
                 sql: "UPDATE research_audits SET report = ?, updatedAt = ? WHERE taskID = ?",
                 arguments: [
                     Self.auditJSON(report), Date().timeIntervalSince1970, taskID.uuidString,
                 ]
             )
+        }
+    }
+
+    /// Findings dismissed in an earlier audit of the same question stay dismissed, unless the
+    /// items they rest on changed.
+    func applyEarlierDismissals(_ report: AuditReport, request: String) throws -> AuditReport {
+        try readyDatabase().read { db in
+            var report = report
+            for index in report.results.indices {
+                guard let fingerprint = ResearchAudit.fingerprint(
+                    report.results[index], request: request
+                ),
+                    let cited = try String.fetchOne(
+                        db, sql: "SELECT cited FROM audit_dismissals WHERE fingerprint = ?",
+                        arguments: [fingerprint]
+                    ),
+                    cited == ResearchAudit.cited(report.results[index])
+                else { continue }
+                report.results[index].dismissed = true
+            }
+            return report
+        }
+    }
+
+    /// The latest finished audit of the same question, to reuse its criteria.
+    func previousAudit(question request: String) throws -> ResearchAudit? {
+        let key = ResearchAudit.questionKey(request)
+        return try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT * FROM research_audits WHERE status = 'completed'
+            ORDER BY createdAt DESC LIMIT 50
+            """).map(Self.researchAudit).first { ResearchAudit.questionKey($0.request) == key }
         }
     }
 
@@ -179,6 +224,60 @@ extension DocumentStore {
             )
         }
         return AuditSourceText(source: source, revision: revision ?? "", coverage: coverage)
+    }
+
+    /// Where each item comes from: its captured source URL's host and its saved text, so
+    /// imbalance can tell one site from several and mirrors from distinct sources.
+    func auditOrigins(_ ids: [UUID]) throws -> [UUID: AuditImbalance.Origin] {
+        var origins: [UUID: AuditImbalance.Origin] = [:]
+        for id in Set(ids) {
+            guard let source = try? researchSource(noteID: id) else { continue }
+            let hash = try readyDatabase().read { db in
+                try String.fetchOne(db, sql: """
+                SELECT markdownHash FROM captures WHERE noteID = ? ORDER BY createdAt DESC LIMIT 1
+                """, arguments: [id.uuidString])
+            }
+            origins[id] = AuditImbalance.Origin(
+                host: AuditImbalance.host(of: source.document.sourceURL), contentHash: hash
+            )
+        }
+        return origins
+    }
+
+    /// Questions asked in your own notes among these items, in item order: notes you wrote,
+    /// not sources or model-written items.
+    func auditQuestions(in ids: [UUID], limit: Int) throws -> [(
+        note: UUID,
+        title: String,
+        question: String
+    )] {
+        guard limit > 0, !ids.isEmpty else { return [] }
+        let notes = try readyDatabase().read { db in
+            let marks = ids.map { _ in "?" }.joined(separator: ",")
+            return try Row.fetchAll(db, sql: """
+            SELECT n.id, n.name, n.markdown FROM notes n
+            WHERE n.id IN (\(marks)) AND n.deletedAt IS NULL AND (\(Self.libraryKindSQL)) = 'note'
+            """, arguments: StatementArguments(ids.map(\.uuidString))).map { row in
+                try (
+                    id: Self.uuid(row["id"]),
+                    title: row["name"] as String,
+                    markdown: row["markdown"] as String
+                )
+            }
+        }
+        var found: [(note: UUID, title: String, question: String)] = []
+        for id in ids {
+            guard let note = notes.first(where: { $0.id == id }) else { continue }
+            for question in NoteQuestions.find(in: note.markdown, limit: limit - found.count)
+                where !found.contains(where: { $0.question == question })
+            {
+                found.append((note.id, note.title, question))
+            }
+            if found.count >= limit {
+                break
+            }
+        }
+        return found
     }
 
     /// Live items in the search index, the denominator of a library search.

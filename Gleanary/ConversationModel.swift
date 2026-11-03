@@ -589,6 +589,11 @@ final class ConversationModel {
         } catch { self.error = error.localizedDescription }
     }
 
+    /// Asks the same question again; the new audit reuses the earlier one's criteria.
+    func runAuditAgain(_ audit: ResearchAudit) async {
+        await send(submittedRequest: "@researcher audit \(audit.question)")
+    }
+
     func cancelAudit(_ taskID: UUID) async {
         do {
             try await store.setResearchAuditStatus(taskID, .cancelled)

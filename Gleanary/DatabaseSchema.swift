@@ -525,6 +525,17 @@ enum DatabaseSchema {
             );
             """)
         }
+        // Dismissed audit findings, so a later audit of the same question keeps them hidden
+        // until what they rest on changes.
+        migrator.registerMigration("research-audit-dismissals-v1") { db in
+            try db.execute(sql: """
+            CREATE TABLE audit_dismissals (
+                fingerprint TEXT PRIMARY KEY NOT NULL,
+                cited TEXT NOT NULL,
+                dismissedAt REAL NOT NULL
+            );
+            """)
+        }
         try migrator.migrate(database)
     }
 

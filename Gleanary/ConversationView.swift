@@ -796,7 +796,8 @@ struct ConversationView: View {
                                     taskID, dimensionID: id, dismissed: dismissed
                                 )
                             }
-                        }
+                        },
+                        runAgain: { Task { await model.runAuditAgain(audit) } }
                     )
                 }
             }

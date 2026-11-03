@@ -220,9 +220,6 @@ Shipped 2026-11-03. Behavior is summarized in SPEC.md §7.9.
     absence Unknown.
   - **The plan has its own type.** `AuditProposal` replaces extending
     `WriterBrief`, so Writer prompts are unchanged.
-  - **There's no Limited state yet.** Each criterion is atomic, so a
-    partial answer shows as one criterion supported and another not
-    found.
   - **The audit runs only from the chat tool.** It's started through
     `start_workflow`, not the planner's action list. Only hosted
     models are offered it: the on-device tool prompt has a
@@ -243,3 +240,42 @@ Shipped 2026-11-03. Behavior is summarized in SPEC.md §7.9.
 
   Copied evidence, unknown provenance and explicit questions wait for
   Stage 3. The no-meaningful-change scenario waits for Stage 4.
+
+## As built: Stage 3
+
+- **Support check** (spec §5.2), added after the first real audit
+  marked every broad criterion Supported on weak quotes. Each
+  criterion's quotes, from the scope and from the hidden-answer
+  search, go through one bounded call that judges meets, partial or
+  none.
+  - Only "meets" supports a criterion.
+  - "Partial" makes it Partly covered (the spec's Limited), which is
+    a finding.
+  - A failed check makes it Unknown.
+- **Every provider:** all hosted providers share `HostedInference`,
+  so audits ran on them from the start. Apple's on-device model now
+  conforms too (`AppleResearchAudit.swift`), limited to 4 items. The
+  explicit `@researcher audit` command starts an audit with any model,
+  since the on-device tool prompt has about 10 characters of headroom
+  and can't offer the workflow.
+- **Tighter planning:** criteria must be specific questions, not
+  topic areas like "foundations" or "overview".
+- **Evidence imbalance** (spec §4.2's initial rule): a Supported
+  criterion is flagged when it rests on at least 2 distinct sources,
+  all from one host, and no supporting source's origin is unknown.
+  - Captures with the same text count once.
+  - Your own notes have no external origin, so they make independence
+    unknown and prevent the flag.
+- **Explicit questions** (§4.3): question lines in your own notes in
+  the scope are offered as criteria marked "From your note", unchecked,
+  up to 3. Blockquotes and code are skipped. Findings name the note.
+- **Run Again:** it re-asks the question as `@researcher audit`. An
+  earlier finished audit of the same question supplies the criteria,
+  checked state and items, so nothing is re-planned.
+- **Dismissals** (`audit_dismissals`, `research-audit-dismissals-v1`):
+  keyed by question, finding kind and criterion. A dismissal holds in
+  later audits until the set of items the finding cites changes.
+- **Fixtures:** 13 of the 14 scenarios in spec §11.1 are now covered.
+  Copied evidence, unknown provenance and the explicit question are
+  new. The no-meaningful-change scenario belongs to Stage 4.
+- **Stage 4 is next:** proactive re-audits.

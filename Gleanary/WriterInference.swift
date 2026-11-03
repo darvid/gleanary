@@ -130,7 +130,7 @@ extension AppleConversationInference: WriterInferring, DocumentDrafting {
         )
     }
 
-    private func generate<Value: Decodable>(
+    func generate<Value: Decodable>(
         instructions: String,
         prompt: String,
         root: DynamicGenerationSchema,

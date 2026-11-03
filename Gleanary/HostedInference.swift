@@ -782,6 +782,20 @@ extension HostedInference: WriterInferring, ResearchAuditing {
         return proposal
     }
 
+    func checkEvidence(_ check: EvidenceCheck) async throws -> [EvidenceVerdict] {
+        struct Verdicts: Decodable { let verdicts: [EvidenceVerdict] }
+        let fence = try await api.authorizationFence()
+        let result: Verdicts = try await structured(
+            prompt: check.prompt,
+            instructions: EvidenceCheck.instructions,
+            name: "evidence_check",
+            schema: check.jsonSchema,
+            fence: fence
+        )
+        try await api.validateFence(fence)
+        return result.verdicts
+    }
+
     func extractFacts(_ chunk: ExtractionChunk) async throws -> [ExtractedFact] {
         struct Facts: Decodable { let facts: [ExtractedFact] }
         let fence = try await api.authorizationFence()

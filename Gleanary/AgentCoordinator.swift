@@ -62,6 +62,12 @@ actor AgentCoordinator {
             try await continueNoteSeries(run, changed: changed)
             return
         }
+        if existingCaptureID == nil, Self.isAuditCommand(request) {
+            try await runAuditCommand(
+                taskID: taskID, request: request, selected: selected, changed: changed
+            )
+            return
+        }
         if let model = toolResponder(forCaptureRetry: existingCaptureID) {
             try await converseWithTools(
                 taskID: taskID,
