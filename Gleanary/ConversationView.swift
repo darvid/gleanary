@@ -771,6 +771,35 @@ struct ConversationView: View {
                 )
                 .id(scope.taskID)
             }
+            if let audit = model.audits[taskID] {
+                if audit.status == .awaiting {
+                    AuditScopeCard(
+                        audit: audit,
+                        busy: model.running,
+                        open: open,
+                        confirm: { selection, accepted in
+                            Task {
+                                await model.confirmAudit(
+                                    taskID, selection: selection, accepted: accepted
+                                )
+                            }
+                        },
+                        cancel: { Task { await model.cancelAudit(taskID) } }
+                    )
+                    .id(audit.taskID)
+                } else if let report = audit.report {
+                    AuditReportCard(
+                        audit: audit, report: report, open: open,
+                        dismiss: { id, dismissed in
+                            Task {
+                                await model.setAuditFindingDismissed(
+                                    taskID, dimensionID: id, dismissed: dismissed
+                                )
+                            }
+                        }
+                    )
+                }
+            }
         }
     }
 

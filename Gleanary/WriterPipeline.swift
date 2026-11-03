@@ -122,7 +122,24 @@ struct WriterPipeline {
         writer: any WriterInferring,
         calls: CallCount
     ) async throws -> [FactRecord] {
-        let fields = request.brief.fields
+        try await Self.extract(
+            source, fields: request.brief.fields, request: request.request, writer: writer,
+            calls: calls
+        )
+    }
+
+    /// The characters of an item that extraction reads; anything past it isn't read.
+    static func readLimit(local: Bool) -> Int {
+        (local ? WriterLimits.localChunk : WriterLimits.remoteChunk) * WriterLimits.chunksPerItem
+    }
+
+    static func extract(
+        _ source: WriterSourceText,
+        fields: [String],
+        request: String,
+        writer: any WriterInferring,
+        calls: CallCount
+    ) async throws -> [FactRecord] {
         let size = writer.local ? WriterLimits.localChunk : WriterLimits.remoteChunk
         let chunks = Array(AppleLinkSummarizer.chunks(source.text, limit: size)
             .prefix(WriterLimits.chunksPerItem))
@@ -131,7 +148,7 @@ struct WriterPipeline {
             try Task.checkCancellation()
             await calls.add()
             let facts = try await writer.extractFacts(ExtractionChunk(
-                title: source.title, text: chunk, fields: fields, request: request.request,
+                title: source.title, text: chunk, fields: fields, request: request,
                 part: index + 1, parts: chunks.count
             ))
             for record in FactRecord.verified(facts, in: chunk, fields: fields, sourceID: source.id)

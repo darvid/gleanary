@@ -753,7 +753,7 @@ extension HostedInference: RecommendationJudging {
 
 /// The Writer's gather plan and per-section extraction with ChatGPT. Each call carries one
 /// section of one source.
-extension HostedInference: WriterInferring {
+extension HostedInference: WriterInferring, ResearchAuditing {
     func brief(request: String, categories: [DecimalCategory]) async throws -> WriterBrief {
         let fence = try await api.authorizationFence()
         let brief: WriterBrief = try await structured(
@@ -765,6 +765,21 @@ extension HostedInference: WriterInferring {
         )
         try await api.validateFence(fence)
         return brief
+    }
+
+    func auditBrief(request: String, categories: [DecimalCategory]) async throws
+        -> AuditProposal
+    {
+        let fence = try await api.authorizationFence()
+        let proposal: AuditProposal = try await structured(
+            prompt: AuditBrief.prompt(request: request, categories: categories),
+            instructions: AuditBrief.instructions,
+            name: "audit_brief",
+            schema: AuditBrief.jsonSchema(categories: categories),
+            fence: fence
+        )
+        try await api.validateFence(fence)
+        return proposal
     }
 
     func extractFacts(_ chunk: ExtractionChunk) async throws -> [ExtractedFact] {
