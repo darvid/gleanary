@@ -5,11 +5,11 @@ import Foundation
 /// digest writes one new note and never edits another.
 extension AutomationEngine {
     /// Waits before each automatic retry of a failed capture; after the last, it stays in
-    /// Captures for you.
+    /// Activity for you.
     static let retryWaits: [TimeInterval] = [60 * 60, 24 * 60 * 60, 7 * 24 * 60 * 60]
     static let retryWaitLabels = ["an hour", "a day", "a week"]
     /// How long a run waits for one capture before moving on; the capture carries on in
-    /// Captures and the run reports it as still fetching.
+    /// Activity and the run reports it as still fetching.
     static let longestCapture: Duration = .seconds(2 * 60)
     static let digestSpan: TimeInterval = 7 * 24 * 60 * 60
 
@@ -99,13 +99,13 @@ extension AutomationEngine {
             // Stopped by hand, so not fetched again unasked.
             try await store.recordCheck(id, kind: Self.fetchCheck, at: now, state: "cancelled")
             run.skipped += 1
-            run.note(.skipped, id, title, "Stopped in Captures.")
+            run.note(.skipped, id, title, "Stopped in Activity.")
         case nil:
             run.skipped += 1
-            run.note(.skipped, id, title, "The fetch was removed from Captures.")
+            run.note(.skipped, id, title, "The fetch was removed from Activity.")
         default:
             run.skipped += 1
-            run.note(.skipped, id, title, "Still fetching; it carries on in Captures.")
+            run.note(.skipped, id, title, "Still fetching; it carries on in Activity.")
         }
     }
 
@@ -143,7 +143,7 @@ extension AutomationEngine {
                 run.note(.skipped, nil, candidate.host, job?.error ?? "The page couldn't be saved.")
             default:
                 run.skipped += 1
-                run.note(.skipped, nil, candidate.host, "Still saving; it carries on in Captures.")
+                run.note(.skipped, nil, candidate.host, "Still saving; it carries on in Activity.")
             }
         }
     }
@@ -204,11 +204,11 @@ extension AutomationEngine {
             run.skipped += 1
             let reason = result?.error ?? "It failed again."
             guard result?.retryable == true else {
-                return run.note(.skipped, item, title, "\(reason) Left in Captures for you.")
+                return run.note(.skipped, item, title, "\(reason) Left in Activity for you.")
             }
             guard attempt < Self.retryWaits.count else {
                 return run.note(
-                    .skipped, item, title, "\(reason) Failed every try; left in Captures for you."
+                    .skipped, item, title, "\(reason) Failed every try; left in Activity for you."
                 )
             }
             try await store.scheduleCaptureRetry(
@@ -220,13 +220,13 @@ extension AutomationEngine {
             )
         case .cancelled:
             run.skipped += 1
-            run.note(.skipped, item, title, "Stopped in Captures.")
+            run.note(.skipped, item, title, "Stopped in Activity.")
         case nil:
             run.skipped += 1
-            run.note(.skipped, item, title, "Removed from Captures.")
+            run.note(.skipped, item, title, "Removed from Activity.")
         default:
             run.skipped += 1
-            run.note(.skipped, item, title, "Still running; it carries on in Captures.")
+            run.note(.skipped, item, title, "Still running; it carries on in Activity.")
         }
     }
 

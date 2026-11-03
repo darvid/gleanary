@@ -534,14 +534,15 @@ struct ContentView: View {
                     openSource: { source = $0 },
                     pendingReviews: library.automations.pendingCount,
                     reviewChanges: { sidebarSelection.wrappedValue = .automations },
-                    undoRun: { await library.automations.undoRun($0) }
-                )
+                    undoRun: { await library.automations.undoRun($0) },
+                    intakeCount: intakeCaptures.count
+                ) { captureIntake }
             } else {
                 WorkingProgress("Opening activity…")
             }
         } else if automating {
             AutomationsView(model: library.automations, open: openSavedItem)
-        } else if scope == .captures || scope == .archived || presentation == .list {
+        } else if scope == .archived || presentation == .list {
             libraryColumns
         } else if presentation == .graph {
             graphPane
@@ -710,15 +711,7 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var libraryColumns: some View {
-        if scope == .captures, visibleCaptures.isEmpty {
-            // One empty state for the whole area, rather than one per column at different heights.
-            ContentUnavailableView(
-                "No captures yet",
-                systemImage: "tray",
-                description: Text("Save a URL in Chat or import a document.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if scopeIsEmpty {
+        if scopeIsEmpty {
             ContentUnavailableView {
                 Label(
                     library.documentGrid
@@ -749,30 +742,14 @@ struct ContentView: View {
 
     private var splitColumns: some View {
         HSplitView {
-            Group {
-                if scope == .captures {
-                    captureList
-                } else {
-                    documentList
-                }
-            }.frame(
+            documentList.frame(
                 minWidth: 260,
                 idealWidth: 330,
                 maxWidth: 440,
                 maxHeight: .infinity,
                 alignment: .top
             )
-            Group {
-                if scope == .captures {
-                    ContentUnavailableView(
-                        "Capture recovery",
-                        systemImage: "tray.and.arrow.down",
-                        description: Text("Retry a failed capture or open what it saved.")
-                    )
-                } else {
-                    detail()
-                }
-            }.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            detail().frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         // A split view centers columns shorter than itself, such as an empty list.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1078,7 +1055,6 @@ struct ContentView: View {
             ("Notes", "note.text", .library(.notes)),
             ("Sources", "doc.text", .library(.sources)),
             ("Unfiled", "folder.badge.questionmark", .library(.unfiled)),
-            ("Captures", "tray.and.arrow.down", .library(.captures)),
             ("Archived", "archivebox", .library(.archived)),
             ("Tasks", "checklist", .tasks),
             ("Entities", "person.2", .entities),
@@ -1326,14 +1302,17 @@ struct ContentView: View {
                         colorScheme == .dark || showingTasks ? .white : .black))
                     .tag(SidebarItem.tasks)
             }
+            // Upkeep: Activity first, as the overview of the queues beneath it. It holds
+            // captures too, so its only badge is the failures that need you.
             Section {
                 HStack {
-                    Label("Captures", systemImage: "tray.and.arrow.down")
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.captures)))
+                    Label("Activity", systemImage: "clock")
+                        .labelStyle(LibrarySidebarLabelStyle(color:
+                            colorScheme == .dark || showingActivity ? .white : .black))
                     Spacer()
                     // Only failures are counted, so the badge says so instead of looking like a
                     // total.
-                    let issues = library.captureJobs.filter { $0.state == .failed }.count
+                    let issues = intakeCaptures.count { $0.state == .failed }
                     if issues > 0 {
                         // Not a Label: the sidebar sizes label icons like row icons.
                         HStack(spacing: 3) {
@@ -1349,7 +1328,7 @@ struct ContentView: View {
                         .accessibilityLabel(issues == 1 ? "1 capture needs attention"
                             : "\(issues) captures need attention")
                     }
-                }.foregroundStyle(sidebarColor(.captures)).tag(SidebarItem.library(.captures))
+                }.tag(SidebarItem.activity)
                 HStack {
                     let color: Color = colorScheme == .dark || (automating && !chatting)
                         ? .white : .black
@@ -1378,10 +1357,6 @@ struct ContentView: View {
                                 : "\(waiting) proposals to review")
                     }
                 }.tag(SidebarItem.automations)
-                Label("Activity", systemImage: "clock")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingActivity ? .white : .black))
-                    .tag(SidebarItem.activity)
                 Label("Archive", systemImage: "archivebox")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.archived)))
                     .tag(SidebarItem.library(.archived))
@@ -1761,35 +1736,37 @@ struct ContentView: View {
         library.captureJobs.filter { $0.request.replacingNoteID == nil || $0.state == .failed }
     }
 
-    private var captureList: some View {
-        let failed = visibleCaptures.filter { $0.state == .failed }
-        let others = visibleCaptures.filter { $0.state != .failed }
-        // No heading of its own: the toolbar already says Captures.
-        return VStack(alignment: .leading, spacing: 0) {
-            List {
-                // The sidebar badge counts these; the same mark finds them here.
-                if !failed.isEmpty {
-                    Section {
-                        ForEach(failed) { captureRow($0) }
-                    } header: {
-                        HStack {
-                            Text("Needs Attention")
-                            Spacer()
-                            Button("Clear All") {
-                                Task { await library.clearFailedCaptures() }
-                            }
-                            .buttonStyle(.borderless).controlSize(.small)
-                            .help("Forget every failed capture. Saved items aren't affected.")
-                        }
+    /// Captures still being saved, or failed and waiting for you; finished ones are in
+    /// Activity's timeline.
+    private var intakeCaptures: [CaptureJob] {
+        visibleCaptures.filter { $0.state == .failed || !$0.state.terminal }
+    }
+
+    /// Activity's pinned sections: failures first, since they need you, then what's saving.
+    @ViewBuilder private var captureIntake: some View {
+        let failed = intakeCaptures.filter { $0.state == .failed }
+        let saving = intakeCaptures.filter { $0.state != .failed }
+        if !failed.isEmpty {
+            Section {
+                ForEach(failed) { captureRow($0) }
+            } header: {
+                HStack {
+                    // The sidebar badge counts these; the same mark finds them here.
+                    Text("Needs Attention")
+                    Spacer()
+                    Button("Clear All") {
+                        Task { await library.clearFailedCaptures() }
                     }
-                    Section("Recent") {
-                        ForEach(others) { captureRow($0) }
-                    }
-                } else {
-                    ForEach(others) { captureRow($0) }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .help("Forget every failed capture. Saved items aren't affected.")
                 }
             }
-        }.navigationSplitViewColumnWidth(min: 260, ideal: 360, max: 480)
+        }
+        if !saving.isEmpty {
+            Section("Saving") {
+                ForEach(saving) { captureRow($0) }
+            }
+        }
     }
 
     private func captureRow(_ job: CaptureJob) -> some View {
@@ -1932,14 +1909,9 @@ struct ContentView: View {
                 }
             }
             Spacer()
-            Button("Show in Captures") {
+            Button("Show in Activity") {
                 library.captureFailure = nil
-                chatting = false
-                automating = false
-                showingActivity = false
-                showingTasks = false
-                showingEntities = false
-                scope = .captures
+                sidebarSelection.wrappedValue = .activity
             }
             Button("Try Again") {
                 library.captureFailure = nil

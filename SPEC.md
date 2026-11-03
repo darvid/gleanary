@@ -547,7 +547,7 @@ Default settings, chosen so the two automations that only finish work you starte
 - Selects imported bookmarks still unedited, with no page fetch queued, running or failed, that the fetcher hasn't tried; newest first.
 - Fetches through the same capture path as opening a bookmark, so it upgrades the note in place and follows the Capture settings for summaries and page previews. If the automation is on-device only and ChatGPT writes summaries, pages are fetched without one. Each summary counts toward its model calls per day.
 - One page at a time; a site already fetched in the run waits a moment first. The capture path applies the URL policy (no cookies or credentials, private and local addresses blocked).
-- A fetch that fails is reported once and never fetched again unasked: the item keeps Try Again, and if the failure may pass, the failed-capture retry takes it from there. A fetch stopped in Captures isn't restarted. Undo puts the bookmark text back where the item hasn't changed since.
+- A fetch that fails is reported once and never fetched again unasked: the item keeps Try Again, and if the failure may pass, the failed-capture retry takes it from there. A fetch stopped in Activity isn't restarted. Undo puts the bookmark text back where the item hasn't changed since.
 - Runs it starts don't raise the window's capture notice; the run's history reports them.
 
 **Failed-capture retry rules.**
@@ -594,7 +594,7 @@ Default settings, chosen so the two automations that only finish work you starte
 - An **Automations** list, in the sidebar or Settings. Each row has an on/off toggle, schedule, last run (succeeded / needs attention), next run and **Run Now**.
 - New automations start from the templates above.
 - An automation's detail view shows its recipe and its run history; each run expands to its report and changeset.
-- Pending proposals from all automations appear in one review queue with a badge, like Captures.
+- Pending proposals from all automations appear in one review queue with a badge, like failed captures in Activity.
 - Status text and counts follow the shared text motion in DESIGN.md.
 
 ### 7.5 Archive and trash

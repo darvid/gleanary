@@ -1064,7 +1064,7 @@ extension AutomationTests {
         let last = await automation.run(retry)
         #expect(await fetcher.attempts == 4)
         #expect(last.entries.first?.outcome == .skipped)
-        #expect(last.entries.first?.detail.contains("left in Captures") == true)
+        #expect(last.entries.first?.detail.contains("left in Activity") == true)
         clock.advance(days: 60)
         #expect(await automation.run(retry).examined == 0)
         let job = try #require(await store.captureJobs().first)
