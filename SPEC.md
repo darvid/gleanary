@@ -779,10 +779,19 @@ question, using only the person's saved items. It reports what the
 audited evidence doesn't establish, never that research doesn't exist.
 Design and stage plan: `RESEARCH_GAPS.md`.
 
-- **Start.** Chat starts it through the `audit_research` workflow, with
-  ChatGPT only. On-device models decline before reading anything.
+- **Start.** Any configured model can run it. "@researcher audit
+  <question>" starts one directly, routed by the app, so it doesn't
+  depend on the model choosing it. Hosted models (ChatGPT, OpenAI,
+  Claude, Gemini, OpenRouter) can also start it from a plain question
+  through the `audit_research` workflow. The on-device tool prompt has
+  no room to offer that workflow, so on device the command is the way
+  in.
+- **Providers.** Hosted models read up to 60 items. Apple's on-device
+  model plans and checks by guided generation, and reads up to 4 items
+  in 3,000-character sections, as the on-device Writer does.
 - **Scope.** One structured call proposes search keywords, categories
-  and up to 6 criteria (label, answer criteria, origin quote, other
+  and up to 6 criteria, each a specific question rather than a topic
+  area (label, answer criteria, origin quote, other
   terms, an answer phrase). A criterion starts checked only when its
   origin quote is really in the request; the model's suggestions start
   unchecked and are labeled. Candidates come from the Writer's gather
@@ -795,9 +804,16 @@ Design and stage plan: `RESEARCH_GAPS.md`.
   searches (the label, its other terms and an answer phrase) find
   matching passages in up to 6 items, which are read for an answer.
   An answer outside the scope rejects the gap and says where it was.
-- **Coverage.** Supported, Not found, Unknown or Not checked, as text.
-  Unknown replaces Not found when an item was only partly saved or
-  couldn't be read, or a search or read failed. Keyword-only search is
+- **Support check.** A quote being in the text proves only that it's
+  real. Before any quote counts, one call per criterion judges each
+  quote (up to 12): meets, partial, or none. Quotes that only mention
+  the topic, or need inference, are dropped. The check can narrow the
+  evidence, never add to it.
+- **Coverage.** Supported, Partly covered, Not found, Unknown or Not
+  checked, as text. Partly covered means quotes address only part of
+  the criterion, and each shows what it leaves out. Unknown replaces
+  the others when an item was only partly saved or couldn't be read,
+  or a search, read or support check failed. Keyword-only search is
   noted but accepted.
 - **Report.** A chat card shows up to 3 possible gaps (more behind Show
   More), each with bounded wording, why it matters, and how it was
@@ -805,8 +821,19 @@ Design and stage plan: `RESEARCH_GAPS.md`.
   finding without changing its coverage. A report whose items changed
   or were deleted is marked stale, and quotes from deleted items aren't
   shown. Reports live with the conversation; clearing it removes them.
-- **Later.** Evidence imbalance, explicit questions from notes,
-  dismissals that persist across audits, and proactive audits.
+- **Imbalance.** A supported criterion that rests on 2 or more distinct
+  sources, all from one site, is flagged "One source". Copies of one
+  text count once, and any supporting item of unknown origin (your own
+  notes included) prevents the flag.
+- **Questions from your notes.** Question lines in your notes in the
+  scope are offered as unchecked criteria marked "From your note"; up
+  to 3, skipping blockquotes and code.
+- **Run Again.** It re-asks the question with "@researcher audit". An
+  earlier finished audit of the same question supplies its criteria,
+  checks and items, so the reports compare.
+- **Dismissals carry over** to later audits of the same question until
+  the set of items the finding cites changes.
+- **Later.** Proactive audits.
 
 ### 7.10 Entity links in the reader
 

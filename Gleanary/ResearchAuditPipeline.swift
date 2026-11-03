@@ -3,11 +3,13 @@ import Foundation
 /// Runs a confirmed audit: reads every confirmed item for the accepted criteria, then, for each
 /// criterion nothing answered, searches the whole library three ways and reads what it finds.
 /// A criterion is reported "not found" only when that whole protocol ran; anything that could
-/// hide an answer makes it "unknown" instead.
+/// hide an answer makes it "unknown" instead. Every quote passes a support check before it
+/// counts, so a real quote that only mentions the topic isn't an answer.
 struct ResearchAuditPipeline {
     let store: DocumentStore
     let search: SearchEngine
     let writer: any WriterInferring
+    let auditor: any ResearchAuditing
 
     func run(
         _ audit: ResearchAudit,
@@ -26,19 +28,45 @@ struct ResearchAuditPipeline {
         var results: [DimensionResult] = []
         for dimension in audit.brief.dimensions {
             try Task.checkCancellation()
-            let found = reading.evidence[dimension.label.lowercased()] ?? []
-            guard dimension.accepted, found.isEmpty else {
+            guard dimension.accepted else {
                 results.append(DimensionResult(
-                    dimension: dimension, coverage: dimension.accepted ? .supported : .outOfScope,
-                    evidence: found, searches: [], searchedItems: 0, limitations: []
+                    dimension: dimension, coverage: .outOfScope, evidence: [], searches: [],
+                    searchedItems: 0, limitations: []
                 ))
                 continue
             }
-            let hidden = try await counterevidence(
+            await progress("Checking “\(dimension.label)”", nil)
+            let found = try await check(
+                reading.evidence[dimension.label.lowercased()] ?? [], against: dimension,
+                question: audit.request, calls: calls
+            )
+            if !found.meets.isEmpty {
+                results.append(DimensionResult(
+                    dimension: dimension, coverage: .supported,
+                    evidence: found.meets + found.partial, searches: [], searchedItems: 0,
+                    limitations: []
+                ))
+                continue
+            }
+            var hidden = try await counterevidence(
                 dimension, request: request, calls: calls, scope: Set(audit.selection)
             )
+            let checked = try await check(
+                hidden.evidence, against: dimension, question: audit.request, calls: calls
+            )
+            hidden.evidence = checked.meets
+            hidden.partial = found.partial + checked.partial
+            hidden.failures += found.failures + checked.failures
             keywordOnly = keywordOnly || hidden.keywordOnly
             results.append(Self.result(dimension, hidden: hidden, blocking: reading.blocking))
+        }
+        let origins = try await store.auditOrigins(
+            results.filter { $0.coverage == .supported }.flatMap(\.evidence).map(\.itemID)
+        )
+        for index in results.indices where results[index].coverage == .supported {
+            results[index].imbalance = AuditImbalance.detect(
+                results[index].evidence, origins: origins
+            )
         }
         if keywordOnly {
             reading.notes
@@ -133,27 +161,85 @@ struct ResearchAuditPipeline {
         return records
     }
 
-    /// A criterion nothing in the scope answered: supported if the library search found an
-    /// answer, not found only if every search and item read worked.
+    /// A criterion nothing in the scope fully answered: supported if the library search found
+    /// an answer; unknown if anything that might answer it wasn't read or checked; partly
+    /// covered if quotes address part of it; not found only when nothing did.
     private static func result(
         _ dimension: AuditDimension,
         hidden: Counterevidence,
         blocking: [String]
     ) -> DimensionResult {
-        let coverage: AuditCoverage = !hidden.evidence.isEmpty ? .supported
-            : hidden.failures.isEmpty && blocking.isEmpty ? .notFound : .unknown
+        let coverage: AuditCoverage = if !hidden.evidence.isEmpty {
+            .supported
+        } else if !hidden.failures.isEmpty || !blocking.isEmpty {
+            .unknown
+        } else {
+            hidden.partial.isEmpty ? .notFound : .limited
+        }
         var limitations = hidden.failures + (coverage == .unknown ? blocking : [])
         if hidden.evidence.contains(where: \.outsideScope) {
             limitations.append("Answered by an item outside the audit's scope.")
         }
         return DimensionResult(
-            dimension: dimension, coverage: coverage, evidence: hidden.evidence,
+            dimension: dimension, coverage: coverage, evidence: hidden.evidence + hidden.partial,
             searches: hidden.searches, searchedItems: hidden.items, limitations: limitations
         )
     }
 
+    /// Quotes the support check judged, by verdict. A failed check counts nothing, and says so.
+    private struct Checked {
+        var meets: [AuditEvidence] = []
+        var partial: [AuditEvidence] = []
+        var failures: [String] = []
+    }
+
+    private func check(
+        _ evidence: [AuditEvidence],
+        against dimension: AuditDimension,
+        question: String,
+        calls: CallCount
+    ) async throws -> Checked {
+        var checked = Checked()
+        let quotes = Array(evidence.prefix(AuditLimits.checkedQuotes))
+        guard !quotes.isEmpty else { return checked }
+        do {
+            await calls.add()
+            let verdicts = try await auditor.checkEvidence(EvidenceCheck(
+                question: question, dimension: dimension,
+                quotes: quotes.enumerated().map {
+                    .init(id: "q\($0.offset + 1)", title: $0.element.title, quote: $0.element.quote)
+                }
+            ))
+            let byID = Dictionary(
+                verdicts.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            // A quote the check didn't return a verdict for isn't counted.
+            for (index, quote) in quotes.enumerated() {
+                guard let verdict = byID["q\(index + 1)"] else { continue }
+                var judged = quote
+                judged.support = verdict.support
+                judged.reason = String(verdict.reason.prefix(200))
+                switch verdict.support {
+                case .meets: checked.meets.append(judged)
+                case .partial: checked.partial.append(judged)
+                case .none: break
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            checked.failures.append(
+                "Couldn't check whether quotes answer “\(dimension.label)”: \(error.localizedDescription)"
+            )
+        }
+        return checked
+    }
+
     private struct Counterevidence {
         var evidence: [AuditEvidence] = []
+        /// Quotes that address only part of the criterion, from the scope or the search.
+        var partial: [AuditEvidence] = []
         var searches: [AuditSearch] = []
         var items = 0
         var failures: [String] = []
@@ -212,7 +298,10 @@ struct ResearchAuditPipeline {
             do {
                 await calls.add()
                 let facts = try await writer.extractFacts(ExtractionChunk(
-                    title: title, text: String(text.prefix(WriterLimits.remoteChunk)),
+                    title: title,
+                    text: String(text.prefix(
+                        writer.local ? WriterLimits.localChunk : WriterLimits.remoteChunk
+                    )),
                     fields: [dimension.label], request: request, part: 1, parts: 1
                 ))
                 for record in FactRecord.verified(

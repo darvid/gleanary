@@ -101,22 +101,29 @@ struct AuditScopeCard: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(dimension.label)
-                    Text(dimension.fromRequest ? "From your request" : "Suggested")
+                    Text(dimension.note != nil ? "From your note"
+                        : dimension.fromRequest ? "From your request" : "Suggested")
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(
-                            Color.primary.opacity(dimension.fromRequest ? 0.08 : 0.14),
+                            Color.primary.opacity(dimension.suggested ? 0.14 : 0.08),
                             in: Capsule()
                         )
-                        .help(dimension.fromRequest ? "“\(dimension.origin)”"
-                            :
-                            "Your request doesn't ask for this, so it's only checked if you check it")
+                        .help(Self.originHelp(dimension))
                 }
                 Text(dimension.criteria).font(.caption)
                     .foregroundStyle(Color.primary.opacity(0.72))
             }
         }
         .toggleStyle(.checkbox).font(.callout)
+    }
+
+    private static func originHelp(_ dimension: AuditDimension) -> String {
+        if let title = dimension.noteTitle {
+            return "Asked in “\(title)”"
+        }
+        return dimension.fromRequest ? "“\(dimension.origin)”"
+            : "Your request doesn't ask for this, so it's only checked if you check it"
     }
 
     private func item(_ candidate: ScopeCandidate) -> some View {
@@ -157,6 +164,7 @@ struct AuditReportCard: View {
     let report: AuditReport
     let open: (UUID) -> Void
     let dismiss: (String, Bool) -> Void
+    let runAgain: () -> Void
 
     private var checked: [DimensionResult] {
         report.results.filter { $0.coverage != .outOfScope }
@@ -165,13 +173,13 @@ struct AuditReportCard: View {
     /// Possible gaps, then what couldn't be assessed, then what's answered, then the rest.
     private var rows: [DimensionResult] {
         func rank(_ result: DimensionResult) -> Int {
-            if result.isGap {
+            if result.isFinding {
                 return 0
             }
             switch result.coverage {
             case .unknown: return 1
             case .supported: return 2
-            case .notFound: return 3
+            case .notFound, .limited: return 3
             case .outOfScope: return 4
             }
         }
@@ -207,10 +215,16 @@ struct AuditReportCard: View {
             ForEach(report.limitations, id: \.self) {
                 Text($0).font(.caption).foregroundStyle(Color.primary.opacity(0.72))
             }
-            Text(
-                "These states describe what your saved items establish, not whether the conclusions are true."
-            )
-            .font(.caption).foregroundStyle(Color.primary.opacity(0.6))
+            HStack(alignment: .firstTextBaseline) {
+                Text(
+                    "These states describe what your saved items establish, not whether the conclusions are true."
+                )
+                .font(.caption).foregroundStyle(Color.primary.opacity(0.6))
+                Spacer(minLength: 8)
+                Button("Run Again", action: runAgain)
+                    .controlSize(.small)
+                    .help("Audit the same question again with the same criteria")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -228,6 +242,10 @@ struct AuditReportCard: View {
         if unknown > 0 {
             return "No gaps found, but \(unknown == 1 ? "1 criterion" : "\(unknown) criteria") couldn't be assessed."
         }
+        let concentrated = report.findings.count(where: { $0.imbalance != nil })
+        if concentrated > 0 {
+            return "No gaps found, but \(concentrated == 1 ? "1 criterion rests" : "\(concentrated) criteria rest") on a single site."
+        }
         return "No gaps found: every criterion you checked is answered by a quote from your items."
     }
 
@@ -235,9 +253,13 @@ struct AuditReportCard: View {
         if result.dismissed {
             return ("Dismissed", .gray)
         }
+        if result.imbalance != nil {
+            return ("One source", .purple)
+        }
         return switch result.coverage {
         case .supported: ("Supported", .green)
         case .notFound: ("Possible gap", .orange)
+        case .limited: ("Partly covered", .yellow)
         case .unknown: ("Unknown", .gray)
         case .outOfScope: ("Not checked", .clear)
         }
@@ -246,6 +268,9 @@ struct AuditReportCard: View {
     /// One line on what the status rests on.
     private func basis(_ result: DimensionResult) -> String {
         let items = Set(result.evidence.map(\.itemID)).count
+        if let imbalance = result.imbalance {
+            return "Supported, but every source is from \(imbalance.origin)"
+        }
         switch result.coverage {
         case .supported:
             let quotes = result.evidence.count == 1 ? "1 quote" : "\(result.evidence.count) quotes"
@@ -254,6 +279,9 @@ struct AuditReportCard: View {
             return "\(quotes) from \(AuditReport.items(items))\(outside)"
         case .notFound:
             return "Not in the \(AuditReport.items(report.read)) read or a library search"
+        case .limited:
+            let quotes = result.evidence.count == 1 ? "1 quote" : "\(result.evidence.count) quotes"
+            return "\(quotes) from \(AuditReport.items(items)) answer it only in part"
         case .unknown:
             return result.limitations.first ?? "Something that might answer it wasn't read"
         case .outOfScope:
@@ -290,7 +318,14 @@ struct AuditReportCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Checked for: \(result.dimension.criteria)")
                 .foregroundStyle(Color.primary.opacity(0.72))
-            if result.coverage == .notFound {
+            if let imbalance = result.imbalance {
+                Text(AuditReport.imbalanceObservation(imbalance))
+                Button(result.dismissed ? "Show Finding Again" : "Dismiss") {
+                    dismiss(result.id, !result.dismissed)
+                }
+                .controlSize(.small)
+            }
+            if result.coverage == .notFound || result.coverage == .limited {
                 Text(AuditReport.observation(result, report: report))
                 Text(AuditReport.reason(result.dimension))
                     .foregroundStyle(Color.primary.opacity(0.72))
@@ -300,7 +335,7 @@ struct AuditReportCard: View {
                             : "Searched “\(search.query)”: \(search.matches) passages")
                     }
                     Text(
-                        "Read the matching passages of \(AuditReport.items(result.searchedItems)); none met the criterion."
+                        "Read the matching passages of \(AuditReport.items(result.searchedItems)); none fully met the criterion."
                     )
                 }
                 .foregroundStyle(Color.primary.opacity(0.72))
@@ -321,13 +356,21 @@ struct AuditReportCard: View {
                     }
                     .buttonStyle(.link)
                     .help("Open this item")
-                    ForEach(item.quotes, id: \.self) { quote in
-                        Text(quote).textSelection(.enabled)
-                            .foregroundStyle(Color.primary.opacity(0.85))
-                            .padding(.leading, 8)
-                            .overlay(alignment: .leading) {
-                                Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 2)
+                    ForEach(Array(item.quotes.enumerated()), id: \.offset) { _, evidence in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(evidence.quote).textSelection(.enabled)
+                                .foregroundStyle(Color.primary.opacity(0.85))
+                            if evidence.support == .partial, let reason = evidence.reason,
+                               !reason.isEmpty
+                            {
+                                Text("Partly: \(reason)")
+                                    .foregroundStyle(Color.primary.opacity(0.72))
                             }
+                        }
+                        .padding(.leading, 8)
+                        .overlay(alignment: .leading) {
+                            Rectangle().fill(Color.primary.opacity(0.18)).frame(width: 2)
+                        }
                     }
                 }
             }
@@ -342,16 +385,16 @@ struct AuditReportCard: View {
 
     /// Quotes under their item, in the order items first appear.
     private static func byItem(_ evidence: [AuditEvidence])
-        -> [(id: UUID, title: String, outsideScope: Bool, quotes: [String])]
+        -> [(id: UUID, title: String, outsideScope: Bool, quotes: [AuditEvidence])]
     {
         var order: [UUID] = []
-        var grouped: [UUID: (title: String, outsideScope: Bool, quotes: [String])] = [:]
+        var grouped: [UUID: (title: String, outsideScope: Bool, quotes: [AuditEvidence])] = [:]
         for item in evidence {
             if grouped[item.itemID] == nil {
                 order.append(item.itemID)
                 grouped[item.itemID] = (item.title, item.outsideScope, [])
             }
-            grouped[item.itemID]?.quotes.append(item.quote)
+            grouped[item.itemID]?.quotes.append(item)
         }
         return order.compactMap { id in
             grouped[id].map { (id, $0.title, $0.outsideScope, $0.quotes) }

@@ -18,6 +18,11 @@ private actor FakeAuditor: ConversationInferring, WriterInferring, AgentRespondi
     private var failing: Set<String> = []
     /// Reports an answer for every criterion, quoting text no item contains.
     private var fabricates = false
+    /// The support check's verdicts, by a phrase in the quote; any other quote meets.
+    private var verdicts: [String: EvidenceSupport] = [:]
+    private var checkFails = false
+    private(set) var checked: [EvidenceCheck.Quote] = []
+    private(set) var briefs = 0
 
     init(proposal: AuditProposal, answers: [String: [String]], local: Bool = false) {
         self.proposal = proposal
@@ -36,8 +41,31 @@ private actor FakeAuditor: ConversationInferring, WriterInferring, AgentRespondi
         fabricates = true
     }
 
+    func judge(_ phrase: String, _ support: EvidenceSupport) {
+        verdicts[phrase] = support
+    }
+
+    func failChecks() {
+        checkFails = true
+    }
+
+    func checkEvidence(_ check: EvidenceCheck) throws -> [EvidenceVerdict] {
+        checked += check.quotes
+        if checkFails {
+            throw ConversationError.invalidOutput
+        }
+        return check.quotes.map { quote in
+            let support = verdicts.first { quote.quote.contains($0.key) }?.value ?? .meets
+            return EvidenceVerdict(
+                id: quote.id, support: support,
+                reason: support == .partial ? "Covers metadata, not document edits." : ""
+            )
+        }
+    }
+
     func auditBrief(request _: String, categories _: [DecimalCategory]) -> AuditProposal {
-        proposal
+        briefs += 1
+        return proposal
     }
 
     func brief(request _: String, categories _: [DecimalCategory]) -> WriterBrief {
@@ -370,6 +398,293 @@ private actor FakeAuditor: ConversationInferring, WriterInferring, AgentRespondi
         ])
     }
 
+    // MARK: Support check
+
+    @Test func aRealQuoteThatDoesNotAnswerTheCriterionIsRejected() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        await auditor.judge("last-writer-wins", .none)
+        let (_, report) = try await audit(library, auditor)
+
+        let conflict = try result(report, "Conflict resolution")
+        // The quote is in the item, but the check says it doesn't answer: so it's a gap, and
+        // the library was searched for a real answer first.
+        #expect(await auditor.checked.contains { $0.quote.contains("last-writer-wins") })
+        #expect(conflict.coverage == .notFound)
+        #expect(conflict.evidence.isEmpty)
+        #expect(!conflict.searches.isEmpty)
+    }
+
+    @Test func aPartialAnswerIsPartlyCoveredWithWhatItLeavesOut() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        await auditor.judge("last-writer-wins", .partial)
+        let (task, report) = try await audit(library, auditor)
+
+        let conflict = try result(report, "Conflict resolution")
+        #expect(conflict.coverage == .limited)
+        #expect(conflict.isGap)
+        let quote = try #require(conflict.evidence.first)
+        #expect(quote.support == .partial)
+        #expect(quote.reason == "Covers metadata, not document edits.")
+        #expect(!conflict.searches.isEmpty)
+        #expect(AuditReport.observation(conflict, report: report).contains("only in part"))
+        let reply = try #require(await library.store.conversationMessages()
+            .last { $0.taskID == task && $0.author == "assistant" })
+        #expect(reply.text.contains("2 possible gaps"))
+    }
+
+    @Test func aFailedSupportCheckMakesTheCriterionUnknown() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        await auditor.failChecks()
+        let (_, report) = try await audit(library, auditor)
+
+        let conflict = try result(report, "Conflict resolution")
+        #expect(conflict.coverage == .unknown)
+        #expect(conflict.limitations.contains { $0.contains("Couldn't check") })
+        #expect(report.gaps.map(\.dimension.label) == ["Replica recovery"])
+    }
+
+    @Test func planningAsksForQuestionsNotTopicAreas() {
+        #expect(AuditBrief.instructions.contains("specific questions"))
+        #expect(AuditBrief.instructions.contains("umbrella labels"))
+        #expect(EvidenceCheck.instructions.contains("untrusted data"))
+    }
+
+    // MARK: Evidence imbalance
+
+    private func evidence(_ id: UUID, _ support: EvidenceSupport = .meets) -> AuditEvidence {
+        AuditEvidence(
+            itemID: id, title: "", value: "", quote: "", outsideScope: false, support: support
+        )
+    }
+
+    @Test func supportFromOneSiteIsAnImbalance() throws {
+        let (a, b) = (UUID(), UUID())
+        let origins: [UUID: AuditImbalance.Origin] = [
+            a: .init(host: "vendor.example", contentHash: "h1"),
+            b: .init(host: "vendor.example", contentHash: "h2"),
+        ]
+        let found = try #require(AuditImbalance.detect(
+            [evidence(a), evidence(b)],
+            origins: origins
+        ))
+        #expect(found == AuditImbalance(origin: "vendor.example", sources: 2))
+        #expect(AuditReport.imbalanceObservation(found).contains("doesn't make the claims wrong"))
+        #expect(AuditImbalance
+            .host(of: URL(string: "https://www.Vendor.example/a")) == "vendor.example")
+    }
+
+    @Test func copiesOfOneTextCountAsOneSource() {
+        let (a, b, c) = (UUID(), UUID(), UUID())
+        let mirror: [UUID: AuditImbalance.Origin] = [
+            a: .init(host: "vendor.example", contentHash: "same"),
+            b: .init(host: "vendor.example", contentHash: "same"),
+        ]
+        #expect(AuditImbalance.detect([evidence(a), evidence(b)], origins: mirror) == nil)
+        var three = mirror
+        three[c] = .init(host: "vendor.example", contentHash: "other")
+        #expect(AuditImbalance.detect(
+            [evidence(a), evidence(b), evidence(c)], origins: three
+        )?.sources == 2)
+    }
+
+    @Test func unknownOriginsAndSeveralSitesAreNotImbalances() {
+        let (a, b) = (UUID(), UUID())
+        // Your own note has no external origin, so independence stays unknown.
+        let unknown: [UUID: AuditImbalance.Origin] = [
+            a: .init(host: "vendor.example", contentHash: "h1"),
+            b: .init(host: nil, contentHash: nil),
+        ]
+        #expect(AuditImbalance.detect([evidence(a), evidence(b)], origins: unknown) == nil)
+        let several: [UUID: AuditImbalance.Origin] = [
+            a: .init(host: "vendor.example", contentHash: "h1"),
+            b: .init(host: "review.example", contentHash: "h2"),
+        ]
+        #expect(AuditImbalance.detect([evidence(a), evidence(b)], origins: several) == nil)
+        // Partial support doesn't count toward what a criterion rests on.
+        let one: [UUID: AuditImbalance.Origin] = [
+            a: .init(host: "vendor.example", contentHash: "h1"),
+            b: .init(host: "vendor.example", contentHash: "h2"),
+        ]
+        #expect(AuditImbalance.detect(
+            [evidence(a), evidence(b, .partial)], origins: one
+        ) == nil)
+    }
+
+    private func capture(
+        _ store: DocumentStore, url: String, title: String, text: String
+    ) async throws -> UUID {
+        let request = try CaptureRequest(
+            url: #require(URL(string: url)), identity: "fixture:\(url)", label: title
+        )
+        _ = try await store.enqueueCapture(request)
+        let job = try #require(await store.claimCapture())
+        return try await store.publishCapture(job, document: CapturedDocument(
+            title: title, sourceURL: request.url, coverage: .article,
+            blocks: [ContentBlock(kind: .paragraph, markdown: text, text: text)]
+        ), artifacts: [])
+    }
+
+    @Test func anAuditFlagsACriterionSupportedOnlyByOneSite() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let first = try await capture(
+            library.store, url: "https://vendor.example/sync-one", title: "Vendor sync guide",
+            text: "Our sync engine is fast. Conflict resolution uses vector clocks."
+        )
+        let second = try await capture(
+            library.store, url: "https://www.vendor.example/sync-two", title: "Vendor sync FAQ",
+            text: "Sync questions answered. Conflict resolution uses vector clocks per field."
+        )
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        let (task, report) = try await audit(library, auditor, selection: [first, second])
+
+        let conflict = try result(report, "Conflict resolution")
+        #expect(conflict.coverage == .supported)
+        #expect(conflict.imbalance == AuditImbalance(origin: "vendor.example", sources: 2))
+        #expect(conflict.isFinding && !conflict.isGap)
+        #expect(report.findings.contains { $0.id == conflict.id })
+        let reply = try #require(await library.store.conversationMessages()
+            .last { $0.taskID == task && $0.author == "assistant" })
+        #expect(reply.text.contains("rests on a single site"))
+        // Loading the report for chat keeps the finding.
+        let loaded = try #require(await library.store.conversationAudits()
+            .first { $0.taskID == task }?.report)
+        #expect(try result(loaded, "Conflict resolution").imbalance != nil)
+    }
+
+    // MARK: Questions from your notes
+
+    @Test func questionsAreFoundInNotesButNotInCodeOrShortLines() {
+        let markdown = """
+        # How does sync recover a corrupted replica?
+        - [ ] Which clients replay writes after a crash?
+        > Is this fine?
+        Plain statement.
+        ```
+        What does this code return?
+        ```
+        1. Which clients replay writes after a crash?
+        """
+        #expect(NoteQuestions.find(in: markdown, limit: 5) == [
+            "How does sync recover a corrupted replica?",
+            "Which clients replay writes after a crash?",
+        ])
+        #expect(NoteQuestions.find(in: markdown, limit: 1).count == 1)
+    }
+
+    @Test func aQuestionFromYourNoteIsOfferedUncheckedAndAuditedWhenChecked() async throws {
+        let library = try await library(hiddenAnswer: true)
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let category = try #require(await library.store.categories().first { $0.code == "22" })
+        let question = "How does a sync client restore its replica after a crash?"
+        let open = try await library.store.save(MarkdownDocument(
+            name: "Sync open questions", markdown: "Sync notes to follow up.\n\n- \(question)"
+        ))
+        try await library.store.fileNote(open.id, categoryID: category.id)
+        var answers = Self.answers
+        answers[question] = ["rebuilds its replica"]
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: answers)
+        let (coordinator, task) = try await gather(library.store, auditor)
+
+        let scope = try #require(await library.store.researchAudit(taskID: task))
+        let asked = try #require(scope.brief.dimensions.first { $0.note == open.id })
+        #expect(asked.id == "q1" && asked.label == question)
+        #expect(!asked.accepted && !asked.suggested && !asked.fromRequest)
+        #expect(AuditReport.reason(asked) == "Your note “Sync open questions” asks this.")
+        let message = try #require(await library.store.conversationMessages()
+            .last { $0.taskID == task && $0.author == "curator" })
+        #expect(message.text.contains("1 question from your notes"))
+
+        try await library.store.confirmResearchAudit(
+            taskID: task, selection: scope.selection, accepted: ["d1", "q1"]
+        )
+        try await coordinator.continueAudit(taskID: task, changed: {})
+        let report = try #require(await library.store.researchAudit(taskID: task)?.report)
+        // The field report, outside the scope, answers the note's question.
+        let answered = try result(report, question)
+        #expect(answered.coverage == .supported)
+        #expect(answered.evidence.map(\.itemID) == [library.report?.id])
+    }
+
+    // MARK: Running again
+
+    /// Asks the original question again, the way Run Again does, and runs it.
+    private func runAgain(
+        _ library: Library, _ auditor: FakeAuditor, accepted: Set<String> = ["d1", "d2"]
+    ) async throws -> (task: UUID, scope: ResearchAudit, report: AuditReport) {
+        let coordinator = AgentCoordinator(store: library.store, inference: auditor)
+        let request = "@researcher audit \(ResearchAudit.question(from: Self.request))"
+        let task = try await library.store.beginConversation(request, owner: .researcher)
+        try await coordinator.execute(taskID: task, request: request, selected: [], changed: {})
+        let scope = try #require(await library.store.researchAudit(taskID: task))
+        try await library.store.confirmResearchAudit(
+            taskID: task, selection: scope.selection, accepted: accepted
+        )
+        try await coordinator.continueAudit(taskID: task, changed: {})
+        let report = try #require(await library.store.researchAudit(taskID: task)?.report)
+        return (task, scope, report)
+    }
+
+    @Test func runningAgainReusesTheEarlierCriteriaAndItems() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        let first = try await audit(library, auditor)
+        let earlier = try #require(await library.store.researchAudit(taskID: first.task))
+
+        let again = try await runAgain(library, auditor)
+        #expect(await auditor.briefs == 1)
+        #expect(again.scope.brief == earlier.brief)
+        #expect(again.scope.selection == earlier.selection)
+        #expect(try await library.store.conversationMessages()
+            .contains {
+                $0.taskID == again.task && $0.text.contains("earlier audit of this question")
+            })
+        #expect(ResearchAudit.questionKey(Self.request)
+            == ResearchAudit
+            .questionKey(
+                "@researcher AUDIT:  what am I missing about conflict resolution and recovery after a crash in my sync research?"
+            ))
+    }
+
+    @Test func aDismissalCarriesOverUntilWhatItRestsOnChanges() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        await auditor.judge("last-writer-wins", .partial)
+        let first = try await audit(library, auditor)
+        try await library.store.setAuditFindingDismissed(
+            taskID: first.task, dimensionID: "d1", dismissed: true
+        )
+        try await library.store.setAuditFindingDismissed(
+            taskID: first.task, dimensionID: "d2", dismissed: true
+        )
+
+        let same = try await runAgain(library, auditor)
+        #expect(try result(same.report, "Conflict resolution").dismissed)
+        #expect(try result(same.report, "Replica recovery").dismissed)
+        #expect(same.report.findings.isEmpty)
+
+        // Another item now partly answers conflict resolution: the finding rests on something
+        // new, so it comes back. Recovery rests on nothing either time, so it stays dismissed.
+        let category = try #require(await library.store.categories().first { $0.code == "22" })
+        let more = try await library.store.save(MarkdownDocument(
+            name: "Sync merge notes",
+            markdown: "Sync merges: conflict resolution uses last-writer-wins too."
+        ))
+        try await library.store.fileNote(more.id, categoryID: category.id)
+        let changed = try await runAgain(library, auditor)
+        let conflict = try result(changed.report, "Conflict resolution")
+        #expect(!conflict.dismissed && conflict.coverage == .limited)
+        #expect(try result(changed.report, "Replica recovery").dismissed)
+    }
+
     // MARK: Abstaining
 
     @Test func anUnreadableItemMakesAbsenceUnknown() async throws {
@@ -493,19 +808,55 @@ private actor FakeAuditor: ConversationInferring, WriterInferring, AgentRespondi
         #expect(try await library.store.researchAudit(taskID: task)?.report == nil)
     }
 
-    @Test func onDeviceModelsDeclineWithoutReadingAnything() async throws {
+    @Test func onDeviceAuditsReadAtMostFourItems() async throws {
         let library = try await library()
         defer { try? FileManager.default.removeItem(at: library.root) }
+        let category = try #require(await library.store.categories().first { $0.code == "22" })
+        for index in 1 ... 3 {
+            let note = try await library.store.save(MarkdownDocument(
+                name: "Sync log \(index)", markdown: "Sync notes, part \(index)."
+            ))
+            try await library.store.fileNote(note.id, categoryID: category.id)
+        }
         let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers, local: true)
         let coordinator = AgentCoordinator(store: library.store, inference: auditor)
         let task = try await library.store.beginConversation(Self.request, owner: .researcher)
         try await coordinator.auditResearch(
             taskID: task, request: Self.request, selected: [], changed: {}
         )
-        #expect(try await library.store.researchAudit(taskID: task) == nil)
-        #expect(await auditor.extracted.isEmpty)
-        let reply = try #require(await library.store.conversationMessages().last)
-        #expect(reply.text.contains("run with ChatGPT"))
+        let scope = try #require(await library.store.researchAudit(taskID: task))
+        #expect(scope.scopeLimit == WriterLimits.localScope)
+        #expect(scope.selection.count == WriterLimits.localScope)
+        #expect(try await library.store.conversationMessages()
+            .contains { $0.taskID == task && $0.text.contains("On this Mac an audit reads up to 4")
+            })
+        try await library.store.confirmResearchAudit(
+            taskID: task, selection: scope.selection, accepted: ["d1", "d2"]
+        )
+        try await coordinator.continueAudit(taskID: task, changed: {})
+        let report = try #require(await library.store.researchAudit(taskID: task)?.report)
+        #expect(report.read == 4)
+        #expect(try result(report, "Conflict resolution").coverage == .supported)
+    }
+
+    @Test func theAuditCommandStartsAnAuditWithoutTheModelChoosingIt() async throws {
+        let library = try await library()
+        defer { try? FileManager.default.removeItem(at: library.root) }
+        let auditor = FakeAuditor(proposal: Self.proposal, answers: Self.answers)
+        let coordinator = AgentCoordinator(store: library.store, inference: auditor)
+        let request =
+            "@researcher audit what am I missing about conflict resolution and recovery after a crash in my sync research?"
+        let task = try await library.store.beginConversation(request, owner: .researcher)
+        try await coordinator.execute(taskID: task, request: request, selected: [], changed: {})
+
+        #expect(await auditor.instructions.isEmpty)
+        #expect(try await library.store.researchAudit(taskID: task)?.status == .awaiting)
+        #expect(try await library.store.conversationTasks().first { $0.id == task }?
+            .state == "awaiting_user")
+        #expect(AgentCoordinator.isAuditCommand("@Researcher audit: sync"))
+        #expect(!AgentCoordinator.isAuditCommand("@researcher auditing my notes"))
+        #expect(!AgentCoordinator.isAuditCommand("audit my sync notes"))
+        #expect(!AgentCoordinator.isAuditCommand("@writer audit sync"))
     }
 
     @Test func researchAuditMigrationAddsItsTable() async throws {
