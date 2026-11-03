@@ -27,6 +27,39 @@ struct ActivityEvent: Identifiable, Sendable, Equatable {
             }
         }
 
+        /// Whether a count means distinct items rather than individual changes: a note edited
+        /// five times is one note edited, while five links are five links.
+        var countsItems: Bool {
+            switch self {
+            case .sourceSaved, .sourceLinked, .sourceUnlinked, .linkAdded, .linkRemoved: false
+            default: true
+            }
+        }
+
+        /// What was done, in the past tense, for a sentence that starts with who did it.
+        func phrase(_ count: Int) -> String {
+            let (verb, one, many) = Self.phrases[self] ?? ("changed", "an item", "items")
+            return "\(verb) " + (count == 1 ? one : "\(count.formatted()) \(many)")
+        }
+
+        private static let phrases: [Kind: (String, String, String)] = [
+            .created: ("created", "a note", "notes"),
+            .updated: ("edited", "a note", "notes"),
+            .deleted: ("deleted", "a note", "notes"),
+            .purged: ("permanently deleted", "a note", "notes"),
+            .sourceSaved: ("saved", "a source", "sources"),
+            .sourceLinked: ("attached", "a source", "sources"),
+            .sourceUnlinked: ("detached", "a source", "sources"),
+            .sourceUpdated: ("changed", "a source address", "source addresses"),
+            .linkAdded: ("added", "a link", "links"),
+            .linkRemoved: ("removed", "a link", "links"),
+            .filed: ("filed", "a note", "notes"),
+            .unfiled: ("unfiled", "a note", "notes"),
+            .primaryHome: ("changed", "a primary home", "primary homes"),
+            .archived: ("archived", "a note", "notes"),
+            .unarchived: ("unarchived", "a note", "notes"),
+        ]
+
         var symbol: String {
             switch self {
             case .created: "note.text.badge.plus"
@@ -89,9 +122,20 @@ enum ActivityFilter: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Who made a change, as a person reading the log would split it: their own work, or
+/// Gleanary's agents and automations acting on its own.
+enum ActivityScope: String, CaseIterable, Identifiable, Sendable {
+    case everyone = "Everyone", you = "You", gleanary = "Gleanary"
+
+    var id: String {
+        rawValue
+    }
+}
+
 struct ActivityQuery: Equatable, Sendable {
     var search = ""
     var filter = ActivityFilter.all
+    var scope = ActivityScope.everyone
     /// Nil shows every day. Bounds are computed with Calendar, not 24-hour arithmetic.
     var day: Date?
 }
@@ -101,6 +145,55 @@ struct ActivityGroup: Identifiable, Sendable {
     let day: String
     let latest: ActivityEvent
     let count: Int
+    var byYou = true
+    var byGleanary = false
+    /// The automation whose run this is, when it is one.
+    var automation: AutomationKind?
+    /// Changed items or changes per kind, as the day summary counts them, except that a note
+    /// a saved source created or filled in counts only as the source.
+    var kinds: [ActivityEvent.Kind: Int] = [:]
+    /// Why it happened, from the run or the source a save was found in.
+    var context: String?
+    /// For work on one item, its current title; a summary's work is its source's.
+    var subjectTitle: String?
+    /// Summary notes written for the item.
+    var summaries = 0
+    /// The category one item was filed under, when it was.
+    var filedUnder: String?
+
+    /// Whether this row is about one item rather than a batch across several.
+    var isItem: Bool {
+        key.hasPrefix("note:")
+    }
+
+    var title: String {
+        isItem ? subjectTitle ?? latest.displayTitle : headline
+    }
+
+    /// What happened to one item, such as "Saved · Summarized · Filed under 18.01 Sales".
+    var itemSummary: String {
+        var parts: [String] = []
+        for kind in ActivityEvent.Kind.allCases {
+            guard let count = kinds[kind] else { continue }
+            switch kind {
+            case .sourceSaved: parts.append("Saved")
+            case .created: parts.append("Created")
+            case .updated: parts.append(count == 1 ? "Edited" : "Edited \(count.formatted()) times")
+            case .filed: parts.append(filedUnder.map { "Filed under \($0)" } ?? "Filed")
+            case .linkAdded, .linkRemoved, .sourceLinked, .sourceUnlinked:
+                parts
+                    .append(kind.phrase(count).prefix(1).uppercased() + kind.phrase(count)
+                        .dropFirst())
+            default: parts.append(kind.label)
+            }
+        }
+        if summaries > 0 {
+            // Right after the save or creation it summarizes, when that's on this row.
+            let after = parts.firstIndex { $0 == "Saved" || $0 == "Created" }.map { $0 + 1 } ?? 0
+            parts.insert("Summarized", at: after)
+        }
+        return parts.joined(separator: " · ")
+    }
 
     var id: String {
         day + "/" + key
@@ -112,6 +205,24 @@ struct ActivityGroup: Identifiable, Sendable {
         }
         return latest.batchLabel ?? "\(latest.displayTitle) · \(count.formatted()) edits"
     }
+
+    var runID: UUID? {
+        automation == nil ? nil : UUID(uuidString: key)
+    }
+
+    var actorName: String {
+        automation?.title ?? (byYou && byGleanary ? "You and Gleanary" : byYou ? "You" : "Gleanary")
+    }
+
+    /// One sentence for the whole unit of work, such as "Cross-linker added 6 links".
+    var headline: String {
+        let phrases = ActivityEvent.Kind.allCases.compactMap { kind in
+            kinds[kind].map { kind.phrase($0) }
+        }
+        // Work on one item reads best as that item, like a single change.
+        guard !phrases.isEmpty, kinds.values.reduce(0, +) > 1 else { return latest.displayTitle }
+        return actorName + " " + phrases.formatted(.list(type: .and))
+    }
 }
 
 struct ActivityDay: Identifiable, Sendable {
@@ -119,6 +230,39 @@ struct ActivityDay: Identifiable, Sendable {
     let date: Date
     let summary: String
     var groups: [ActivityGroup]
+}
+
+/// What changed since a moment, split by who did it, for the top of Activity.
+struct ActivityRecap: Equatable, Sendable {
+    var sourcesByYou = 0
+    var sourcesByGleanary = 0
+    var notesCreated = 0
+    var linksAdded = 0
+    var notesFiled = 0
+
+    var isEmpty: Bool {
+        self == ActivityRecap()
+    }
+
+    var sentence: String {
+        var parts: [String] = []
+        let sources = sourcesByYou + sourcesByGleanary
+        if sources > 0 {
+            let split = sourcesByYou == 0 ? "all by Gleanary"
+                : sourcesByGleanary == 0 ? "all by you"
+                : "\(sourcesByYou.formatted()) by you, \(sourcesByGleanary.formatted()) by Gleanary"
+            parts.append(
+                "\(sources.formatted()) source\(sources == 1 ? "" : "s") saved (\(split))"
+            )
+        }
+        for (count, noun, verb) in [(notesCreated, "note", "created"),
+                                    (linksAdded, "link", "added"),
+                                    (notesFiled, "note", "filed")] where count > 0
+        {
+            parts.append("\(count.formatted()) \(noun)\(count == 1 ? "" : "s") \(verb)")
+        }
+        return parts.formatted(.list(type: .and))
+    }
 }
 
 struct ActivityPage: Sendable {

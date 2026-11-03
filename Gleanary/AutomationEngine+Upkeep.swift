@@ -41,7 +41,7 @@ extension AutomationEngine {
                   let jobID = try await dependencies.fetchBookmark(candidate.id, summarize)
             else { continue }
             run.examined += 1
-            let job = try await finishCapture(jobID)
+            let job = try await finishCapture(jobID, for: run.id)
             if summarize, job?.state == .ready {
                 budget -= 1
                 run.calls += 1
@@ -129,7 +129,7 @@ extension AutomationEngine {
                 try await Task.sleep(for: dependencies.politeness)
             }
             run.examined += 1
-            let job = try await finishCapture(jobID)
+            let job = try await finishCapture(jobID, for: run.id)
             switch job?.state {
             case .ready:
                 run.changed += 1
@@ -149,13 +149,15 @@ extension AutomationEngine {
     }
 
     /// Starts a capture this automation queued and waits for it, checking for Stop as it
-    /// goes. Gives up waiting after a while, returning the capture still running.
-    private func finishCapture(_ id: UUID) async throws -> CaptureJob? {
+    /// goes. Gives up waiting after a while, returning the capture still running. What the
+    /// capture changed is filed in Activity under the run.
+    private func finishCapture(_ id: UUID, for runID: UUID) async throws -> CaptureJob? {
         await dependencies.startCapture(id)
         let deadline = ContinuousClock.now + Self.longestCapture
         while true {
             guard let job = try await store.captureJob(id: id) else { return nil }
             if job.state.terminal || ContinuousClock.now >= deadline {
+                try await store.attributeCaptureActivity(id, toRun: runID)
                 return job
             }
             try await Task.sleep(for: dependencies.capturePoll)
@@ -171,6 +173,7 @@ extension AutomationEngine {
             limit: config.batchLimit, now: dependencies.now(),
             firstWait: Self.retryWaits[0], maxRetries: Self.retryWaits.count
         )
+        let runID = run.id
         for (index, job) in jobs.enumerated() {
             guard try await proceed(&run) else { return }
             await report("Retrying \(index + 1) of \(jobs.count): \(job.request.label)")
@@ -179,7 +182,7 @@ extension AutomationEngine {
             ) else { continue }
             run.examined += 1
             try await recordRetry(
-                job, attempt: job.autoRetries + 1, result: finishCapture(job.id), &run
+                job, attempt: job.autoRetries + 1, result: finishCapture(job.id, for: runID), &run
             )
         }
     }

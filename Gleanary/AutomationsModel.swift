@@ -231,15 +231,23 @@ import Observation
 
     /// Puts back what one run applied, where the item hasn't changed since.
     func undo(_ run: AutomationRun) async {
+        await undoRun(run.id)
+    }
+
+    /// Puts back what a run applied, by its id, for Activity's run rows. Returns what to tell
+    /// the person when not everything could be put back.
+    @discardableResult func undoRun(_ runID: UUID) async -> String? {
         do {
-            let ids = try await store.appliedRunChanges(run.id)
+            let ids = try await store.appliedRunChanges(runID)
             let undone = try await store.undoAgentChanges(ids)
             if undone < ids.count {
                 error = "\(ids.count - undone) change\(ids.count - undone == 1 ? " was" : "s were") edited since and kept."
             }
         } catch { self.error = error.localizedDescription }
+        let message = error
         await load()
         await libraryChanged()
+        return message
     }
 
     func canUndo(_ run: AutomationRun) -> Bool {

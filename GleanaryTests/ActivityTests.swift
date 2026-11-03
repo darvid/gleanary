@@ -67,7 +67,10 @@ struct ActivityTests {
         #expect(events.allSatisfy { $0.actor == "manual" })
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open()
-        #expect(try await reopened.activityPage().days.flatMap(\.groups).count == 2)
+        // Creating and then editing one item is one unit of work.
+        let groups = try await reopened.activityPage().days.flatMap(\.groups)
+        #expect(groups.count == 1)
+        #expect(groups.first?.itemSummary == "Created · Edited")
         let update = try #require(events.first { $0.kind == .updated })
         let inspection = try #require(try await reopened.inspectActivity(update.id))
         #expect(inspection.before == "First")
@@ -85,8 +88,9 @@ struct ActivityTests {
         }
         let page = try await fixture.store.activityPage()
         let group = try #require(page.days.first?.groups.first)
-        #expect(group.count == 3)
+        #expect(group.count == 4)
         #expect(group.latest.kind == .updated)
+        #expect(group.itemSummary == "Created · Edited")
         #expect(page.days.first?.summary.contains("1 updated") == true)
         let first = try await fixture.store.activityEvents(
             in: group,
@@ -100,8 +104,8 @@ struct ActivityTests {
             limit: 2
         )
         #expect(first.count == 2)
-        #expect(second.count == 1)
-        #expect(Set((first + second).map(\.id)).count == 3)
+        #expect(second.count == 2)
+        #expect(Set((first + second).map(\.id)).count == 4)
     }
 
     @Test func filteringSearchAndGroupPaginationAreComplete() async throws {
@@ -319,10 +323,17 @@ struct ActivityTests {
             session.markdown = value
             session = try await fixture.store.save(session)
         }
-        _ = try await fixture.store.save(MarkdownDocument(
+        let filed = try await fixture.store.save(MarkdownDocument(
             name: "A source worth revisiting",
             markdown: "Saved evidence for another day."
         ))
+        // Filed, so the category shows in its colour.
+        try await fixture.store.readyDatabase().write { db in
+            try db.execute(sql: """
+            INSERT INTO decimal_categories(id, code, name) VALUES ('c', '18.01', 'Enterprise sales');
+            INSERT INTO note_categories(noteID, categoryID, isPrimary) VALUES (?, 'c', 1);
+            """, arguments: [filed.id.uuidString])
+        }
         for width in [680.0, 960.0] {
             for dark in [false, true] {
                 let model = ActivityModel(store: fixture.store)
@@ -386,14 +397,16 @@ struct ActivityTests {
         let reopened = DocumentStore(url: fixture.store.url)
         _ = try await reopened.open()
         let page = try await reopened.activityPage()
-        let events = page.days.flatMap(\.groups).map(\.latest)
+        let group = try #require(page.days.first?.groups.first)
+        #expect(page.days.flatMap(\.groups).count == 1)
+        let events = try await reopened.activityEvents(in: group, query: ActivityQuery())
         #expect(events.count == 2)
         #expect(events.allSatisfy { $0.actor == "legacy" && $0.date == oldDate })
         #expect(Set(events.map(\.kind)) == [.created, .updated])
         #expect(page.trackingSince > oldDate)
         #expect(try await reopened.history(for: note.id).count == 2)
         _ = try await reopened.open()
-        #expect(try await reopened.activityPage().days.flatMap(\.groups).count == 2)
+        #expect(try await reopened.activityPage().days.flatMap(\.groups).count == 1)
     }
 
     @Test func largeImportsStayOneExpandableOperationAcrossTransactions() async throws {
@@ -512,6 +525,141 @@ struct ActivityTests {
             )
         }
         #expect(try await fixture.events().filter { $0.kind == .sourceUpdated }.count == 1)
+    }
+
+    @Test func runsAndAutomaticSavesReadAsGleanarysWorkWithTheirReasons() async throws {
+        let fixture = try ActivityFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let mine = try await fixture.store.save(MarkdownDocument(
+            name: "Synthetic origin note", markdown: "Notes."
+        ))
+        let runID = try await fixture.store.beginAutomationRun(.weeklyDigest, at: Date())
+        for name in ["Synthetic digest one", "Synthetic digest two"] {
+            _ = try await fixture.store.writeAutomationNote(
+                MarkdownDocument(name: name, markdown: "Digest"), reason: "Weekly digest",
+                runID: runID, at: Date()
+            )
+        }
+        var run = AutomationRun(id: runID, kind: .weeklyDigest, startedAt: Date())
+        run.status = .succeeded
+        run.examined = 4
+        run.changed = 2
+        try await fixture.store.finishAutomationRun(run)
+        // A source Gleanary followed from the note above, and one an automation fetched.
+        let followed = UUID(), fetched = UUID()
+        let pool = try await fixture.store.readyDatabase()
+        try await pool.write { db in
+            for (job, title) in [(followed, "Synthetic followed source"),
+                                 (fetched, "Synthetic fetched source")]
+            {
+                // Saving a source creates its note in the same transaction.
+                let note = UUID().uuidString
+                for kind in ["created", "sourceSaved"] {
+                    try db.execute(sql: """
+                    INSERT INTO activity_events(occurredAt, kind, noteID, title, actor, groupID,
+                        batchLabel)
+                    VALUES (?, ?, ?, ?, 'app', ?, 'Saved source')
+                    """, arguments: [Date().timeIntervalSince1970, kind, note, title,
+                                     job.uuidString])
+                }
+            }
+            try db.execute(sql: """
+            INSERT INTO acquisition_candidates(id, identity, url, title, foundInNoteID, context,
+                provenance, hop, score, state, reason, automatic, captureJobID, createdAt,
+                updatedAt)
+            VALUES (?, 'url:https://example.org/a', 'https://example.org/a', 'A', ?, '',
+                'creatorRecommendation', 1, 1, 'queued', 'Recommended', 1, ?, 0, 0)
+            """, arguments: [UUID().uuidString, mine.id.uuidString, followed.uuidString])
+        }
+        let before = try await fixture.store.activityPage(query: ActivityQuery(scope: .you))
+            .days.flatMap(\.groups)
+        #expect(before.map(\.latest.displayTitle).sorted()
+            == ["Synthetic fetched source", "Synthetic origin note"])
+        try await fixture.store.attributeCaptureActivity(fetched, toRun: runID)
+
+        let groups = try await fixture.store.activityPage().days.flatMap(\.groups)
+        let digest = try #require(groups.first { $0.automation == .weeklyDigest })
+        #expect(!digest.byYou && digest.runID == runID)
+        #expect(digest.count == 4)
+        #expect(digest.headline == "Weekly digest created 2 notes and saved a source")
+        #expect(digest.context == "4 checked · 2 changed")
+        let saved = try #require(groups.first { $0.latest.title == "Synthetic followed source" })
+        #expect(!saved.byYou)
+        #expect(saved.context == "Recommended by the creator in “Synthetic origin note”")
+        let yours = try await fixture.store.activityPage(query: ActivityQuery(scope: .you))
+            .days.flatMap(\.groups)
+        #expect(yours.map(\.latest.displayTitle) == ["Synthetic origin note"])
+        let theirs = try await fixture.store.activityPage(query: ActivityQuery(scope: .gleanary))
+        #expect(theirs.days.flatMap(\.groups).count == 2)
+
+        let recap = try await fixture.store.activityRecap(since: .distantPast)
+        #expect(recap == ActivityRecap(sourcesByYou: 0, sourcesByGleanary: 2, notesCreated: 3))
+        #expect(recap.sentence == "2 sources saved (all by Gleanary) and 3 notes created")
+        #expect(try await fixture.store.activityRecap(since: .distantFuture).isEmpty)
+    }
+
+    @Test func savingSummarizingAndFilingOneSourceIsOneRow() async throws {
+        let fixture = try ActivityFixture(); defer { fixture.clean() }
+        _ = try await fixture.store.open()
+        let source = MarkdownDocument(name: "Synthetic deals talk", markdown: "Transcript")
+        let summary = MarkdownDocument(name: "Summary: Synthetic deals talk", markdown: "Gist")
+        let sourceID = UUID().uuidString, category = UUID().uuidString
+        let store = fixture.store
+        // Each step in its own transaction, as capture, summary and filing are in the app.
+        _ = try await store
+            .activityWrite(actor: "app", batchID: UUID(), label: "Saved source") { db in
+                _ = try DocumentStore.writeNote(source, graph: false, in: db)
+                try db.execute(sql: """
+                INSERT INTO sources(id, identity, createdAt) VALUES (?, 'url:https://example.org/t', 0);
+                INSERT INTO captures(id, sourceID, noteID, fingerprint, markdownHash, extractorVersion,
+                    document, artifacts, createdAt) VALUES (?, ?, ?, 'f', 'h', '1', x'', x'', 0);
+                INSERT INTO decimal_categories(id, code, name) VALUES (?, '18.01', 'Enterprise sales');
+                """, arguments: [
+                    sourceID,
+                    UUID().uuidString,
+                    sourceID,
+                    source.id.uuidString,
+                    category,
+                ])
+            }
+        _ = try await store.activityWrite(actor: "app", label: "Created summary note") { db in
+            _ = try DocumentStore.writeNote(summary, graph: false, in: db)
+            try db.execute(sql: """
+            INSERT INTO note_sources(noteID, sourceID, summaryRole) VALUES (?, ?, 'summary')
+            """, arguments: [summary.id.uuidString, sourceID])
+        }
+        let pool = try await store.readyDatabase()
+        for note in [source.id, summary.id] {
+            try await pool.write { db in
+                try db.execute(sql: """
+                INSERT INTO note_categories(noteID, categoryID, isPrimary) VALUES (?, ?, 1)
+                """, arguments: [note.uuidString, category])
+            }
+        }
+        let groups = try await store.activityPage().days.flatMap(\.groups)
+        #expect(groups.count == 1)
+        let row = try #require(groups.first)
+        #expect(row.title == "Synthetic deals talk")
+        #expect(row.itemSummary == "Saved · Summarized · Filed under 18.01 Enterprise sales")
+        #expect(row.actorName == "You and Gleanary")
+        #expect(try await store.activityEvents(in: row, query: ActivityQuery()).count == row.count)
+    }
+
+    @Test func headlinesNameWhoAndEveryKindOfWork() {
+        let event = ActivityEvent(
+            id: 1, date: Date(), kind: .sourceSaved, noteID: nil, relatedID: nil,
+            title: "Synthetic", detail: nil, actor: "manual", revisionID: nil, groupID: "g",
+            batchLabel: nil
+        )
+        let group = ActivityGroup(
+            key: "g", day: "2026-11-03", latest: event, count: 5,
+            kinds: [.sourceSaved: 2, .linkAdded: 1]
+        )
+        #expect(group.headline == "You saved 2 sources and added a link")
+        var run = group
+        run.automation = .crossLinker
+        run.kinds = [.linkAdded: 6]
+        #expect(run.headline == "Cross-linker added 6 links")
     }
 
     @Test func migrationIncludesOldPurgeMarkersWithoutRestoringNames() async throws {

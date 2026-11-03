@@ -528,7 +528,14 @@ struct ContentView: View {
             }
         } else if showingActivity {
             if library.ready {
-                ActivityView(store: library.store, open: openSavedItem, openSource: { source = $0 })
+                ActivityView(
+                    store: library.store,
+                    open: openSavedItem,
+                    openSource: { source = $0 },
+                    pendingReviews: library.automations.pendingCount,
+                    reviewChanges: { sidebarSelection.wrappedValue = .automations },
+                    undoRun: { await library.automations.undoRun($0) }
+                )
             } else {
                 WorkingProgress("Opening activity…")
             }

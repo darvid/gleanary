@@ -291,7 +291,18 @@ button radius. Code blocks use a rectangular control surface.
 - **Activity:** a sidebar destination with a native daily list and a
   read-only inspection pane. Day headers summarize matching activity;
   repeated edits and bulk operations expand into individual changes.
-  Search, event-type filters, Today, and a date picker narrow the list.
+  A row stands for one unit of work. Batches across several items (an
+  automation run, a chat task, an import, a review) are headed by who
+  did it ("Cross-linker added 6 links"). Everything else is grouped by
+  the item, with a summary note counted toward its source, so saving,
+  summarizing and filing one source is one row ("Saved · Summarized ·
+  Filed under 18.01 Enterprise sales"). A reason line comes from the run
+  or the source a save was found in. An automation run's row offers Undo
+  This Run. A recap above the list counts what changed since the last
+  visit, split between you and Gleanary, and links to proposals waiting
+  for review; a divider marks where the last visit ended.
+  An Everyone / You / Gleanary control, search, event-type filters,
+  Today, and a date picker narrow the list.
   Date jumps use a native date field and Today/Yesterday shortcuts. Empty
   results fill the list column so controls stay above and the tracking
   note stays below; only the empty-state message is centered.
