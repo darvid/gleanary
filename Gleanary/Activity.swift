@@ -85,9 +85,15 @@ struct ActivityEvent: Identifiable, Sendable, Equatable {
     let revisionID: UUID?
     let groupID: String
     let batchLabel: String?
+    /// Whether this was your own work, as the You / Gleanary scope splits it; nil when read
+    /// without that context.
+    var byYou: Bool?
 
     var actorLabel: String {
-        switch actor {
+        if let byYou, actor != "legacy", actor != "import" {
+            return byYou ? "You" : actor == "automation" ? "Automation" : "Gleanary"
+        }
+        return switch actor {
         case "manual": "You"
         case "agent": "Agent"
         case "automation": "Automation"

@@ -380,7 +380,8 @@ extension DocumentStore {
             actor: row["actor"],
             revisionID: revision.map(uuid),
             groupID: row["groupID"],
-            batchLabel: row["batchLabel"]
+            batchLabel: row["batchLabel"],
+            byYou: (row["origin"] as String?).map { $0 == "you" }
         )
     }
 }

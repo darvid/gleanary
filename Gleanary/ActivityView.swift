@@ -367,7 +367,11 @@ private struct ActivityGroupRow: View {
             }
             if expanded {
                 Group {
-                    ForEach(events) { ActivityEventRow(event: $0).tag($0.id) }
+                    ForEach(events) { event in
+                        ActivityEventRow(
+                            event: event, item: group.isItem ? group.title : nil
+                        ).tag(event.id)
+                    }
                     if loading {
                         WorkingProgress()
                     }
@@ -440,6 +444,9 @@ private struct ActivityEventRow: View {
     var summary: String?
     /// Whether a group's changes are showing; nil for a single change.
     var expanded: Bool?
+    /// The item an expanded row's changes are all about, so each change leads with what
+    /// happened and names a note only when it's another one, such as a summary.
+    var item: String?
     @Environment(\.colorScheme) private var colorScheme
 
     /// The category named on this line, as "code name", when the line is about filing.
@@ -452,7 +459,9 @@ private struct ActivityEventRow: View {
 
     /// The summary line, with the category in its Atlas colour, as in the sidebar.
     private var summaryText: Text {
-        let line = summary ?? event.kind.label + (event.detail.map { " · " + $0 } ?? "")
+        let line = summary ??
+            (event.kind == .filed ? event.detail.map { "Filed under " + $0 } : nil)
+            ?? event.kind.label + (event.detail.map { " · " + $0 } ?? "")
         guard let category, let range = line.range(of: category, options: .backwards),
               let code = category.split(separator: " ").first
         else { return Text(line) }
@@ -466,6 +475,31 @@ private struct ActivityEventRow: View {
     }
 
     var body: some View {
+        if let item {
+            change(in: item)
+        } else {
+            row
+        }
+    }
+
+    /// One change inside an expanded item: what happened, on one line.
+    private func change(in item: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: event.kind.symbol).foregroundStyle(.secondary)
+                .frame(width: 18).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                summaryText.font(.callout).lineLimit(2)
+                if event.displayTitle != item {
+                    Text(event.displayTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Text("\(event.actorLabel) · \(event.date.formatted(.dateTime.hour().minute()))")
+                .font(.caption).foregroundStyle(.secondary).fixedSize()
+        }.padding(.vertical, 3).accessibilityElement(children: .combine)
+    }
+
+    private var row: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: event.kind.symbol).foregroundStyle(.secondary)
                 .frame(width: 18).padding(.top, 2).accessibilityHidden(true)
