@@ -1,11 +1,13 @@
 import SwiftUI
 
-/// Separate native toggles avoid the segmented picker's selection-dependent separators.
+/// Separate native toggles avoid the segmented picker's selection-dependent separators. They
+/// share one toolbar glass background, so the three read as a single view switcher, as in
+/// Finder; the toolbar marks the selected toggle.
 struct LibraryPresentationPicker: View {
     @Binding var selection: LibraryPresentation
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             option(.map, title: "Map", symbol: "square.grid.2x2")
             option(.list, title: "List", symbol: "list.bullet")
             option(.graph, title: "Graph", symbol: "point.3.connected.trianglepath.dotted")
@@ -16,7 +18,7 @@ struct LibraryPresentationPicker: View {
     }
 
     private func option(_ value: LibraryPresentation, title: String, symbol: String) -> some View {
-        let toggle = Toggle(isOn: Binding(
+        Toggle(isOn: Binding(
             get: { selection == value },
             set: {
                 if $0 {
@@ -30,12 +32,6 @@ struct LibraryPresentationPicker: View {
         .toggleStyle(.button)
         .help("Show \(title.lowercased()) view")
         .accessibilityLabel("\(title) view")
-        return Group {
-            if selection == value {
-                toggle.buttonStyle(.borderedProminent)
-            } else {
-                toggle.buttonStyle(.bordered)
-            }
-        }.frame(width: 40, height: 30)
+        .accessibilityAddTraits(selection == value ? .isSelected : [])
     }
 }

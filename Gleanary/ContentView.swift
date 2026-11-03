@@ -598,7 +598,6 @@ struct ContentView: View {
             ToolbarItem(id: "library-presentation") {
                 LibraryPresentationPicker(selection: presentationSelection)
             }
-            .sharedBackgroundVisibility(.hidden)
         }
         if !chatting {
             ToolbarItem(id: "library-more") {
