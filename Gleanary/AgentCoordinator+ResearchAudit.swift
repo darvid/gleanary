@@ -80,8 +80,9 @@ extension AgentCoordinator {
             }
         try Task.checkCancellation()
         try await store.completeResearchAudit(taskID, report: report)
+        // The coordinating reply, so the result reads as the answer rather than activity.
         try await store.postConversation(
-            author: .researcher, text: report.summary, taskID: taskID
+            author: .assistant, text: report.summary, taskID: taskID
         )
         try await store.updateConversationTask(
             taskID, state: "succeeded", progress: "Completed", event: "completed"

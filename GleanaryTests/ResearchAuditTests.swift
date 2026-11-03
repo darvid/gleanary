@@ -312,8 +312,10 @@ private actor FakeAuditor: ConversationInferring, WriterInferring, AgentRespondi
         #expect(observation.contains("in the 2 items read"))
         #expect(observation.contains("search of 3 items in your library"))
         #expect(AuditReport.reason(recovery.dimension).contains("recovery after a crash"))
+        // The result is the coordinating reply, so chat shows it rather than folding it into
+        // activity.
         let reply = try #require(await library.store.conversationMessages()
-            .last { $0.taskID == task && $0.author == "researcher" })
+            .last { $0.taskID == task && $0.author == "assistant" })
         #expect(reply.text.contains("1 possible gap"))
         #expect(reply.text.contains("only your saved items"))
     }
