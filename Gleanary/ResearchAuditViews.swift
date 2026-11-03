@@ -266,7 +266,7 @@ struct AuditReportCard: View {
         return DisclosureGroup {
             details(result)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 Circle()
                     .fill(status.tint.opacity(0.85))
                     .overlay(Circle().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1)
