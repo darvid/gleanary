@@ -298,7 +298,8 @@ actor AgentCoordinator {
         if source.document.evidenceBlocks.allSatisfy({ $0.method == "metadata-only" }) {
             try await store.postConversation(
                 author: .researcher,
-                text: "The source link is saved, but no authorized transcript was available. There is no source text to summarize.",
+                text: (source.document.warnings.first ?? "Only the source link is saved.")
+                    + " There's no source text to summarize.",
                 references: [noteID],
                 taskID: taskID
             )

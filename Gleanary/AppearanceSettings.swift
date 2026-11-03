@@ -124,6 +124,7 @@ struct ReadingAppearance: DynamicProperty {
 
 struct AppearanceSettingsView: View {
     private var appearance = ReadingAppearance()
+    @AppStorage(GraphMarkStyle.key) private var graphMarks = GraphMarkStyle.pages
     private static let families = NSFontManager.shared.availableFontFamilies
         .filter { !$0.hasPrefix(".") }
         .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -138,6 +139,19 @@ struct AppearanceSettingsView: View {
                 } footer: {
                     Text(kind.detail)
                 }
+            }
+            Section {
+                Picker("Notes and sources", selection: $graphMarks) {
+                    ForEach(GraphMarkStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                GraphDocumentLegend().frame(maxWidth: .infinity, alignment: .leading)
+            } header: {
+                Text("Graph")
+            } footer: {
+                Text(graphMarks.detail)
             }
         }
         .formStyle(.grouped)

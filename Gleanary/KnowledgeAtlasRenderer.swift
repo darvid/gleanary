@@ -33,6 +33,7 @@ struct AtlasRenderer {
     let dark: Bool
     let highContrast: Bool
     let keyboardFocused: Bool
+    var markStyle = GraphMarkStyle.pages
     /// Device pixels per point, used to keep edges on the pixel grid.
     var displayScale: CGFloat = 2
 
@@ -442,7 +443,7 @@ struct AtlasRenderer {
         if glyphShown > 0 {
             var layer = context
             layer.opacity *= glyphShown
-            GraphDocumentMark(isSource: item.identity.isSource).draw(
+            GraphDocumentMark(isSource: item.identity.isSource, style: markStyle).draw(
                 in: &layer,
                 rect: CGRect(
                     x: screen.maxX - inset - glyphSize, y: top,

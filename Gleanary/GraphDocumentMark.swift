@@ -1,14 +1,64 @@
 import SwiftUI
 
 /// Shape and fill distinguish sources from notes even without color or a visible title.
+/// How the graph marks notes and sources. Every style fills notes and outlines sources.
+enum GraphMarkStyle: String, CaseIterable, Identifiable {
+    case pages, dots, shapes
+
+    static let key = "appearance.graphMarks"
+
+    var id: String {
+        rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .pages: "Pages"
+        case .dots: "Dots"
+        case .shapes: "Shapes"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .pages: "Notes are filled pages with text lines; sources are outlined pages with a folded corner."
+        case .dots: "Notes are filled dots and sources are rings. People, organizations, tools and concepts are triangles."
+        case .shapes: "Notes are filled circles and sources are outlined squares. People, organizations, tools and concepts are triangles."
+        }
+    }
+
+    /// Beside dots and squares, entities draw as triangles so they don't read like the circles
+    /// and rounded squares of concepts and people.
+    static func triangle(in rect: CGRect) -> Path {
+        Path { path in
+            path.move(to: CGPoint(x: rect.midX, y: rect.minY + rect.height * 0.08))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - rect.height * 0.08))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - rect.height * 0.08))
+            path.closeSubpath()
+        }
+    }
+}
+
 struct GraphDocumentMark {
     let isSource: Bool
+    var style = GraphMarkStyle.pages
 
     var label: String {
         isSource ? "Source" : "Note"
     }
 
     func path(in rect: CGRect) -> Path {
+        switch style {
+        case .pages: break
+        case .dots: return Path(ellipseIn: rect.insetBy(
+                dx: rect.width * 0.12,
+                dy: rect.height * 0.12
+            ))
+        case .shapes:
+            let inset = rect.insetBy(dx: rect.width * 0.12, dy: rect.height * 0.12)
+            return isSource ? Path(roundedRect: inset, cornerRadius: inset.width * 0.12)
+                : Path(ellipseIn: inset)
+        }
         let page = rect.insetBy(dx: rect.width * 0.1, dy: 0)
         guard isSource else {
             return Path(roundedRect: page, cornerRadius: rect.width * 0.08)
@@ -25,7 +75,7 @@ struct GraphDocumentMark {
     }
 
     func fold(in rect: CGRect) -> Path {
-        guard isSource else { return Path() }
+        guard isSource, style == .pages else { return Path() }
         let page = rect.insetBy(dx: rect.width * 0.1, dy: 0)
         let fold = page.width * 0.32
         return Path { path in
@@ -36,7 +86,7 @@ struct GraphDocumentMark {
     }
 
     func textLines(in rect: CGRect) -> Path {
-        guard !isSource else { return Path() }
+        guard !isSource, style == .pages else { return Path() }
         return Path { path in
             for index in 0 ..< 3 {
                 let y = rect.minY + rect.height * (0.34 + Double(index) * 0.18)
@@ -101,10 +151,11 @@ struct DocumentIdentityMark: View {
     let isSource: Bool
     var ink: Color = .primary
     @Environment(\.colorSchemeContrast) private var contrast
+    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.pages
 
     var body: some View {
         Canvas { context, size in
-            GraphDocumentMark(isSource: isSource).draw(
+            GraphDocumentMark(isSource: isSource, style: style).draw(
                 in: &context, rect: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1),
                 increasedContrast: contrast == .increased, ink: ink
             )
@@ -139,16 +190,30 @@ struct DocumentIdentityLabel: View {
 struct GraphDocumentLegend: View {
     var usesFilingColors = false
     @Environment(\.colorSchemeContrast) private var contrast
+    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.pages
 
     var body: some View {
         HStack(spacing: 16) {
             entry(isSource: false, title: "Notes")
             entry(isSource: true, title: "Sources")
+            if style != .pages {
+                HStack(spacing: 6) {
+                    Canvas { context, size in
+                        context.fill(
+                            GraphMarkStyle.triangle(
+                                in: CGRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2)
+                            ),
+                            with: .color(.secondary)
+                        )
+                    }.frame(width: 16, height: 16).accessibilityHidden(true)
+                    Text("Entities")
+                }
+            }
         }
         .font(.caption).foregroundStyle(.secondary)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            "Notes are filled pages with text lines. Sources are outlined pages with a folded corner."
+            style.detail
                 +
                 (
                     usesFilingColors ? " Colors follow primary filing. Unfiled items are neutral." :
@@ -160,7 +225,7 @@ struct GraphDocumentLegend: View {
     private func entry(isSource: Bool, title: String) -> some View {
         HStack(spacing: 6) {
             Canvas { context, size in
-                GraphDocumentMark(isSource: isSource).draw(
+                GraphDocumentMark(isSource: isSource, style: style).draw(
                     in: &context, rect: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1),
                     increasedContrast: contrast == .increased
                 )

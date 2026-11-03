@@ -53,17 +53,19 @@ extension IngestionEngine {
             try Task.checkCancellation()
             guard job.request.summarizeLink == false else { throw error }
             // A user-requested chat capture can retain a known video identity without inventing
-            // content.
+            // content. Say whether the video has no captions or YouTube just didn't send them,
+            // since only the second is worth retrying.
+            let missing = (error as? MediaError) == .noCaptions
+                ? "This video has no captions."
+                : "YouTube didn't return the video's captions. Retry the capture to try again."
             return try await retainSnapshot(withCreatorText(target, CapturedDocument(
                 title: "YouTube · \(target.id)", identifier: target.id, sourceURL: target.url,
                 coverage: .partial,
-                warnings: [
-                    "No authorized transcript was available. Only the source link is saved.",
-                ],
+                warnings: [missing + " Only the source link is saved."],
                 blocks: [ContentBlock(
                     kind: .paragraph,
-                    markdown: "Source: \(target.url.absoluteString)\n\nTranscript unavailable.",
-                    text: "Source: \(target.url.absoluteString). Transcript unavailable.",
+                    markdown: "Source: \(target.url.absoluteString)\n\nTranscript unavailable. \(missing)",
+                    text: "Source: \(target.url.absoluteString). Transcript unavailable. \(missing)",
                     method: "metadata-only"
                 )]
             )), originals: [])

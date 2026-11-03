@@ -1394,10 +1394,11 @@ struct ContentView: View {
             } else {
                 Circle().fill(ink).frame(width: 7, height: 7).accessibilityHidden(true)
             }
-            Text(category.name).foregroundStyle(color).lineLimit(1)
-            Spacer(minLength: 4)
+            // Leading, as Johnny Decimal writes it: a trailing number reads as a count.
             Text(category.code).font(.caption).monospacedDigit()
                 .foregroundStyle(color.opacity(0.5))
+            Text(category.name).foregroundStyle(color).lineLimit(1)
+            Spacer(minLength: 4)
         }
         .opacity(hidden ? 0.4 : 1)
         .padding(.leading, category.code.contains(".") ? 10 : 0)

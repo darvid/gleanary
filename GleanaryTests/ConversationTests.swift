@@ -176,9 +176,10 @@ private struct FilingContentFetcher: SourceFetching {
 }
 
 private struct NoTranscriptProvider: YouTubeProviding {
+    var error = MediaError.noCaptions
+
     func transcript(for _: MediaTarget) async throws -> VideoTranscript {
-        throw MediaError
-            .noCaptions
+        throw error
     }
 
     func audio(for _: MediaTarget) async throws -> ResolvedAudio {
@@ -2968,7 +2969,27 @@ private struct NoTranscriptProvider: YouTubeProviding {
         #expect(source.sourceIDs.count == 1)
         #expect(source.document.coverage == .partial)
         #expect(source.document.blocks.allSatisfy { $0.method == "metadata-only" })
+        #expect(source.document.warnings.first?.hasPrefix("This video has no captions.") == true)
         #expect(try await store.captureJobs().first?.state == .ready)
+    }
+
+    @Test func aFailedCaptionFetchSaysToRetryRatherThanThatThereAreNoCaptions() async throws {
+        let (root, store) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ingestion = IngestionEngine(
+            store: store,
+            youtube: NoTranscriptProvider(error: .blocked)
+        )
+        _ = try await ingestion.enqueue(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            summarizeLink: false
+        )
+        try await ingestion.run()
+        let note = try #require(await store.documents().first)
+        let source = try await store.researchSource(noteID: note.id)
+        let warning = try #require(source.document.warnings.first)
+        #expect(warning.contains("Retry the capture"))
+        #expect(!warning.contains("no captions"))
     }
 
     @Test func historyPagesKeepChronologicalStableReferences() async throws {

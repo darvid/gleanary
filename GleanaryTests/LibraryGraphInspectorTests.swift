@@ -96,6 +96,20 @@ struct LibraryGraphInspectorTests {
         #expect(note.path(in: rect).boundingRect.contains(note.textLines(in: rect).boundingRect))
     }
 
+    @Test func dotAndShapeMarksDropPageDetails() {
+        let rect = CGRect(x: 0, y: 0, width: 20, height: 20)
+        let corner = CGPoint(x: 4, y: 4)
+        for style in [GraphMarkStyle.dots, .shapes] {
+            let note = GraphDocumentMark(isSource: false, style: style)
+            let source = GraphDocumentMark(isSource: true, style: style)
+            #expect(note.textLines(in: rect).isEmpty)
+            #expect(source.fold(in: rect).isEmpty)
+            // Notes are round in both styles; only Shapes squares off sources.
+            #expect(!note.path(in: rect).contains(corner))
+            #expect(source.path(in: rect).contains(corner) == (style == .shapes))
+        }
+    }
+
     @Test func emptyAndUnavailableEndpointsDoNotInventConnections() {
         let empty = LibraryGraphInspector(data: LibraryGraphSnapshot())
         #expect(empty.items(matching: "").isEmpty)

@@ -333,6 +333,12 @@ struct ConversationView: View {
     /// switching; settings live in the app menu's Settings window (⌘,).
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarSpacer(.flexible)
+        // A fresh start one click away, like a new chat elsewhere; it still asks first.
+        ToolbarItem {
+            Button("Clear Conversation…", systemImage: "trash", action: requestClear)
+                .disabled(!canClearConversation)
+                .help("Clear conversation")
+        }
         ToolbarItem {
             Menu("More", systemImage: "ellipsis") {
                 SettingsLink { Label("Settings…", systemImage: "gearshape") }
@@ -1317,8 +1323,11 @@ struct ConversationView: View {
                     StageProgressText(task.progress.isEmpty ? "Working…" : task.progress)
                         .foregroundStyle(.secondary)
                         .layoutPriority(1)
-                    Text("· \(Self.queueTitle(task.request))").foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+                    // Which request is running only matters once others wait behind it.
+                    if !queue.isEmpty {
+                        Text("· \(Self.queueTitle(task.request))").foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
                 } else if model.queuePaused {
                     Image(systemName: "pause.fill").foregroundStyle(.secondary)
                         .accessibilityHidden(true)
@@ -1870,6 +1879,9 @@ struct ReferencePeek: View {
     let open: () -> Void
     /// Adds the item to the next Chat message; nil where there's no Chat to add it to.
     let toggleSource: (() -> Void)?
+    /// Where there's no Chat selection to toggle, adds the item to the Chat draft instead.
+    var chatTarget: ChatAttachmentTarget?
+    var addedToChat: () -> Void = {}
     @State private var excerpt: String?
     @State private var loaded = false
 
@@ -1898,6 +1910,8 @@ struct ReferencePeek: View {
                 Spacer(minLength: 12)
                 if let toggleSource {
                     Button(selected ? "Remove from Chat" : "Add to Chat", action: toggleSource)
+                } else if let chatTarget {
+                    AddToChatButton(target: chatTarget, added: addedToChat)
                 }
                 Button(openTitle, action: open).keyboardShortcut(.defaultAction)
             }
