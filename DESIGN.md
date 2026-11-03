@@ -252,8 +252,10 @@ button radius. Code blocks use a rectangular control surface.
   it remembers its disclosure state. The label opens all items; only the
   chevron changes expansion. A collapsed active filter stays selected
   through Library and appears beside its label, without changing scope.
-  Captures, Tasks, Activity, and Archive are peer destinations,
-  separate from the collection filters. Filing retains its own section,
+  Entities and Tasks sit with the library's content. A separate upkeep
+  section lists Activity, Automations and Archive. Activity also holds
+  captures, so its only badge is the orange count of failed captures
+  that need you; it never counts new activity. Filing retains its own section,
   SF Symbols, and category codes. Filing rows carry their Atlas colour:
   a 7pt dot before the name, or the area row's folder icon tinted with it.
   Graph is a Library presentation, not a separate sidebar destination;
@@ -300,7 +302,10 @@ button radius. Code blocks use a rectangular control surface.
   or the source a save was found in. An automation run's row offers Undo
   This Run. A recap above the list counts what changed since the last
   visit, split between you and Gleanary, and links to proposals waiting
-  for review; a divider marks where the last visit ended.
+  for review; a divider marks where the last visit ended. Captures that
+  failed (Needs Attention) or are still saving (Saving) are pinned at
+  the top of the list with their actions, so a source moves from saving
+  to the timeline without changing pages.
   An Everyone / You / Gleanary control, search, event-type filters,
   Today, and a date picker narrow the list.
   Date jumps use a native date field and Today/Yesterday shortcuts. Empty
@@ -337,7 +342,7 @@ button radius. Code blocks use a rectangular control surface.
   participate in Back/Forward history.
   Show the Map/List/Graph toolbar picker only while its browsing surface
   is active. Hide it in full Map/Graph detail and editor views, Reader,
-  Chat, Activity, Automations, and fixed-column Captures/Archived scopes.
+  Chat, Activity, Automations, and the fixed-column Archived scope.
   List keeps it while the list remains beside its detail. Returning from
   a full detail restores the picker without changing presentation or
   resetting the canvas.
@@ -895,7 +900,7 @@ button radius. Code blocks use a rectangular control surface.
   the reading font and inline formatting, without a web view; unlinked
   text keeps the existing renderer. Both web and internal note links use
   the app's URL action so saved-note navigation stays in the app.
-- **Recovery and mutation:** Captures lists what you saved yourself plus anything that failed; successful background bookmark fetches aren't listed, and the toolbar is its only heading. When summaries fail because of the AI provider itself (a model or plan no longer available, sign-in, usage limit), one window notice says so with Open Settings…, rather than the same error on every item; it clears when the provider or model changes. A failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Captures, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Each home chip in the info card shows a small remove button (xmark.circle.fill) at its corner on hover and has a right-click menu (Make Primary Home, Remove from …); removing the primary home promotes the lowest-coded one left, and the change is confirmed inline with Undo. There is no Inbox category: an item with no home is unfiled, and Unfiled is where unsorted items wait. Beside Change… in the info card, a Suggest link (sparkles) asks the Librarian: "Asking the Librarian…" while it works, then an inline card with the suggested home as a chip (green New badge for a category it would create), its one-line reason, an "Also fits" list of other homes as outlined chips (each with Also File Here, which adds a secondary home and turns into Added with Undo, or "Already here"), File Here (or Create and File Here) and Dismiss; filing shows "Filed in …" with Undo. Nothing changes until File Here. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, Markdown styled as it's typed by MarkdownEngine but saved character for character, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
+- **Recovery and mutation:** Captures live in Activity. Above the timeline, Needs Attention lists failed captures (with Clear All) and Saving lists captures still running, each with its Stop, Retry, Open Browser or Audio Options action; both disappear when empty and when a date or search narrows the timeline. A finished capture leaves those sections and appears in the timeline. Successful background bookmark fetches are never listed there. When summaries fail because of the AI provider itself (a model or plan no longer available, sign-in, usage limit), one window notice says so with Open Settings…, rather than the same error on every item; it clears when the provider or model changes. A failed capture someone asked for is named in the window notice (“Couldn't save …”, the reason, Show in Activity, Try Again); a background bookmark fetch that fails reports only on its item's Status row with Try Again, and isn't retried on every visit. Native empty/loading/error states, capture retry/stop actions, a filing inspector, and confirmed deletion. Each home chip in the info card shows a small remove button (xmark.circle.fill) at its corner on hover and has a right-click menu (Make Primary Home, Remove from …); removing the primary home promotes the lowest-coded one left, and the change is confirmed inline with Undo. There is no Inbox category: an item with no home is unfiled, and Unfiled is where unsorted items wait. Beside Change… in the info card, a Suggest link (sparkles) asks the Librarian: "Asking the Librarian…" while it works, then an inline card with the suggested home as a chip (green New badge for a category it would create), its one-line reason, an "Also fits" list of other homes as outlined chips (each with Also File Here, which adds a secondary home and turns into Added with Undo, or "Already here"), File Here (or Create and File Here) and Dismiss; filing shows "Filed in …" with Undo. Nothing changes until File Here. Filing opens in a 300pt trailing column below the toolbar, built like the sidebar rather than with SwiftUI's `.inspector` (which claims the window toolbar): it follows the selection, lists categories by area with their colour dot and a search field, checks the primary home, marks other memberships "Also here", and applies a choice immediately. Note editing replaces the reading view in place (title in the reading view's title style, Markdown styled as it's typed by MarkdownEngine but saved character for character, Cancel/Save in a header bar) and stays put while the selection changes, so a draft is never dropped; new notes open there too. Errors remain readable and actionable rather than decorative status theater.
 
 The sidecar's HTML/CSS samples are portable illustrations, not shipping
 components or a substitute for native focus, selection, typography, and

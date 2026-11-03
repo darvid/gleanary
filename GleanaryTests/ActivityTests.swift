@@ -342,11 +342,22 @@ struct ActivityTests {
                     .selection = try #require(model.days.first?.groups
                         .first { $0.latest.kind == .updated }?.latest.id)
                 await model.inspectSelection()
+                // A failed capture pinned above the timeline, as the window shows it.
                 let host = NSHostingView(rootView: ActivityView(
                     store: fixture.store,
                     open: { _ in },
+                    intakeCount: 1,
                     model: model
-                )
+                ) {
+                    Section("Needs Attention") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("example.org/synthetic-article")
+                            Text("The site took too long to respond.").font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Retry") {}.controlSize(.small)
+                        }.padding(.vertical, 8)
+                    }
+                }
                 .preferredColorScheme(dark ? .dark : .light))
                 let window = NSWindow(
                     contentRect: NSRect(x: 0, y: 0, width: width, height: 700),
@@ -730,11 +741,22 @@ struct ActivityTests {
             for dark in [false, true] {
                 let model = ActivityModel(store: fixture.store)
                 model.query.day = Date()
+                // A failed capture pinned above the timeline, as the window shows it.
                 let host = NSHostingView(rootView: ActivityView(
                     store: fixture.store,
                     open: { _ in },
+                    intakeCount: 1,
                     model: model
-                )
+                ) {
+                    Section("Needs Attention") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("example.org/synthetic-article")
+                            Text("The site took too long to respond.").font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Retry") {}.controlSize(.small)
+                        }.padding(.vertical, 8)
+                    }
+                }
                 .preferredColorScheme(dark ? .dark : .light))
                 let window = makeActivityWindow(host: host, width: width, height: 700, dark: dark)
                 defer { window.contentView = nil; window.close() }

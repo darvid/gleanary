@@ -1,6 +1,8 @@
 import SwiftUI
 
-struct ActivityView: View {
+/// Committed changes to the library, with captures still being saved or needing you pinned
+/// above them, so a source moves from saving to saved without changing pages.
+struct ActivityView<Intake: View>: View {
     let store: DocumentStore
     var open: (UUID) -> Void
     var openSource: (SourceCitation) -> Void = { _ in }
@@ -9,6 +11,9 @@ struct ActivityView: View {
     var reviewChanges: () -> Void = {}
     /// Puts back what an automation run applied; returns what to tell the person, if anything.
     var undoRun: (UUID) async -> String? = { _ in nil }
+    /// Captures in progress or needing attention, as list sections; shown while any exist.
+    let intake: Intake
+    let intakeCount: Int
     @State private var model: ActivityModel
     @State private var choosingDate = false
     @FocusState private var searchFocused: Bool
@@ -20,8 +25,12 @@ struct ActivityView: View {
         pendingReviews: Int = 0,
         reviewChanges: @escaping () -> Void = {},
         undoRun: @escaping (UUID) async -> String? = { _ in nil },
-        model: ActivityModel? = nil
+        intakeCount: Int = 0,
+        model: ActivityModel? = nil,
+        @ViewBuilder intake: () -> Intake
     ) {
+        self.intake = intake()
+        self.intakeCount = intakeCount
         self.store = store
         self.open = open
         self.openSource = openSource
@@ -67,7 +76,7 @@ struct ActivityView: View {
                     Button("Retry") { Task { await model.reload() } }
                 }.padding(18)
             }
-            if model.days.isEmpty {
+            if model.days.isEmpty, !showsIntake {
                 if model.loading {
                     WorkingProgress("Loading activity…").frame(
                         maxWidth: .infinity,
@@ -87,6 +96,9 @@ struct ActivityView: View {
                 }
             } else {
                 List(selection: $model.selection) {
+                    if showsIntake {
+                        intake
+                    }
                     ForEach(model.days) { day in
                         Section {
                             ForEach(day.groups) { group in
@@ -128,6 +140,11 @@ struct ActivityView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Captures belong to the whole timeline, not to a date or search within it.
+    private var showsIntake: Bool {
+        intakeCount > 0 && model.query.day == nil && model.query.search.isEmpty
     }
 
     /// The first row from before the last visit, when newer rows sit above it.
@@ -279,6 +296,17 @@ struct ActivityView: View {
             return "Yesterday"
         }
         return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day().year())
+    }
+}
+
+extension ActivityView where Intake == EmptyView {
+    init(
+        store: DocumentStore,
+        open: @escaping (UUID) -> Void,
+        openSource: @escaping (SourceCitation) -> Void = { _ in },
+        model: ActivityModel? = nil
+    ) {
+        self.init(store: store, open: open, openSource: openSource, model: model) { EmptyView() }
     }
 }
 
