@@ -503,6 +503,8 @@ enum DatabaseSchema {
         migrator.registerMigration("conversation-queue-v1") { db in
             try db.execute(sql: "ALTER TABLE conversation_tasks ADD COLUMN queueOrder REAL")
         }
+        // Unsorted items are unfiled; the built-in Inbox category goes away.
+        migrator.registerMigration("remove-inbox-v1", migrate: DocumentStore.removeInbox)
         try migrator.migrate(database)
     }
 

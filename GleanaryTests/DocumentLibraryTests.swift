@@ -469,6 +469,7 @@ struct DocumentLibraryTests {
             "# Research summary\n\nA separate generated note.", name: "Research: saved source",
             sources: [researchSource], taskID: task, provider: "synthetic-fixture", kind: "summary"
         )
+        try await fixture.store.saveCategory(code: "31", name: "Computing")
         let home = try #require(await fixture.store.categories().first)
         for noteID in [id, research.id] {
             try await fixture.store.fileNote(noteID, categoryID: home.id, includeSources: false)
@@ -714,6 +715,7 @@ struct DocumentLibraryTests {
             markdown: "Saved searchable evidence."
         ) }
         _ = try await fixture.store.open(seed: notes)
+        try await fixture.store.saveCategory(code: "31", name: "Computing")
         let category = try #require(await fixture.store.categories().first)
         try await fixture.store.fileNote(notes[0].id, categoryID: category.id)
         let grid = DocumentGridModel(store: fixture.store)
@@ -767,6 +769,7 @@ struct DocumentLibraryTests {
         let notes = (0 ..< 12)
             .map { MarkdownDocument(name: "Fixture \($0)", markdown: "Saved text.") }
         _ = try await fixture.store.open(seed: notes)
+        try await fixture.store.saveCategory(code: "31", name: "Computing")
         let category = try #require(await fixture.store.categories().first)
         try await fixture.store.fileNote(notes[0].id, categoryID: category.id)
         let grid = DocumentGridModel(store: fixture.store)

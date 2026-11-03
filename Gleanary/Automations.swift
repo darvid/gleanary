@@ -3,7 +3,8 @@ import Foundation
 /// The built-in automations (SPEC §7.4). Each is a fixed selection and action; people tune
 /// them but don't write new ones.
 enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
-    case inboxSummarizer = "inbox-summarizer"
+    // The raw value predates the rename; saved settings use it.
+    case summaryBackfill = "inbox-summarizer"
     case bookmarkFetcher = "bookmark-fetcher"
     case linkChecker = "link-checker"
     case crossLinker = "cross-linker"
@@ -18,7 +19,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .inboxSummarizer: "Inbox summarizer"
+        case .summaryBackfill: "Summary backfill"
         case .bookmarkFetcher: "Bookmark fetcher"
         case .linkChecker: "Link checker"
         case .crossLinker: "Cross-linker"
@@ -31,8 +32,8 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var summary: String {
         switch self {
-        case .inboxSummarizer:
-            "Summarizes Inbox items that have their full text but no summary yet."
+        case .summaryBackfill:
+            "Summarizes saved items that have their full text but no summary yet, such as captures whose summary was interrupted."
         case .bookmarkFetcher:
             "Fetches the pages of imported bookmarks that were never opened, a few at a time, newest first."
         case .linkChecker:
@@ -53,7 +54,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// What the automation may do on its own; enforced by `AutomationEngine`, not prompts.
     var policy: String {
         switch self {
-        case .inboxSummarizer: "Writes summaries; you can undo a run"
+        case .summaryBackfill: "Writes summaries; you can undo a run"
         case .bookmarkFetcher: "Fetches pages into their bookmarks; you can undo a run"
         case .linkChecker: "Proposes link updates and archiving; you review first"
         case .crossLinker: "Proposes links; you review first"
@@ -66,7 +67,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var symbol: String {
         switch self {
-        case .inboxSummarizer: "text.badge.star"
+        case .summaryBackfill: "text.badge.star"
         case .bookmarkFetcher: "arrow.down.doc"
         case .linkChecker: "link.badge.plus"
         case .crossLinker: "point.3.connected.trianglepath.dotted"
@@ -79,7 +80,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var role: AgentRole {
         switch self {
-        case .inboxSummarizer: .researcher
+        case .summaryBackfill: .researcher
         case .bookmarkFetcher, .linkChecker, .unfiledFiler, .captureRetry, .sourceExplorer:
             .librarian
         case .crossLinker: .curator
@@ -91,7 +92,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// fetched would tell nothing new; saving never makes a bookmark, a failure or a week.
     var followsNewItems: Bool {
         switch self {
-        case .inboxSummarizer, .crossLinker, .unfiledFiler: true
+        case .summaryBackfill, .crossLinker, .unfiledFiler: true
         case .bookmarkFetcher, .linkChecker, .captureRetry, .weeklyDigest, .sourceExplorer: false
         }
     }
@@ -101,7 +102,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     var rechecks: Bool {
         switch self {
         case .linkChecker, .crossLinker, .unfiledFiler: true
-        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
+        case .summaryBackfill, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
             false
         }
     }
@@ -109,7 +110,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// Whether a run's own changes can be put back from its history.
     var undoable: Bool {
         switch self {
-        case .inboxSummarizer, .bookmarkFetcher, .linkChecker, .weeklyDigest: true
+        case .summaryBackfill, .bookmarkFetcher, .linkChecker, .weeklyDigest: true
         case .crossLinker, .unfiledFiler, .captureRetry, .sourceExplorer: false
         }
     }
@@ -130,7 +131,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// Summaries for fetched bookmarks count too, when Capture settings write them.
     var usesModel: Bool {
         switch self {
-        case .inboxSummarizer, .bookmarkFetcher, .crossLinker, .unfiledFiler: true
+        case .summaryBackfill, .bookmarkFetcher, .crossLinker, .unfiledFiler: true
         case .linkChecker, .captureRetry, .weeklyDigest, .sourceExplorer: false
         }
     }
@@ -143,7 +144,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var defaultInterval: TimeInterval {
         switch self {
-        case .inboxSummarizer: 10 * 60
+        case .summaryBackfill: 10 * 60
         case .bookmarkFetcher: 30 * 60
         case .captureRetry: 60 * 60
         case .sourceExplorer: 6 * 60 * 60
@@ -154,7 +155,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var intervals: [TimeInterval] {
         switch self {
-        case .inboxSummarizer: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60, 24 * 60 * 60]
+        case .summaryBackfill: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60, 24 * 60 * 60]
         case .bookmarkFetcher: [10 * 60, 30 * 60, 60 * 60, 6 * 60 * 60]
         // The first retry waits an hour, so checking more often gains nothing.
         case .captureRetry: [60 * 60, 6 * 60 * 60, 24 * 60 * 60]
@@ -170,7 +171,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
 
     var defaultBatch: Int {
         switch self {
-        case .inboxSummarizer: 10
+        case .summaryBackfill: 10
         // Each fetch loads a page, its preview and maybe a summary.
         case .bookmarkFetcher: 5
         case .linkChecker: 50
@@ -187,7 +188,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
     /// The choices for items per run, and the stepper's step.
     var batchRange: ClosedRange<Int> {
         switch self {
-        case .inboxSummarizer: 1 ... 200
+        case .summaryBackfill: 1 ... 200
         case .bookmarkFetcher, .captureRetry, .sourceExplorer: 1 ... 50
         case .weeklyDigest: 10 ... 1000
         case .linkChecker, .crossLinker, .unfiledFiler: 1 ... 1000
@@ -198,7 +199,7 @@ enum AutomationKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .bookmarkFetcher, .captureRetry, .sourceExplorer: 1
         case .linkChecker, .weeklyDigest: 10
-        case .inboxSummarizer, .crossLinker, .unfiledFiler: 5
+        case .summaryBackfill, .crossLinker, .unfiledFiler: 5
         }
     }
 

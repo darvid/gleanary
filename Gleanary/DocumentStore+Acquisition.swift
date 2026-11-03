@@ -311,8 +311,8 @@ extension DocumentStore {
         }
     }
 
-    /// Archives automatic saves nobody used within `period`: never opened, filed outside the
-    /// Inbox, or linked to anything beyond where they were found. Archiving is reversible.
+    /// Archives automatic saves nobody used within `period`: never opened, filed, or linked to
+    /// anything beyond where they were found. Archiving is reversible.
     @discardableResult
     func expireUnusedAcquisitions(
         olderThan period: TimeInterval = AcquisitionPolicy.probation,
@@ -324,14 +324,12 @@ extension DocumentStore {
             JOIN notes n ON n.id = c.savedNoteID
             WHERE c.automatic = 1 AND c.state = 'queued' AND c.openedAt IS NULL
               AND c.savedAt < ? AND n.deletedAt IS NULL AND n.archivedAt IS NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM note_categories nc JOIN decimal_categories dc ON dc.id = nc.categoryID
-                WHERE nc.noteID = n.id AND dc.code != ?)
+              AND NOT EXISTS (SELECT 1 FROM note_categories nc WHERE nc.noteID = n.id)
               AND NOT EXISTS (
                 SELECT 1 FROM note_links l
                 WHERE (l.leftID = n.id OR l.rightID = n.id)
                   AND l.leftID != c.foundInNoteID AND l.rightID != c.foundInNoteID)
-            """, arguments: [now.timeIntervalSince1970 - period, DecimalCategory.inboxCode])
+            """, arguments: [now.timeIntervalSince1970 - period])
             for row in rows {
                 try db.execute(sql: """
                 UPDATE notes SET archivedAt = ?, archiveReason = ? WHERE id = ? AND archivedAt IS NULL

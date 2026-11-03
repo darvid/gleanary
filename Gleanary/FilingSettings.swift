@@ -51,7 +51,6 @@ struct FilingSettings: View {
                         }
                         Divider()
                         Button("Delete…", role: .destructive) { deleting = category }
-                            .disabled(category.isInbox)
                     }
                 } primaryAction: { ids in
                     if let id = ids.first {
@@ -69,11 +68,11 @@ struct FilingSettings: View {
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.08)))
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .onDeleteCommand {
-                if let category = category(selection), !category.isInbox {
+                if let category = category(selection) {
                     deleting = category
                 }
             }
-            if model.categories.count <= 1 {
+            if model.categories.isEmpty {
                 emptyPrompt
             } else {
                 Text(
@@ -131,9 +130,8 @@ struct FilingSettings: View {
                     deleting = selected
                 }
             }
-            .disabled(selected == nil || selected?.isInbox == true)
-            .help(selected?
-                .isInbox == true ? "Inbox can't be deleted" : "Delete the selected category")
+            .disabled(selected == nil)
+            .help("Delete the selected category")
             .modifier(FooterControl())
             footerDivider
             Menu {
@@ -194,7 +192,7 @@ struct FilingSettings: View {
         HStack(spacing: 12) {
             Image(systemName: "square.grid.2x2").font(.title3).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Only Inbox so far").font(.callout.weight(.medium))
+                Text("No categories yet").font(.callout.weight(.medium))
                 Text("Start from a suggested set for the kind of work you do, then adjust it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -332,11 +330,6 @@ private struct CategoryRow: View {
             Text(category.name).lineLimit(1)
                 .fontWeight(category.code.hasSuffix("0") && category.code
                     .count == 2 ? .semibold : nil)
-            if category.isInbox {
-                Image(systemName: "lock").font(.caption).foregroundStyle(.secondary)
-                    .help("Inbox is the default home. It can be renamed but keeps code 10.")
-                    .accessibilityLabel("Default home")
-            }
             Spacer(minLength: 8)
             if count > 0 {
                 Text("\(count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
@@ -415,7 +408,6 @@ private struct CategoryEditor: View {
                 TextField("Code", text: $code, prompt: Text("31"))
                     .frame(width: 72).monospacedDigit()
                     .accessibilityLabel("Category code")
-                    .disabled(editing?.isInbox == true)
                 TextField("Name", text: $name, prompt: Text("Category name"))
                     .frame(width: 220).focused($nameFocused)
                     .accessibilityLabel("Category name")
@@ -424,11 +416,6 @@ private struct CategoryEditor: View {
             Group {
                 if let failure {
                     Label(failure, systemImage: "exclamationmark.triangle")
-                } else if editing?.isInbox == true {
-                    Label(
-                        "Inbox keeps code 10: unfiled material falls back to it.",
-                        systemImage: "lock"
-                    )
                 } else if let feedback {
                     Label(
                         feedback.message,

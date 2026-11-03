@@ -80,8 +80,8 @@ struct ConversationView: View {
             await library.load()
             model.didMutate = { await library.refreshConversationChanges() }
             await model.load()
-            // Offer a starter scheme once, while filing has nothing beyond the built-in Inbox.
-            if model.ready, !starterCategoriesOffered, model.categories.count <= 1 {
+            // Offer a starter scheme once, while there are no categories yet.
+            if model.ready, !starterCategoriesOffered, model.categories.isEmpty {
                 starterCategoriesOffered = true
                 starterCategories = true
             }

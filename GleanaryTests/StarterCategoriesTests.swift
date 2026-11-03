@@ -22,13 +22,14 @@ struct StarterCategoriesTests {
         #expect(Set(plan.categories.map(\.code)).count == plan.categories.count)
     }
 
-    @Test func essentialsExtendInboxAndAreasTakeBlocksInChosenOrder() {
+    @Test func essentialsFillTheTensAndAreasTakeBlocksInChosenOrder() {
         let plan = StarterPlan(
             packs: packs("writing", "essentials", "engineering"),
-            existing: [category("10", "Inbox")]
+            existing: []
         )
         #expect(plan.areas.map(\.packID) == ["essentials", "writing", "engineering"])
-        #expect(plan.areas[0].categories.map(\.code) == ["11", "12", "13", "14", "15"])
+        #expect(plan.areas[0].categories.map(\.code) == ["10", "11", "12", "13", "14", "15"])
+        #expect(plan.areas[0].categories.first?.name == "Essentials")
         #expect(plan.areas[1].categories.first == .init(
             key: "area:writing",
             code: "20",
@@ -76,6 +77,7 @@ struct StarterCategoriesTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
         _ = try await store.open()
+        try await store.saveCategory(code: "10", name: "Inbox")
         let created = try await store.addCategories([
             (code: "11", name: "Ideas"),
             (code: "12", name: "inbox"),
@@ -124,16 +126,13 @@ struct StarterCategoriesTests {
         #expect(try await store.categoryItemCounts() == [ids[1]: 1])
     }
 
-    @Test func inboxCannotBeRenumberedOrDeletedAndCodesStayUnique() async throws {
+    @Test func aNewLibraryStartsWithNoCategoriesAndCodesStayUnique() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
         _ = try await store.open()
-        let inbox = try #require(await store.categories().first(where: \.isInbox))
-        await #expect(throws: ConversationError.inboxCategory) {
-            try await store.deleteCategory(inbox.id)
-        }
-        try await store.saveCategory(id: inbox.id, code: "10", name: "Triage")
+        #expect(try await store.categories().isEmpty)
+        try await store.saveCategory(code: "10", name: "Triage")
         try await store.saveCategory(code: "20", name: "Writing")
         await #expect(throws: ConversationError.categoryTaken) {
             try await store.saveCategory(code: "20", name: "Other")

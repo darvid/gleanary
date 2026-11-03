@@ -277,8 +277,8 @@ struct FixedRelevance: LinkRelevanceScoring {
         try await store.readyDatabase().write { db in
             try db.execute(sql: "UPDATE acquisition_candidates SET openedAt = NULL")
         }
-        // Filing it outside the Inbox counts as using it.
-        let home = try #require(await store.categories().first { !$0.isInbox })
+        // Filing it counts as using it.
+        let home = try #require(await store.categories().first)
         try await store.fileNote(essay.id, categoryID: home.id)
         #expect(try await store.expireUnusedAcquisitions(now: later) == 0)
         try await store.readyDatabase().write { db in
@@ -626,7 +626,7 @@ struct FixedRelevance: LinkRelevanceScoring {
         let store = DocumentStore(url: root.appending(path: "library.sqlite"))
         _ = try await store.open()
         try await store.seedExampleCategories()
-        let home = try #require(await store.categories().first { !$0.isInbox })
+        let home = try #require(await store.categories().first)
         let engine = IngestionEngine(
             store: store, fetcher: EssayFetcher(), youtube: CreatorVideoFixture(),
             settings: {

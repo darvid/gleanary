@@ -197,12 +197,9 @@ private actor FirstRelatedJudge: LinkJudging {
             _ = try await ingestion.enqueue("https://fixture.example/\(page)")
         }
         try await ingestion.run()
-        let inbox = try #require(await store.categories().first(where: \.isInbox))
         var ids: [UUID] = []
         for job in try await store.captureJobs().reversed() {
-            let id = try #require(job.noteID)
-            try await store.fileNote(id, categoryID: inbox.id)
-            ids.append(id)
+            try ids.append(#require(job.noteID))
         }
         return (store, ingestion, ids)
     }
@@ -314,7 +311,7 @@ private actor FirstRelatedJudge: LinkJudging {
     @Test @MainActor func tickRunsOnlyDueAutomationsAndRecordsTheRun() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let (store, ingestion, _) = try await library(["alpha"])
-        var summarizer = AutomationConfig(kind: .inboxSummarizer)
+        var summarizer = AutomationConfig(kind: .summaryBackfill)
         summarizer.enabled = true
         try await store.saveAutomation(summarizer)
         let model = AutomationsModel(
@@ -322,12 +319,12 @@ private actor FirstRelatedJudge: LinkJudging {
         )
         await model.load()
         await model.tick()
-        #expect(model.runs[.inboxSummarizer]?.count == 1)
+        #expect(model.runs[.summaryBackfill]?.count == 1)
         #expect(model.runs[.linkChecker]?.isEmpty == true)
-        #expect(model.config(.inboxSummarizer).lastRunAt != nil)
+        #expect(model.config(.summaryBackfill).lastRunAt != nil)
         // Ran just now, so a second tick has nothing due.
         await model.tick()
-        #expect(model.runs[.inboxSummarizer]?.count == 1)
+        #expect(model.runs[.summaryBackfill]?.count == 1)
     }
 
     @Test @MainActor func historyLeavesOutTheRunInProgress() async throws {
@@ -426,10 +423,10 @@ private actor FirstRelatedJudge: LinkJudging {
         let (store, ingestion, _) = try await library([])
         for index in 0 ..< 23 {
             let date = Date().addingTimeInterval(Double(index - 23) * 1800)
-            let id = try await store.beginAutomationRun(.inboxSummarizer, at: date)
+            let id = try await store.beginAutomationRun(.summaryBackfill, at: date)
             try await store.finishAutomationRun(AutomationRun(
                 id: id,
-                kind: .inboxSummarizer,
+                kind: .summaryBackfill,
                 startedAt: date,
                 status: .succeeded
             ))
@@ -443,7 +440,7 @@ private actor FirstRelatedJudge: LinkJudging {
         for dark in [false, true] {
             try await historyScreenshot(model, dark: dark, name: "recent")
         }
-        await model.showHistoryPage(4, of: .inboxSummarizer)
+        await model.showHistoryPage(4, of: .summaryBackfill)
         try await historyScreenshot(model, dark: true, name: "older")
     }
 
@@ -456,10 +453,10 @@ private actor FirstRelatedJudge: LinkJudging {
             "Synthetic tooling experiments and performance comparisons for a small native document library",
         ]
         let (store, ingestion, ids) = try await library(titles)
-        let id = try await store.beginAutomationRun(.inboxSummarizer, at: Date())
+        let id = try await store.beginAutomationRun(.summaryBackfill, at: Date())
         var run = AutomationRun(
             id: id,
-            kind: .inboxSummarizer,
+            kind: .summaryBackfill,
             startedAt: Date(),
             status: .succeeded
         )
@@ -517,13 +514,16 @@ private actor FirstRelatedJudge: LinkJudging {
             )
     }
 
-    // MARK: Inbox summarizer
+    // MARK: Summary backfill
 
     @Test func summarizerAppliesWithUndoAndMovesOn() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let (store, ingestion, ids) = try await library(["alpha", "beta"])
+        // Filed or not, an item without its summary gets one.
+        try await store.saveCategory(code: "31", name: "Computing")
+        try await store.fileNote(ids[0], categoryID: #require(await store.categories().first).id)
         let automation = engine(store, ingestion: ingestion)
-        let run = await automation.run(config(.inboxSummarizer))
+        let run = await automation.run(config(.summaryBackfill))
         #expect(run.status == .succeeded)
         #expect(run.changed == 2)
         for id in ids {
@@ -531,7 +531,7 @@ private actor FirstRelatedJudge: LinkJudging {
                 .hasPrefix("A brief synthetic summary.") == true)
         }
         // Summarized items aren't selected again.
-        #expect(try await store.inboxSummaryCandidates(limit: 10, retryBefore: Date()).isEmpty)
+        #expect(try await store.summaryCandidates(limit: 10, retryBefore: Date()).isEmpty)
         let undone = try await store.undoAgentChanges(store.appliedRunChanges(run.id))
         #expect(undone == 2)
         #expect(try await store.document(id: ids[0])?.markdown
@@ -542,7 +542,7 @@ private actor FirstRelatedJudge: LinkJudging {
         defer { try? FileManager.default.removeItem(at: root) }
         let (store, ingestion, _) = try await library(["alpha", "beta"])
         let run = await engine(store, ingestion: ingestion)
-            .run(config(.inboxSummarizer) { $0.dailyCalls = 1 })
+            .run(config(.summaryBackfill) { $0.dailyCalls = 1 })
         #expect(run.changed == 1)
         #expect(run.status == .partial)
         #expect(run.report.contains { $0.contains("today's limit") })
@@ -557,7 +557,7 @@ private actor FirstRelatedJudge: LinkJudging {
             probe: FixedProbe(.reachable), archive: FixedArchive(), judge: { nil },
             similar: { _, _ in [] }
         ))
-        let run = await automation.run(config(.inboxSummarizer) { $0.cloudAllowed = false })
+        let run = await automation.run(config(.summaryBackfill) { $0.cloudAllowed = false })
         #expect(run.changed == 0)
         #expect(run.report.first?.contains("on-device only") == true)
     }
@@ -876,7 +876,7 @@ extension AutomationTests {
         checker.recheck = 91 * 24 * 60 * 60
         #expect(AutomationEngine.plannedBatch(checker, backlog: 7400) == 82)
         // Summaries keep to the batch; the daily model budget limits them.
-        let summarizer = AutomationConfig(kind: .inboxSummarizer)
+        let summarizer = AutomationConfig(kind: .summaryBackfill)
         #expect(AutomationEngine.plannedBatch(summarizer, backlog: 7400) == summarizer.batchLimit)
     }
 
@@ -920,7 +920,7 @@ extension AutomationTests {
     @Test @MainActor func newSavesRunTheAutomationsThatFollowThem() async throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let (store, ingestion, _) = try await library(["alpha"])
-        for kind in [AutomationKind.inboxSummarizer, .linkChecker] {
+        for kind in [AutomationKind.summaryBackfill, .linkChecker] {
             var automation = AutomationConfig(kind: kind)
             automation.enabled = true
             // Not due on its schedule.
@@ -932,7 +932,7 @@ extension AutomationTests {
         )
         await model.load()
         await model.runForNewItems()
-        #expect(model.runs[.inboxSummarizer]?.count == 1)
+        #expect(model.runs[.summaryBackfill]?.count == 1)
         // A link just fetched needs no check.
         #expect(model.runs[.linkChecker]?.isEmpty == true)
     }
@@ -1189,6 +1189,9 @@ extension AutomationTests {
         let (store, ingestion, ids) = try await library(["alpha", "beta"])
         _ = try await ingestion.enqueue("https://fixture.example/gamma")
         try await ingestion.run()
+        try await store.saveCategory(code: "10", name: "General")
+        let general = try #require(await store.categories().first)
+        try await store.fileNote(ids[0], categoryID: general.id)
         let before = try await ids.asyncMap { try #require(await store.document(id: $0)) }
         let clock = TestClock(Date().addingTimeInterval(60))
         let automation = engine(store, clock: clock)

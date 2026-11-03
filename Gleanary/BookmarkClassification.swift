@@ -29,9 +29,9 @@ enum BookmarkClassification {
     Answer every item exactly once.
     """
 
-    /// Categories the model may choose. The Inbox is where unsorted things already wait.
+    /// Categories the model may choose.
     static func choices(_ categories: [DecimalCategory]) -> [DecimalCategory] {
-        categories.filter { !$0.isInbox }
+        categories
     }
 
     static func prompt(

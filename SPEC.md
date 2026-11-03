@@ -484,7 +484,7 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 | Field | Meaning | Example |
 |---|---|---|
 | Trigger | Interval, daily/weekly at a time, or an event (capture finished; a category's item count exceeds N) | Every 10 minutes |
-| Selection | A deterministic, parameterized query over the library, chosen from built-in selectors. The model never chooses the items. | Inbox sources with full text and no summary, oldest first |
+| Selection | A deterministic, parameterized query over the library, chosen from built-in selectors. The model never chooses the items. | Sources with full text and no summary, newest first |
 | Batch limit | Maximum items per run | 10 |
 | Agent | The role that makes judgment calls | Researcher |
 | Action | One built-in action: summarize, fetch, check access, propose links, propose filing, retitle, digest | Summarize |
@@ -522,7 +522,7 @@ Automations run repetitive library upkeep on a schedule, using the same agents, 
 
 | Automation | Agent | Selection → action | Policy |
 |---|---|---|---|
-| Inbox summarizer | Researcher | Inbox items with full text and no summary → summarize | Apply |
+| Summary backfill | Researcher | Items with full text and no summary, filed or not → summarize | Apply |
 | Bookmark fetcher | Librarian | Imported bookmarks never fetched, a few per run → fetch page | Apply |
 | Link checker | Librarian | Sources by oldest `accessCheckedAt` → check the original URL | Report; propose URL updates and archives (or archive dead links, if set) |
 | Cross-linker | Curator | Items with no links, by oldest `linksCheckedAt` → propose links with a one-line rationale | Propose |
@@ -534,7 +534,7 @@ Default settings, chosen so the two automations that only finish work you starte
 
 | Automation | On by default | Schedule | Items per run | Model calls per day |
 |---|---|---|---|---|
-| Inbox summarizer | No | Every 10 minutes | 10 | 200 |
+| Summary backfill | No | Every 10 minutes | 10 | 200 |
 | Bookmark fetcher | Yes | Every 30 minutes | 5 | 200 (summaries of fetched pages) |
 | Link checker | No | Daily | 50, more to keep within Recheck items | None |
 | Cross-linker | No | Daily | 20, more to keep within Recheck items | 200 |
@@ -565,7 +565,7 @@ Default settings, chosen so the two automations that only finish work you starte
 **Weekly digest rules.**
 
 - Lists items saved since the last digest still standing, at most 7 days back, grouped under their primary category in code order with unfiled items last, each linking back to the item. When more were saved than the digest lists, it lists the newest and says how many there were.
-- Writes one new note, filed in the Inbox, and never edits another. Undo deletes it unless it was edited since; an undone digest's week is covered again by the next.
+- Writes one new note, unfiled, and never edits another. Undo deletes it unless it was edited since; an undone digest's week is covered again by the next.
 - A week with nothing saved writes nothing. No model is used. Digests are left out of later digests, the cross-linker and the unfiled filer.
 
 **Link checker rules.** Most checks need no model; classify the response:

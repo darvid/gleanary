@@ -21,7 +21,7 @@ enum SeriesFiling {
         local: Bool
     ) -> [FilingSuggestionDraft] {
         let categories = Dictionary(
-            taxonomy.categories.filter { !$0.isInbox }.map { ($0.code, $0.id) },
+            taxonomy.categories.map { ($0.code, $0.id) },
             uniquingKeysWith: { first, _ in first }
         )
         return candidates.indices.compactMap { index in

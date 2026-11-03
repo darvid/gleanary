@@ -383,7 +383,7 @@ private struct AutomationDetail: View {
     /// Says when runs take more than the setting, and why.
     private var batchNote: String {
         switch kind {
-        case .inboxSummarizer: return "Also limited by model calls per day."
+        case .summaryBackfill: return "Also limited by model calls per day."
         case .bookmarkFetcher:
             return "One page at a time. Summaries count toward model calls per day."
         case .captureRetry: return "Each is tried at most three times."
@@ -668,7 +668,7 @@ extension AutomationRun {
     /// What the run itself changed, in the automation's own words.
     private var changedLine: String {
         switch kind {
-        case .inboxSummarizer: "Wrote \(changed) summar\(changed == 1 ? "y" : "ies")"
+        case .summaryBackfill: "Wrote \(changed) summar\(changed == 1 ? "y" : "ies")"
         case .bookmarkFetcher: "Fetched \(changed) page\(changed == 1 ? "" : "s")"
         case .captureRetry: "Saved \(changed) capture\(changed == 1 ? "" : "s")"
         case .weeklyDigest: "Wrote a digest of \(AutomationEngine.itemCount(examined))"
@@ -685,7 +685,7 @@ extension AutomationRun {
         case .crossLinker: fine == 1 ? "1 item had nothing to link" : "\(fine) items had nothing to link"
         case .unfiledFiler:
             fine == 1 ? "1 item had no new home to suggest" : "\(fine) items had no new home to suggest"
-        case .inboxSummarizer, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
+        case .summaryBackfill, .bookmarkFetcher, .captureRetry, .weeklyDigest, .sourceExplorer:
             "\(fine) needed nothing"
         }
     }
@@ -746,7 +746,7 @@ private extension AutomationKind {
             "Failed captures whose next try is due: an hour, a day, then a week after each failure."
         case .weeklyDigest: "Items saved since the last digest, at most a week back."
         case .sourceExplorer: "Links found in your sources that aren't saved or ruled out yet."
-        case .inboxSummarizer, .linkChecker, .crossLinker, .unfiledFiler:
+        case .summaryBackfill, .linkChecker, .crossLinker, .unfiledFiler:
             "New items haven't been checked yet, so they always come first; then the ones checked longest ago."
         }
     }
@@ -764,7 +764,7 @@ private extension AutomationKind {
     /// Each automation's own colour, as Shortcuts gives each automation one.
     var color: Color {
         switch self {
-        case .inboxSummarizer: .purple
+        case .summaryBackfill: .purple
         case .bookmarkFetcher: .blue
         case .linkChecker: .orange
         case .crossLinker: .teal

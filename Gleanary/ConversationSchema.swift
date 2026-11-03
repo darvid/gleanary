@@ -62,6 +62,7 @@ enum ConversationSchema {
             PRIMARY KEY(leftID, rightID), CHECK(leftID != rightID)
         );
         -- Only the Inbox fallback is built in; users define their own filing scheme.
+        -- (remove-inbox-v1 later removes it: unsorted items are unfiled.)
         -- Libraries created before this change keep the categories they already have.
         INSERT INTO decimal_categories VALUES
             ('10000000-0000-0000-0000-000000000001', '10', 'Inbox');

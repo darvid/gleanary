@@ -255,15 +255,8 @@ actor AgentCoordinator {
                 )
                 try await store.reviewProposal(proposal, action: "apply")
             } else {
-                let inbox = try await store.categories().first { $0.code == "10" }
-                if let inbox {
-                    try await store.fileNote(
-                        noteID,
-                        categoryID: inbox.id,
-                        includeSources: true
-                    )
-                }
-                let options = (suggestion?.alternatives ?? []).filter { $0.id != inbox?.id }
+                // Nothing fitted confidently: it stays unfiled, with any likely homes offered.
+                let options = suggestion?.alternatives ?? []
                 for category in options {
                     _ = try await store.proposeFiling(
                         noteID: noteID,
@@ -284,7 +277,7 @@ actor AgentCoordinator {
                 } else {
                     filingExplanation = options.isEmpty
                         ? " No confident filing home was identified; review the filing categories to choose one."
-                        : " No confident filing home was identified; apply one of the suggested homes below or keep it in Inbox."
+                        : " No confident filing home was identified; apply one of the suggested homes below or leave it unfiled."
                 }
             }
         }

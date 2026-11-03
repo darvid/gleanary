@@ -68,7 +68,6 @@ enum FolderMapping {
         categories: [DecimalCategory],
         withSamples: Bool
     ) -> String {
-        // The Inbox holds unsorted things; offering it invites the model to dump everything there.
         let homes = BookmarkClassification.choices(categories)
         let existing = homes.isEmpty ? "(none)" : homes.map(\.label).joined(separator: "\n")
         let used = Set(categories.compactMap(\.code.first))
@@ -230,11 +229,11 @@ enum FolderMapping {
             return BookmarkClassification.choices(categories).first { $0.code == code }
                 .map { .existing($0.id) }
         case "new":
-            // A "new" home that already exists by name is that category, unless it's the Inbox.
+            // A "new" home that already exists by name is that category.
             if let match = categories.first(where: {
                 DecimalCategory.normalized($0.name) == DecimalCategory.normalized(name)
             }) {
-                return match.isInbox ? nil : .existing(match.id)
+                return .existing(match.id)
             }
             guard (try? DecimalCategory.validate(code: code, name: name)) != nil,
                   !categories.contains(where: { $0.code == code }) else { return nil }

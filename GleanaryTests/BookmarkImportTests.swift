@@ -398,26 +398,6 @@ extension BookmarkImportTests {
             }
             return true
         })
-        // The Inbox is never a subject home, by code or by name.
-        let inboxed = try FolderMapping.apply([
-            FolderMapping.Answer(
-                folder: number("Knowledge"),
-                action: "existing",
-                code: "10",
-                name: "",
-                reason: ""
-            ),
-            FolderMapping.Answer(
-                folder: number("Development"),
-                action: "new",
-                code: "40",
-                name: "Inbox",
-                reason: ""
-            ),
-        ], to: plan, folders: folders, categories: categories)
-        #expect(inboxed.changed == 0)
-        #expect(!FolderMapping.prompt(folders: folders, categories: categories, withSamples: false)
-            .contains("10 Inbox"))
     }
 
     @Test func streamedRepliesYieldOnlyCompleteFolderAnswers() {
