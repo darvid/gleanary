@@ -91,7 +91,7 @@ struct FilingInspector: View {
             }
         } label: {
             HStack(spacing: 8) {
-                Circle().fill(AtlasPalette.ink(slot, dark: colorScheme == .dark))
+                Circle().fill(AtlasPalette.mark(slot, dark: colorScheme == .dark))
                     .frame(width: 8, height: 8)
                 Text(category.code).monospacedDigit().foregroundStyle(.secondary)
                 Text(category.name).lineLimit(1)

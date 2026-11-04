@@ -19,6 +19,15 @@ enum AtlasPalette {
             ? Color(hue: hue, saturation: 0.32, brightness: 0.96)
             : Color(hue: hue, saturation: 0.72, brightness: 0.42)
     }
+
+    /// For small marks such as dots and graph nodes. Light ink is dark enough for text, so at
+    /// this size its hue is lost.
+    static func mark(_ slot: Int?, dark: Bool, increasedContrast: Bool = false) -> Color {
+        guard !dark, !increasedContrast, let slot else {
+            return ink(slot, dark: dark)
+        }
+        return Color(hue: hues[slot % hues.count] / 360, saturation: 0.74, brightness: 0.68)
+    }
 }
 
 /// Draws an `AtlasLayout` through a camera with semantic level of detail: regions gain labels,

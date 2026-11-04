@@ -1351,15 +1351,15 @@ struct ContentView: View {
         let hidden = presentation == .map && atlasHidesEmpty
             && atlas.emptyCategoryIDs.contains(category.id)
         // The category's Atlas colour, as on its chips and in the filing inspector.
-        let ink = AtlasPalette.ink(
+        let mark = AtlasPalette.mark(
             AtlasHierarchy.hue(for: category.code),
             dark: colorScheme == .dark
         )
         return HStack(spacing: 8) {
             if let icon {
-                Image(systemName: icon).foregroundStyle(ink).frame(width: 18)
+                Image(systemName: icon).foregroundStyle(mark).frame(width: 18)
             } else {
-                Circle().fill(ink).frame(width: 7, height: 7).accessibilityHidden(true)
+                Circle().fill(mark).frame(width: 7, height: 7).accessibilityHidden(true)
             }
             // Leading, as Johnny Decimal writes it: a trailing number reads as a count.
             Text(category.code).font(.caption).monospacedDigit()
