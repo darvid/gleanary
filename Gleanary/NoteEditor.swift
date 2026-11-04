@@ -226,7 +226,7 @@ struct MarkdownSourceEditor: View {
                 services: MarkdownEditorServices(latex: MathMarkdown.renderer),
                 textInsets: TextInsets(horizontal: 28)
             ),
-            fontName: appearance[readingKind].nativeFont.fontName,
+            fontName: appearance[readingKind].editorFontName,
             fontSize: appearance[readingKind].size,
             documentId: documentID.uuidString
         )

@@ -13,12 +13,16 @@ struct NoteEditorTests {
         let appearance = ReadingAppearance(defaults: defaults)
         #expect(appearance[.notes] == ReadingKind.notes.defaultFont)
         #expect(appearance[.sources] == ReadingKind.sources.defaultFont)
-        let serif = ReadingKind.noteSerif
-        #expect(["Charter", "Georgia"].contains(serif))
-        #expect(appearance[.notes].family == serif)
+        #expect(appearance[.notes].family == ReadingFont.systemSerif)
         #expect(appearance[.notes].available)
         #expect(!ReadingFont(family: "No Such Synthetic Serif", size: 14).available)
-        #expect(appearance[.notes].nativeFont.familyName == serif)
+        let serif = appearance[.notes].nativeFont
+        #expect(serif.familyName != NSFont.systemFont(ofSize: 14).familyName)
+        // The editor reaches it by name, and has to land on the same family.
+        #expect(
+            NSFont(name: appearance[.notes].editorFontName, size: 14)?.familyName == serif
+                .familyName
+        )
         #expect(appearance[.sources].family.isEmpty)
         #expect(appearance[.notes].nativeFont.familyName != appearance[.sources].nativeFont
             .familyName)
@@ -66,9 +70,11 @@ struct NoteEditorTests {
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
-        try await settle { Self.textView(in: host)?.font == appearance[kind].nativeFont }
+        try await settle {
+            Self.textView(in: host)?.font?.familyName == appearance[kind].nativeFont.familyName
+        }
         let editor = try #require(Self.textView(in: host))
-        #expect(editor.font == appearance[kind].nativeFont)
+        #expect(editor.font?.familyName == appearance[kind].nativeFont.familyName)
         appearance[kind] = ReadingFont(family: kind == .notes ? "Helvetica" : "Georgia", size: 19)
         try await settle { editor.font == appearance[kind].nativeFont }
         #expect(editor.font == appearance[kind].nativeFont)

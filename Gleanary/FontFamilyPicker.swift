@@ -26,7 +26,8 @@ struct FontFamilyPicker: NSViewRepresentable {
         button.setAccessibilityLabel(accessibilityLabel)
         // A choice outside the list, such as a font that's been uninstalled, stays listed so
         // the menu can show it.
-        let extra = family.isEmpty || families.contains(family) ? nil : family
+        let extra = family.isEmpty || family == ReadingFont.systemSerif
+            || families.contains(family) ? nil : family
         let contents = families + [extra ?? "", "\(available)"]
         if contents != context.coordinator.contents {
             context.coordinator.contents = contents
@@ -58,6 +59,15 @@ struct FontFamilyPicker: NSViewRepresentable {
     private static func menu(_ families: [String], extra: String?, available: Bool) -> NSMenu {
         let menu = NSMenu()
         menu.addItem(item("System", family: ""))
+        let serif = item("System Serif", family: ReadingFont.systemSerif)
+        serif.attributedTitle = NSAttributedString(
+            string: serif.title,
+            attributes: [
+                .font: ReadingFont(family: ReadingFont.systemSerif, size: NSFont.systemFontSize)
+                    .nativeFont,
+            ]
+        )
+        menu.addItem(serif)
         menu.addItem(.separator())
         if let extra {
             menu.addItem(item(available ? extra : "\(extra) (unavailable)", family: extra))

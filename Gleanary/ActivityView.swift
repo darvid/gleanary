@@ -65,8 +65,10 @@ struct ActivityView<Intake: View>: View {
 
     private var timeline: some View {
         VStack(spacing: 0) {
-            controls.padding(.horizontal, 14).padding(.vertical, 12)
-            Divider()
+            if model.query.day != nil {
+                controls.padding(.horizontal, 14).padding(.vertical, 12)
+                Divider()
+            }
             if let error = model.error {
                 VStack(alignment: .leading, spacing: 8) {
                     Label(error, systemImage: "exclamationmark.triangle")

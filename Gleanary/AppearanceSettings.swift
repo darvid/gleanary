@@ -23,14 +23,7 @@ enum ReadingKind: String, CaseIterable, Identifiable {
     }
 
     var defaultFont: ReadingFont {
-        ReadingFont(family: self == .notes ? Self.noteSerif : "", size: 14)
-    }
-
-    /// Charter ships with every Mac and was drawn for reading on screens. Athelas, the old
-    /// default, is a font macOS downloads on demand, so it can't be relied on.
-    static var noteSerif: String {
-        let families = Set(NSFontManager.shared.availableFontFamilies)
-        return ["Charter", "Georgia"].first(where: families.contains) ?? "Georgia"
+        ReadingFont(family: self == .notes ? ReadingFont.systemSerif : "", size: 14)
     }
 }
 
@@ -39,6 +32,9 @@ struct ReadingFont: Equatable, Sendable {
     /// Chat replies and messages: the system font a step above macOS's 13pt body, since
     /// they're read as prose rather than scanned like labels.
     static let chat = ReadingFont(family: "", size: 14)
+    /// Stands for the system's serif design, New York on current macOS. It isn't an installed
+    /// family, so it can only be reached through a design, never by name.
+    static let systemSerif = "system-serif"
     let family: String
     let size: Double
 
@@ -57,8 +53,18 @@ struct ReadingFont: Equatable, Sendable {
     @MainActor var nativeFont: NSFont {
         let system = NSFont.systemFont(ofSize: size)
         guard !family.isEmpty else { return system }
+        if family == Self.systemSerif {
+            return system.fontDescriptor.withDesign(.serif)
+                .flatMap { NSFont(descriptor: $0, size: size) } ?? system
+        }
         return NSFontManager.shared
             .font(withFamily: family, traits: [], weight: 5, size: size) ?? system
+    }
+
+    /// For the note editor, whose engine loads fonts by name. The serif's PostScript name doesn't
+    /// load, but this name for its family does.
+    @MainActor var editorFontName: String {
+        family == Self.systemSerif ? ".AppleSystemUIFontSerif" : nativeFont.fontName
     }
 
     @MainActor var font: Font {
@@ -74,7 +80,8 @@ struct ReadingFont: Equatable, Sendable {
     /// Whether the family renders, which is what `nativeFont` uses. Fonts macOS loads on
     /// demand render without being listed among installed families.
     @MainActor var available: Bool {
-        family.isEmpty || NSFontManager.shared.availableFontFamilies.contains(family)
+        family.isEmpty || family == Self.systemSerif
+            || NSFontManager.shared.availableFontFamilies.contains(family)
             || NSFontManager.shared
             .font(withFamily: family, traits: [], weight: 5, size: size) != nil
     }
