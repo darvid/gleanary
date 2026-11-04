@@ -148,7 +148,7 @@ struct LibraryGraphDetails: View {
         if node.kind == .document {
             DocumentIdentityMark(
                 isSource: graph.isSource(node),
-                ink: AtlasPalette.ink(
+                ink: AtlasPalette.mark(
                     graph.nodeStyle(for: node).filingHue,
                     dark: colorScheme == .dark
                 )

@@ -277,7 +277,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             }
         }
         // Faint enough that a dense graph reads as its nodes; a selection's lines stand out.
-        let opacity = contrast == .increased ? 0.9 : (scale < 0.3 ? 0.12 : 0.28)
+        // `.secondary` is already translucent, which leaves too little on a light canvas.
+        let opacity = contrast == .increased ? 0.9
+            : colorScheme == .dark ? (scale < 0.3 ? 0.12 : 0.28)
+            : (scale < 0.3 ? 0.3 : 0.55)
         let width = contrast == .increased ? 1 : 0.75
         for path in solid.paths {
             context.stroke(
@@ -543,7 +546,10 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     private func nodeInk(_ style: GraphNodeStyle) -> Color {
         if graph.usesFilingColors {
             return style.kind == .document
-                ? AtlasPalette.ink(style.filingHue, dark: colorScheme == .dark) : .primary
+                ? AtlasPalette.mark(
+                    style.filingHue, dark: colorScheme == .dark,
+                    increasedContrast: contrast == .increased
+                ) : .primary
         }
         return style.kind == .document ? .primary : nodeColor(style.kind)
     }

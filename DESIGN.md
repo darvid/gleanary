@@ -107,10 +107,10 @@ Markdown code blocks. Primary/secondary foreground styles and native
 Divider retain macOS appearance behavior. Do not freeze these semantic
 colors as screenshot hex values.
 
-Sidebar labels use ink in light appearance and inverse ink when selected
-or in dark appearance. LibrarySidebarLabelStyle dims icons to 0.72
+Sidebar labels use ink in light appearance and inverse ink in dark
+appearance, selected or not. LibrarySidebarLabelStyle dims icons to 0.72
 opacity; filing codes use 0.5 opacity. Category rows use AtlasPalette
-colors for their dots or folder icons. Selection remains native and
+marks for their dots or folder icons. Selection remains native and
 focus-dependent. Preview buttons use native disabled and pressed states,
 not custom grayscale fills or borders.
 
