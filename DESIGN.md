@@ -247,16 +247,14 @@ button radius. Code blocks use a rectangular control surface.
 
 ## Components
 
-- **Navigation:** `.sidebar` list with a selectable Library parent and
-  collapsible Notes, Sources, and Unfiled filters. Expanded by default,
-  it remembers its disclosure state. The label opens all items; only the
-  chevron changes expansion. A collapsed active filter stays selected
-  through Library and appears beside its label, without changing scope.
-  Entities and Tasks sit with the library's content. A separate upkeep
-  section lists Activity, Automations and Archive. Activity also holds
-  captures, so its only badge is the orange count of failed captures
-  that need you; it never counts new activity. Filing retains its own section,
-  SF Symbols, and category codes. Filing rows carry their Atlas colour:
+- **Navigation:** `.sidebar` list with one Library row, which stays
+  selected whichever type its picker shows and keeps that type when
+  clicked. Entities and Tasks sit with the library's content. A separate
+  upkeep section lists Activity, Automations and Archive. Activity also
+  holds captures, so its only badge is the orange count of failed
+  captures that need you; it never counts new activity. Filing retains
+  its own section, SF Symbols, and category codes, with Unfiled first as
+  the items that have no home yet. Filing rows carry their Atlas colour:
   a 7pt dot before the name, or the area row's folder icon tinted with it.
   Graph is a Library presentation, not a separate sidebar destination;
   Mind Map navigation remains deferred. Go › Back/Forward (⌘[ / ⌘]) and
@@ -770,8 +768,8 @@ button radius. Code blocks use a rectangular control surface.
 - **Writer scope:** while a compose request waits for confirmation, its last agent reply carries a scope card (the same 10pt card surface): "Scope for this document" with "N of M checked" rolling as boxes change and Check All/Uncheck All, then a list of up to 240pt of checkbox rows (title, then filing and why it was gathered, after a comma) with an open-item button; possible strays carry an orange "Possibly off-topic" capsule and start unchecked. Below, a Style picker and an Allow general knowledge checkbox, a one-line limit note when too many are checked, and Cancel and Write Document (prominent). Stage progress under the composer keeps the stage still and rolls its count ("Extracting 12 of 37").
 - **Library types:** a native All / Notes / Sources segmented picker
   appears above the map and list. One remembered selection follows the
-  person across presentations and categories. Sources and Notes sidebar
-  rows are shortcuts to that same filter. Filtering combines with the
+  person across presentations and categories. The command palette's
+  Notes and Sources are shortcuts to it. Filtering combines with the
   current category and search; empty results keep the controls and offer
   Show all types. Counts name notes or sources when narrowed. The map
   keeps the focused category even if filtering leaves it empty; the

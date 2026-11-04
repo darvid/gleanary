@@ -41,7 +41,6 @@ import SwiftUI
         else { throw Failure(reason: "No fixture preferences") }
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(LibraryPresentation.list.rawValue, forKey: "libraryPresentation")
-        defaults.set(LibraryKindFilter.notes.rawValue, forKey: "libraryKindFilter")
         defaults.set(true, forKey: "starterCategoriesOffered")
         defaults.set(220, forKey: "sidebarWidth")
         let library = LibraryModel(store: store)
@@ -63,7 +62,7 @@ import SwiftUI
         )
         window.isReleasedWhenClosed = false
         window.contentView = host
-        window.title = "Synthetic Library disclosure verification"
+        window.title = "Synthetic Library input verification"
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -73,42 +72,7 @@ import SwiftUI
             window.isKeyWindow && NSApplication.shared.isActive,
             "Fixture window is not active/key"
         )
-        try require(library.documentGrid.kindFilter == .notes, "Initial Notes filter not loaded")
-        let triangle = try disclosureFrame(in: host)
-        try await click(triangle, in: window)
-        try require(
-            defaults.object(forKey: "librarySidebarExpanded") as? Bool == false,
-            "Chevron did not collapse Library"
-        )
-        try require(
-            library.documentGrid.kindFilter == .notes,
-            "Collapsing changed the active filter"
-        )
-        // AppKit exposes this outline label through its disclosure row rather than
-        // a separate AXButton. Locate that public row using the accessible chevron.
-        guard let table = table(in: host) else { throw Failure(reason: "No native sidebar table") }
-        let location = table.convert(
-            window.convertPoint(fromScreen: NSPoint(x: triangle.midX, y: triangle.midY)),
-            from: nil
-        )
-        let row = table.row(at: location)
-        try require(row >= 0, "No row for the Library disclosure")
-        let label = window.convertToScreen(table.convert(table.rect(ofRow: row), to: nil))
-        try await click(label, in: window)
-        try require(
-            library.documentGrid.kindFilter == .all,
-            "Clicking the collapsed active Library label did not open all items"
-        )
-        try require(
-            defaults.bool(forKey: "librarySidebarExpanded") == false,
-            "Label click changed expansion"
-        )
-        try await click(disclosureFrame(in: host), in: window)
-        try require(
-            defaults.bool(forKey: "librarySidebarExpanded"),
-            "Chevron did not expand Library"
-        )
-        try require(library.documentGrid.kindFilter == .all, "Expanding changed the active filter")
+        try require(library.documentGrid.kindFilter == .all, "Initial filter not loaded")
 
         defaults.set(LibraryPresentation.map.rawValue, forKey: "libraryPresentation")
         try await Task.sleep(for: .milliseconds(400))
@@ -186,13 +150,6 @@ import SwiftUI
         try require(graph.camera == notesCamera, "Live canvas overwrote restored Notes camera")
     }
 
-    private static func table(in view: NSView) -> NSTableView? {
-        if let table = view as? NSTableView {
-            return table
-        }
-        return view.subviews.lazy.compactMap { table(in: $0) }.first
-    }
-
     private static func click(_ frame: CGRect, in window: NSWindow) async throws {
         let point = window.convertPoint(fromScreen: NSPoint(x: frame.midX, y: frame.midY))
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
@@ -212,37 +169,5 @@ import SwiftUI
             try await Task.sleep(for: .milliseconds(10))
         }
         try await Task.sleep(for: .milliseconds(180))
-    }
-
-    private static func disclosureFrame(in host: NSView) throws -> CGRect {
-        var pending: [Any] = [host]
-        var visited = Set<ObjectIdentifier>()
-        while let value = pending.popLast() {
-            guard visited.insert(ObjectIdentifier(value as AnyObject)).inserted else { continue }
-            if let view = value as? NSView {
-                if view.accessibilityRole() == .disclosureTriangle,
-                   !view.accessibilityFrame().isEmpty
-                {
-                    return view.accessibilityFrame()
-                }
-                pending += view.accessibilityChildren() ?? []
-                pending += view.subviews
-            } else if let element = value as? NSAccessibilityElement {
-                if element.accessibilityRole() == .disclosureTriangle,
-                   !element.accessibilityFrame().isEmpty
-                {
-                    return element.accessibilityFrame()
-                }
-                pending += element.accessibilityChildren() ?? []
-            } else if let element = value as? any NSAccessibilityProtocol {
-                if element.accessibilityRole() == .disclosureTriangle,
-                   !element.accessibilityFrame().isEmpty
-                {
-                    return element.accessibilityFrame()
-                }
-                pending += element.accessibilityChildren() ?? []
-            }
-        }
-        throw Failure(reason: "No accessible Library disclosure frame")
     }
 }
