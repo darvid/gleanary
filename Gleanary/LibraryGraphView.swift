@@ -61,6 +61,8 @@ struct LibraryGraphView: View {
                     showsDocumentLegend: true, camera: $graph.camera
                 )
                 .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                // The graph fits itself to what's left, so the inspector can't cover any of it.
+                .padding(.trailing, graph.inspectorVisible ? Self.inspectorWidth + 24 : 0)
                 .overlay(alignment: .topLeading) { controls.padding(12) }
                 .overlay(alignment: .trailing) { inspector }
             }

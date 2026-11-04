@@ -437,7 +437,7 @@ struct DocumentPreview: View {
 
     /// The pane's own bar: everything you can do with the item, kept off the page.
     private func itemBar(_ document: MarkdownDocument) -> some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 8) {
             itemBarLeading
             Spacer(minLength: 8)
             if model.citation != nil || sourceURL != nil || model.canGenerateSummary

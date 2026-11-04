@@ -19,8 +19,8 @@ struct AutomationsView: View {
                     selection: $filter
                 )
             } accessory: {
-                if let next = nextRun {
-                    Text("Next run \(next.formatted(.relative(presentation: .numeric)))")
+                if let nextRun {
+                    Text(nextRun)
                         .font(.caption).foregroundStyle(.secondary).padding(.trailing, 6)
                 }
             }
@@ -28,9 +28,13 @@ struct AutomationsView: View {
         }
     }
 
-    private var nextRun: Date? {
-        AutomationKind.allCases.map { model.config($0) }
-            .filter(\.enabled).compactMap(\.nextRunAt).min()
+    /// An automation that has never run is due at the distant past, so it reads as due, not as
+    /// a date.
+    private var nextRun: String? {
+        guard let next = AutomationKind.allCases.compactMap({ model.config($0).nextRunAt }).min()
+        else { return nil }
+        return next <= .now ? "Due now"
+            : "Next run \(next.formatted(.relative(presentation: .numeric)))"
     }
 
     private var shown: [AutomationKind] {

@@ -499,6 +499,7 @@ button radius. Code blocks use a rectangular control surface.
   preserve the unsent draft. Neither shortcut inserts an agent command.
   Disclosure groups open from anywhere on their row, not only the
   chevron (`FullRowDisclosureStyle`).
+  Notes default to the system serif, New York on current macOS.
   There is no window toolbar. The sidebar toggle stays beside the traffic
   lights, and every page opens with a 46pt `PageBar`: plain text filter
   tabs on the left, the page's own controls after them, then Search and
