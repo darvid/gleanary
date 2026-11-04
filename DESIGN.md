@@ -91,7 +91,11 @@ The product's platform posture is adaptive; the shipping surface is SwiftUI on m
 
 ### Primary
 
-Use the system accent where no category tint applies. DocumentPreview
+The app's accent is neutral gray (#5F5F63 light, #7C7C80 dark) from
+`Assets.xcassets`, so selection and prominent controls carry no color.
+macOS applies it only while the system accent is Multicolor; a chosen
+system accent still wins. Scrollers use AppKit's small size throughout.
+Use this accent where no category tint applies. DocumentPreview
 tints its actions and links with the primary category's AtlasPalette
 ink. Native button styles determine their appearance; this is not a
 fixed grayscale button system. Library and chat previews share summary
@@ -102,8 +106,9 @@ work temporarily disables manual generation.
 ### Neutral
 
 `Color(nsColor: .windowBackgroundColor)` owns the Library background.
-`controlBackgroundColor` owns search, error notices, the composer, and
-Markdown code blocks. Primary/secondary foreground styles and native
+`controlBackgroundColor` owns error notices, the composer, and Markdown
+code blocks. List-column search uses `quaternarySystemFill`, since the
+control background matches the pane in dark appearance. Primary/secondary foreground styles and native
 Divider retain macOS appearance behavior. Do not freeze these semantic
 colors as screenshot hex values.
 
@@ -178,14 +183,17 @@ unsupported takeaways are removed. Existing summaries are not rewritten.
 
 The hidden-title-bar window defaults to 1180 × 780pt with a 900 × 600pt
 minimum. ContentView places a manually resizable sidebar beside the main
-content. Library list/detail columns and the chat feed/saved-document
-preview use HSplitView, not NavigationSplitView. Native split behavior
-and explicit viewport constraints govern resizing.
+content. List/detail columns, the graph inspector and the chat
+feed/saved-document preview use `ListDetailColumns` and `ColumnDivider`,
+not HSplitView or NavigationSplitView: HSplitView's AppKit columns draw
+offset inside the content panel's rounded clip. Dragging an edge resizes
+a column and double-clicking resets it.
 
 | Region | Minimum | Ideal | Maximum |
 | --- | ---: | ---: | ---: |
 | Filing sidebar | 180pt | 220pt | 340pt (drag its edge; double-click resets) |
 | Document list | 260pt | 330pt | 440pt |
+| Entity list | 260pt | 330pt | 440pt |
 | Capture list | 260pt | 330pt | 440pt |
 | Reading detail | 320pt | Flexible | Flexible |
 | Chat document pane | 260pt | Flexible | Flexible |
@@ -416,19 +424,40 @@ button radius. Code blocks use a rectangular control surface.
   during pan/zoom. This does not paginate or truncate the rendered graph;
   the native inspector also retains its searchable item browser.
   Connection-based grouping and other grouping modes remain deferred.
-- **Search:** plain text field inside the rounded semantic control surface, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
-- **Document identity:** Source uses the graph's outlined folded page;
-  Note uses its filled page with text lines. The reading header, Library
-  list/search rows, map cards, and graph inspector reuse these marks.
+- **List columns:** Library and Entities share `ListColumnHeader`: scope
+  title and count, a leading segmented filter, then search, inset 14pt.
+  Entities shows All as a word and each kind as its row's symbol; sort,
+  Show Hidden and Find Duplicates sit in a ⋯ menu, with a status line
+  under search only while a duplicate check runs or has results.
+- **Search:** plain text field inside the rounded semantic fill, magnifying glass, conditional clear action, ⌘F focus, and Escape to clear.
+- **Graph marks:** the Appearance setting defaults to Shapes (notes are
+  filled circles, sources outlined squares). It drives the Graph canvas,
+  its legend and inspector rows, and Map items. Library rows and the
+  reading header always use page marks, since an outlined square beside
+  a title reads as a checkbox.
+- **Opening presentation:** Library opens on Map each launch. List or
+  Graph lasts until quit.
+- **Document identity:** Source uses the outlined folded page;
+  Note uses its filled page with text lines. The reading header and
+  Library list/search rows use these marks.
   Summaries remain notes, with Summary as a secondary subtype. Use 12pt
   gaps between the identity, subtype, and host groups, not middle dots or
   dividers. Other note subtypes follow the same pattern. Retained-text mode
   says Source even when its summary shares the saved item's ID. Type never depends on a URL,
   thumbnail, provider, or filing color. Keep the identity visible before
   secondary host metadata; do not add a pill, banner, or type palette.
-- **Document list:** `.inset` native list with multi-selection; title,
-  identity/host, filing, and applicable coverage. Cache arrivals are
-  observed so loaded rows replace placeholders.
+- **Document list:** `.inset` native list with multi-selection. A row is
+  a title of up to two lines over one metadata line, with a 64 × 48pt
+  captured preview trailing when there is one. The metadata line leads
+  with a 14pt identity mark, then host (without "www."), or subtype or
+  identity for items with no host, then filing with its 6pt Atlas dot.
+  The mark moved out of the leading column because a Source's outlined
+  page read as a checkbox there. Coverage or activity adds a line. The
+  selection footer (count, Clear, Use in Chat) appears only with a
+  selection. Cache arrivals are observed so loaded rows replace
+  placeholders.
+- **Entity list:** `.inset` native list with one line per entity: an 18pt
+  kind symbol, the name in the row-title style, and a caption note count.
 - **Preview actions:** Open summary appears first when a saved summary
   exists (a named Summaries menu for multiple notes). View source appears
   only when the retained text is not already being read. Open Original,
@@ -468,14 +497,35 @@ button radius. Code blocks use a rectangular control surface.
   discarding its unsent draft and attachments. Saved library items remain.
   It returns to a blank, focused composer; Clear Conversation continues to
   preserve the unsent draft. Neither shortcut inserts an agent command.
-  The sidebar toggle and title share one stable navigation item to avoid
-  native inter-item gaps. Sidebar animation is scoped below the toolbar;
-  the navigation item does not animate. The entire titlebar uses the
-  content area's solid background, with no material seam at the sidebar
-  boundary. Native sidebar translucency and navigation rows stay below
-  the titlebar.
-  Settings is the standard Settings window (Gleanary › Settings…, ⌘,) with
-  toolbar tabs (AI & accounts, Appearance, Capture, Filing, Writing),
+  Disclosure groups open from anywhere on their row, not only the
+  chevron (`FullRowDisclosureStyle`).
+  There is no window toolbar. The sidebar toggle stays beside the traffic
+  lights, and every page opens with a 46pt `PageBar`: plain text filter
+  tabs on the left, the page's own controls after them, then Search and
+  More. Search and More end every bar, so they never change places.
+  An item opens as one page everywhere: Library's detail, Map and Graph
+  show the same text column, with filing, status, an outline and related
+  items in a 220pt rail once the page is 780pt wide, and beneath the
+  title below that. The page opens with its title and one line of facts
+  (source, kind, date, what it came from); its actions sit in the item's
+  own 46pt bar, which hosts such as Chat start with their way back. Reader Mode is the exception on purpose: the bar's
+  back button, then only the title and text at the larger reading size.
+  Search expands leftward over the page's own field; a page with nothing
+  to search opens the command palette from the same button. Chat puts
+  its own menu in the More slot. No page title is drawn: the selected
+  sidebar row says where you are, and the window keeps the title for the
+  Window menu and VoiceOver. Archive is a Library tab, not a sidebar
+  row. Behind the sidebar the window is flat near-black (#0E0E10) in
+  dark mode and the sidebar material in light mode. Everything else sits
+  in a solid content panel (#141416 in dark mode):
+  12pt continuous corners, a one-device-pixel separator stroke, inset 8pt from the
+  window's top, trailing and bottom edges, and from the leading edge when
+  the sidebar is hidden, when it also drops 46pt below the traffic
+  lights. The panel holds notices and the Filing inspector. Navigation
+  rows start below the traffic lights, and rows, not the scroller, fade
+  over the last 12pt at each end. Settings sits at the sidebar's foot.
+  Settings is the standard Settings window (Gleanary › Settings…, ⌘,) in
+  the main window's frame, with sidebar pages (AI, Appearance, Capture, Filing, Writing),
   also linked from each More menu; no gear button in the window toolbar.
   Capture is a grouped form with two toggles, both on by default: summarize saved
   links, and save page previews (off fetches no screenshots, share images

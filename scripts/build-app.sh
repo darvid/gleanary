@@ -44,6 +44,17 @@ plutil -replace CFBundleShortVersionString -string 0.1 "$plist"
 plutil -replace LSMinimumSystemVersion -string 26.0 "$plist"
 plutil -replace NSHighResolutionCapable -bool YES "$plist"
 
+# The neutral accent. macOS applies it only while System Settings' accent is Multicolor, so someone
+# who chose an accent keeps it. actool ships with Xcode, not the Command Line Tools.
+if xcrun --find actool >/dev/null 2>&1; then
+    xcrun actool Gleanary/Assets.xcassets --compile "$contents/Resources" --platform macosx \
+        --minimum-deployment-target 26.0 --accent-color AccentColor \
+        --output-partial-info-plist "$stage/assets.plist" >/dev/null
+    plutil -replace NSAccentColorName -string AccentColor "$plist"
+else
+    printf 'actool not found: building without the neutral accent\n' >&2
+fi
+
 # Ad hoc by default. Ad hoc signatures change every build, so macOS treats each build as a new
 # app and asks for Keychain access again. Set CODESIGN_IDENTITY (e.g. in .env) to a
 # local signing certificate to keep a stable identity across rebuilds.

@@ -2,12 +2,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ConversationView: View {
+    /// The reading column, including its 24pt gutters.
+    private static let columnWidth: CGFloat = 708
     @Bindable var model: ConversationModel
     @Bindable var library: LibraryModel
     /// Shows a saved item in the Library; nil where there is no Library to switch to.
     var openInLibrary: ((UUID) -> Void)?
     @State private var preview = DocumentPreviewModel()
     @State private var showingPreview = false
+    @State private var chatColumnWidth: CGFloat = 360
     /// Hides the Chat column so the open document has the window to itself.
     @State private var focusingDocument = false
     @State private var filingDocument: MarkdownDocument?
@@ -27,6 +30,7 @@ struct ConversationView: View {
     @State private var userScrolling = false
     @State private var feedPosition = ScrollPosition(edge: .bottom)
     @State private var scrollEdges = ScrollEdges()
+    @State private var feedOffset: CGFloat = 0
     @FocusState private var composing: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.commandPaletteOpen) private var paletteOpen
@@ -49,26 +53,32 @@ struct ConversationView: View {
     var body: some View {
         // A saved document opens as the main pane, with Chat narrowed beside it so it can still
         // be asked about. The Chat column keeps its identity, so the feed keeps its place.
-        HSplitView {
+        HStack(spacing: 0) {
             if showingPreview {
-                documentPane.frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                documentPane
+                    .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if showingPreview, !focusingDocument {
+                ColumnDivider(
+                    width: $chatColumnWidth, range: 280 ... 480, ideal: 360, column: .trailing
+                )
             }
             if !showingPreview || !focusingDocument {
                 VStack(spacing: 0) {
+                    pageBar
                     feed.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    Divider()
                     composer
                 }
                 .frame(
                     minWidth: showingPreview ? 280 : 240,
-                    idealWidth: showingPreview ? 360 : nil,
-                    maxWidth: showingPreview ? 480 : .infinity,
+                    idealWidth: showingPreview ? chatColumnWidth : nil,
+                    maxWidth: showingPreview ? chatColumnWidth : .infinity,
                     maxHeight: .infinity
                 )
+                .background(PanelSurface.color)
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .toolbar { toolbar }
+        .background(PanelSurface.color)
         .environment(\.openURL, OpenURLAction { url in
             if let id = NoteLink.id(from: url) {
                 open(id)
@@ -183,36 +193,42 @@ struct ConversationView: View {
         return actions
     }
 
+    private var documentBack: some View {
+        Button(
+            "Close document and return to Chat",
+            systemImage: "chevron.left",
+            action: closePreview
+        )
+        .buttonStyle(PageIconButtonStyle())
+        .help("Back to Chat (Esc)")
+    }
+
+    @ViewBuilder private var documentActions: some View {
+        if let openInLibrary, let id = preview.selectedID {
+            Button("Open in Library", systemImage: "books.vertical") { openInLibrary(id) }
+                .buttonStyle(PageIconButtonStyle())
+                .help("Show this item in the Library")
+        }
+        Button(
+            focusingDocument ? "Show Chat" : "Focus",
+            systemImage: focusingDocument ? "sidebar.right" : "arrow.up.left.and.arrow.down.right"
+        ) {
+            withAnimation(.snappy(duration: 0.25)) { focusingDocument.toggle() }
+        }
+        .buttonStyle(PageIconButtonStyle(selected: focusingDocument))
+        .help(focusingDocument ? "Show Chat beside the document" : "Hide Chat while reading")
+    }
+
     private var documentPane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
-                Button(action: closePreview) {
-                    Label("Chat", systemImage: "chevron.left")
-                }
-                .help("Back to Chat (Esc)")
-                .accessibilityLabel("Close document and return to Chat")
-                Spacer(minLength: 8)
-                if let openInLibrary, let id = preview.selectedID {
-                    Button("Open in Library", systemImage: "books.vertical") { openInLibrary(id) }
-                        .help("Show this item in the Library")
-                }
-                Toggle(isOn: $focusingDocument.animation(.snappy(duration: 0.25))) {
-                    Label(
-                        focusingDocument ? "Show Chat" : "Focus",
-                        systemImage: focusingDocument ? "sidebar.right" :
-                            "arrow.up.left.and.arrow.down.right"
-                    )
-                }
-                .toggleStyle(.button)
-                .help(focusingDocument ? "Show Chat beside the document" :
-                    "Hide Chat while reading")
-            }
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            Divider()
-            savedDocumentPreview(for: preview)
+            // Focus already does this here, so the page's own expand button would be a second one.
+            savedDocumentPreview(for: preview).environment(\.enterReader, nil)
+                .environment(\.itemBarLeading, AnyView(HStack(spacing: 2) {
+                    documentBack
+                    documentActions
+                }))
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(PanelSurface.color)
         .onExitCommand(perform: closePreview)
         .sheet(item: $filingDocument) { document in
             FilingInspector(
@@ -329,61 +345,85 @@ struct ConversationView: View {
         return library.cancelSummary
     }
 
-    /// The same trailing More menu as the library, so the toolbar keeps its shape when
-    /// switching; settings live in the app menu's Settings window (⌘,).
-    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarSpacer(.flexible)
-        // A fresh start one click away, like a new chat elsewhere; it still asks first.
-        ToolbarItem {
-            Button("Clear Conversation…", systemImage: "trash", action: requestClear)
-                .disabled(!canClearConversation)
-                .help("Clear conversation")
-        }
-        ToolbarItem {
-            Menu("More", systemImage: "ellipsis") {
-                SettingsLink { Label("Settings…", systemImage: "gearshape") }
-                Divider()
-                Button("New Topic", systemImage: "plus.bubble", action: startTopic)
-                    .disabled(!model.canStartTopic)
-                Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
-                    requestClear()
-                }
-                .disabled(!canClearConversation)
+    /// Search and More sit where every other page has them; only the menu's contents differ.
+    private var pageBar: some View {
+        PageBar {
+            if let topicTitle {
+                Text(topicTitle).fontWeight(.medium).lineLimit(1).padding(.leading, 4)
             }
-            .menuIndicator(.hidden)
-            .help("Conversation options")
+        } accessory: {
+            Button("New Topic", systemImage: "plus", action: startTopic)
+                .buttonStyle(PageIconButtonStyle())
+                .disabled(!model.canStartTopic)
+                .help("Start a new topic")
+        }
+        .environment(\.pageMenu, AnyView(conversationMenu))
+    }
+
+    /// The topic's opening message, since topics aren't named.
+    private var topicTitle: String? {
+        ConversationChatContext.currentTopic(model.messages).first { $0.author == "user" }
+            .map { $0.text.split(separator: "\n").first.map(String.init) ?? $0.text }
+    }
+
+    private var conversationMenu: some View {
+        Menu("More", systemImage: "ellipsis") {
+            SettingsLink { Text("Settings…") }
+                .keyboardShortcut(",", modifiers: .command)
+            Divider()
+            Button("New Topic", systemImage: "plus.bubble", action: startTopic)
+                .disabled(!model.canStartTopic)
+            Button("Clear Conversation…", systemImage: "trash", role: .destructive) {
+                requestClear()
+            }
+            .disabled(!canClearConversation)
+        }
+        .menuIndicator(.hidden).menuStyle(.button)
+        .buttonStyle(PageIconButtonStyle())
+        .help("Conversation options")
+    }
+
+    @ViewBuilder private var feedEntries: some View {
+        if model.hasOlderMessages, model.messages.count >= 200 {
+            Button("Load Earlier Messages") {
+                followLatest = false; Task { await model.loadOlder() }
+            }
+        }
+        let topicStart = model.messages.last(where: \.isTopicBoundary)?.sequence
+        ForEach(ConversationFeedEntry.entries(
+            in: model.messages,
+            drafting: Set(model.replyDrafts.keys)
+        )) { entry in
+            Group {
+                if let marker = entry.messages.first, marker.isTopicBoundary {
+                    topicDivider(marker)
+                } else if let message = entry.userMessage {
+                    messageRow(message)
+                } else {
+                    response(entry)
+                }
+            }
+            .id(entry.id)
+            // Earlier topics fade back: still readable, no longer steering replies.
+            .opacity(topicStart.map { start in
+                (entry.messages.last?.sequence ?? .max) < start ? 0.6 : 1
+            } ?? 1)
         }
     }
 
     private var feed: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 32) {
-                if model.hasOlderMessages, model.messages.count >= 200 {
-                    Button("Load Earlier Messages") {
-                        followLatest = false; Task { await model.loadOlder() }
-                    }
-                }
-                let topicStart = model.messages.last(where: \.isTopicBoundary)?.sequence
-                ForEach(ConversationFeedEntry.entries(
-                    in: model.messages,
-                    drafting: Set(model.replyDrafts.keys)
-                )) { entry in
-                    Group {
-                        if let marker = entry.messages.first, marker.isTopicBoundary {
-                            topicDivider(marker)
-                        } else if let message = entry.userMessage {
-                            messageRow(message)
-                        } else {
-                            response(entry)
-                        }
-                    }
-                    .id(entry.id)
-                    // Earlier topics fade back: still readable, no longer steering replies.
-                    .opacity(topicStart.map { start in
-                        (entry.messages.last?.sequence ?? .max) < start ? 0.6 : 1
-                    } ?? 1)
-                }
-            }.padding(24).frame(maxWidth: 820, alignment: .leading).frame(maxWidth: .infinity)
+            // Narrowing the column reflows everything at once, and a lazy stack can then lose track
+            // of a tall card and draw nothing. Beside a document, every entry stays laid out.
+            if showingPreview {
+                VStack(alignment: .leading, spacing: 32) { feedEntries }
+                    .padding(24).frame(maxWidth: Self.columnWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 32) { feedEntries }
+                    .padding(24).frame(maxWidth: Self.columnWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+            }
         }
         .environment(\.tintedCategories, model.categories)
         .scrollPosition($feedPosition)
@@ -401,6 +441,10 @@ struct ConversationView: View {
         .onScrollPhaseChange { _, phase in
             userScrolling = phase == .interacting || phase == .decelerating
         }
+        // Opening a document narrows this column and every entry reflows. A tall card can leave the
+        // lazy stack with nothing drawn where it's scrolled to, so scrolling there redraws it.
+        .onChange(of: showingPreview) { holdFeedPlace() }
+        .onChange(of: focusingDocument) { holdFeedPlace() }
         .onScrollGeometryChange(for: FeedGeometry.self) { geometry in
             FeedGeometry(
                 contentHeight: geometry.contentSize.height,
@@ -433,6 +477,9 @@ struct ConversationView: View {
         } action: { _, edges in
             scrollEdges = edges
         }
+        .onScrollGeometryChange(for: CGFloat.self, of: \.contentOffset.y) { _, offset in
+            feedOffset = offset
+        }
         .overlay { scrollEdgeFades }
         .onChange(of: model.messages.isEmpty) {
             if model.messages.isEmpty {
@@ -459,12 +506,26 @@ struct ConversationView: View {
         .animation(.easeOut(duration: 0.15), value: followLatest)
     }
 
+    private func holdFeedPlace() {
+        let offset = feedOffset
+        Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            if followLatest {
+                feedPosition.scrollTo(edge: .bottom)
+            } else {
+                feedPosition.scrollTo(y: offset)
+            }
+        }
+    }
+
     private var scrollEdgeFades: some View {
         VStack(spacing: 0) {
             edgeFade(from: .top, to: .bottom).opacity(scrollEdges.top)
             Spacer(minLength: 0)
             edgeFade(from: .bottom, to: .top).opacity(scrollEdges.bottom)
         }
+        // Text fades; the scroller beside it stays whole.
+        .padding(.trailing, SlimScrollers.width)
         .opacity(model.messages.isEmpty || contrast == .increased || reduceTransparency ? 0 : 1)
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -474,7 +535,7 @@ struct ConversationView: View {
 
     private func edgeFade(from start: UnitPoint, to end: UnitPoint) -> some View {
         LinearGradient(
-            colors: [Color(nsColor: .windowBackgroundColor), .clear],
+            colors: [PanelSurface.color, .clear],
             startPoint: start,
             endPoint: end
         )
@@ -850,7 +911,12 @@ struct ConversationView: View {
                 }
             }
         } else {
-            ForEach(message.references, id: \.self) { id in reference(id) }
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 190), spacing: 8, alignment: .top)],
+                alignment: .leading, spacing: 8
+            ) {
+                ForEach(message.references, id: \.self) { id in reference(id) }
+            }
         }
     }
 
@@ -1110,12 +1176,27 @@ struct ConversationView: View {
                                 "\(model.titles[proposal.left] ?? "Document") ↔ \(model.titles[proposal.right] ?? "Document")"
                             )
                         } else {
-                            Text(model.titles[proposal.left] ?? "Document")
+                            Button(model.titles[proposal.left] ?? "Document") {
+                                open(proposal.left)
+                            }
+                            .buttonStyle(.plain).help("Review this document")
                         }
                     }.font(.callout.weight(.medium)).lineLimit(1)
                     Spacer(minLength: 8)
-                    proposalStatus(proposal, explanation: explanation)
+                    if proposal.status == "pending" {
+                        Button("Not Now") {
+                            Task { await model.review(proposal, action: "reject") }
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        Button(proposal.filing == nil ? "Link" : "File") {
+                            Task { await model.review(proposal, action: "apply") }
+                        }
+                        .help(explanation).accessibilityHint(explanation)
+                    } else {
+                        proposalStatus(proposal, explanation: explanation)
+                    }
                 }
+                .controlSize(.small)
                 if let filing = proposal.filing {
                     HStack(spacing: 6) {
                         Text(filing.previousLabel).foregroundStyle(Color.primary.opacity(0.72))
@@ -1129,21 +1210,6 @@ struct ConversationView: View {
                     Text(proposal.rationale).font(.callout)
                         .foregroundStyle(Color.primary.opacity(0.72)).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-                if proposal.status == "pending" {
-                    // macOS convention: secondary action leading, decisions trailing, primary last.
-                    HStack {
-                        Button("Review Document") {
-                            open(proposal.filing == nil ? proposal.right : proposal.left)
-                        }.buttonStyle(.link)
-                        Spacer()
-                        Button("Reject") { Task { await model.review(proposal, action: "reject") } }
-                        Button(proposal.filing == nil ? "Apply link" : "Apply filing") {
-                            Task { await model.review(proposal, action: "apply") }
-                        }
-                        .buttonStyle(.borderedProminent).help(explanation)
-                        .accessibilityHint(explanation)
-                    }.controlSize(.small).padding(.top, 2)
                 }
             }
         }
@@ -1331,13 +1397,13 @@ struct ConversationView: View {
             }.padding(.horizontal, 12).padding(.vertical, 9)
                 .background(
                     Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 24)
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
                 )
-                .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
                     Color.primary.opacity(0.1),
                     lineWidth: 1
                 ))
-        }.padding(.horizontal, 24).padding(.vertical, 16).frame(maxWidth: 868)
+        }.padding(.horizontal, 24).padding(.bottom, 16).frame(maxWidth: Self.columnWidth)
             .frame(maxWidth: .infinity)
     }
 
@@ -1576,7 +1642,6 @@ struct AddToChatButton: View {
                     Label("Add to Chat", systemImage: "text.bubble")
                 }
             }
-            .buttonStyle(.bordered)
             .disabled(adding)
             .accessibilityLabel("Add to Chat")
             .help("Attach this item to your chat draft without sending a message")
@@ -1597,7 +1662,7 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .inference: "AI & accounts"
+        case .inference: "AI"
         case .appearance: "Appearance"
         case .capture: "Capture"
         case .filing: "Filing"
@@ -1618,12 +1683,19 @@ enum KnowledgeSettingsPage: String, CaseIterable, Identifiable {
     }
 }
 
-/// Gleanary › Settings… (⌘,): toolbar tabs in the standard Settings window.
+/// Gleanary › Settings… (⌘,): the main window's frame, a sidebar beside a rounded panel, rather
+/// than the system's tab sidebar, which adds an empty toolbar band above both.
 struct ConversationSettings: View {
-    static let size = CGSize(width: 680, height: 560)
+    static let size = CGSize(width: 780, height: 600)
+    private static let sidebarWidth: CGFloat = 170
+    /// The row that holds the traffic lights.
+    private static let chromeHeight: CGFloat = 46
+    private static let panelInset: CGFloat = 8
+    private static let panelRadius: CGFloat = 12
     @Bindable var model: ConversationModel
     let library: LibraryModel
     @State private var page: KnowledgeSettingsPage
+    @Environment(\.displayScale) private var displayScale
 
     init(
         model: ConversationModel,
@@ -1636,70 +1708,81 @@ struct ConversationSettings: View {
     }
 
     var body: some View {
-        TabView(selection: $page) {
-            Tab(
-                KnowledgeSettingsPage.inference.title,
-                systemImage: KnowledgeSettingsPage.inference.symbol,
-                value: KnowledgeSettingsPage.inference
-            ) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if model.running {
-                            HStack {
-                                Text("Stop the current task to change AI settings.")
-                                    .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
-                                Spacer()
-                                Button("Stop Task") { Task { await model.cancel() } }
-                            }
-                        }
-                        AISettings(
-                            providers: model.providers,
-                            localStatus: library.intelligenceStatus
-                        )
-                        .disabled(model.running)
-                    }
-                    .padding(24)
-                }
-            }
-            Tab(
-                KnowledgeSettingsPage.appearance.title,
-                systemImage: KnowledgeSettingsPage.appearance.symbol,
-                value: KnowledgeSettingsPage.appearance
-            ) {
-                AppearanceSettingsView()
-            }
-            Tab(
-                KnowledgeSettingsPage.capture.title,
-                systemImage: KnowledgeSettingsPage.capture.symbol,
-                value: KnowledgeSettingsPage.capture
-            ) {
-                CaptureSettingsView(store: model.store, categories: model.categories)
-            }
-            Tab(
-                KnowledgeSettingsPage.filing.title,
-                systemImage: KnowledgeSettingsPage.filing.symbol,
-                value: KnowledgeSettingsPage.filing
-            ) {
-                FilingSettings(model: model).padding(24)
-            }
-            Tab(
-                KnowledgeSettingsPage.writing.title,
-                systemImage: KnowledgeSettingsPage.writing.symbol,
-                value: KnowledgeSettingsPage.writing
-            ) {
-                WritingSettingsView()
-            }
-            Tab(
-                KnowledgeSettingsPage.keyboard.title,
-                systemImage: KnowledgeSettingsPage.keyboard.symbol,
-                value: KnowledgeSettingsPage.keyboard
-            ) {
-                KeyboardSettingsView()
-            }
+        let shape = RoundedRectangle(cornerRadius: Self.panelRadius, style: .continuous)
+        HStack(spacing: 0) {
+            sidebar.frame(width: Self.sidebarWidth)
+            content
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(PanelSurface.color)
+                .clipShape(shape)
+                .overlay { shape.strokeBorder(.separator, lineWidth: 1 / displayScale) }
+                .padding([.top, .trailing, .bottom], Self.panelInset)
         }
+        .ignoresSafeArea(edges: .top)
+        .disclosureGroupStyle(FullRowDisclosureStyle())
         .frame(width: Self.size.width, height: Self.size.height)
+        .background { WindowSurface().ignoresSafeArea() }
+        .toolbar(removing: .title)
         // Settings can open before the conversation has, from the app menu.
         .task { await model.load() }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(KnowledgeSettingsPage.allCases) { item in
+                Button { page = item } label: {
+                    Label(item.title, systemImage: item.symbol)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10).frame(height: 30)
+                        .background(
+                            Color.primary.opacity(page == item ? 0.09 : 0),
+                            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(page == item ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.top, Self.chromeHeight)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Settings pages")
+    }
+
+    @ViewBuilder private var content: some View {
+        switch page {
+        case .inference:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if model.running {
+                        HStack {
+                            Text("Stop the current task to change AI settings.")
+                                .font(.callout).foregroundStyle(Color.primary.opacity(0.72))
+                            Spacer()
+                            Button("Stop Task") { Task { await model.cancel() } }
+                        }
+                    }
+                    AISettings(
+                        providers: model.providers,
+                        localStatus: library.intelligenceStatus
+                    )
+                    .disabled(model.running)
+                }
+                .padding(24)
+            }
+        case .appearance:
+            AppearanceSettingsView()
+        case .capture:
+            CaptureSettingsView(store: model.store, categories: model.categories)
+        case .filing:
+            FilingSettings(model: model).padding(24)
+        case .writing:
+            WritingSettingsView()
+        case .keyboard:
+            KeyboardSettingsView()
+        }
     }
 }
 
@@ -1728,9 +1811,18 @@ private struct ReferenceChip: View {
     @State private var peekTimer: Task<Void, Never>?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .top, spacing: 6) {
             Button(action: open) {
-                Label(title, systemImage: symbol).lineLimit(1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).fontWeight(.medium).lineLimit(1)
+                    if let filing {
+                        FilingTag(category: filing)
+                    } else if let host {
+                        Text(host).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain).help("Open \(title)")
             .accessibilityLabel(role.map { "\($0): \(title)" } ?? title)
@@ -1755,11 +1847,8 @@ private struct ReferenceChip: View {
                     }
                 }
             }
-            if let filing {
-                FilingTag(category: filing)
-            }
             if isOpen {
-                Text("Open").font(.caption).foregroundStyle(Color.accentColor)
+                Text("Open").font(.caption).foregroundStyle(.secondary)
                     .accessibilityHidden(true)
             }
             Button(
@@ -1768,22 +1857,21 @@ private struct ReferenceChip: View {
                 action: toggleSource
             )
             .labelStyle(.iconOnly).buttonStyle(.borderless)
-            .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.72))
+            .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.72))
             .help(selected ? "Remove from sources for the next message"
                 : "Use as a source for the next message")
             .disabled(!available)
             .opacity(selected || hovering ? 1 : 0)
         }
         .font(.callout)
-        .padding(.leading, 10).padding(.trailing, 6).padding(.vertical, 4)
+        .padding(.horizontal, 10).padding(.vertical, 8)
         .background(
-            selected ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.06),
-            in: Capsule()
+            Color.primary.opacity(selected ? 0.09 : 0),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
         )
         .overlay {
-            if isOpen {
-                Capsule().strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1)
-            }
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.primary.opacity(isOpen ? 0.4 : 0.1), lineWidth: 1)
         }
         .onHover { inside in
             hovering = inside

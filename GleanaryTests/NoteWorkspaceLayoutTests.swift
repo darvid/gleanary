@@ -139,7 +139,7 @@ import Testing
 
     @MainActor private func entryField(in view: NSView) -> NSTextField? {
         if let field = view as? NSTextField, field.isEditable,
-           field.placeholderString == "Add a task…"
+           field.placeholderString?.hasPrefix("Add a task") == true
         {
             return field
         }

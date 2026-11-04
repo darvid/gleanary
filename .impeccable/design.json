@@ -27,10 +27,10 @@
     },
     "nativeBindings": {
       "libraryBackground": "Color(nsColor: .windowBackgroundColor)",
-      "controlSurface": "Color(nsColor: .controlBackgroundColor) for search, composer, and Markdown code blocks",
+      "controlSurface": "Color(nsColor: .controlBackgroundColor) for the composer and Markdown code blocks; .quaternarySystemFill for list-column search",
       "text": "SwiftUI primary/secondary foreground styles; selected or dark sidebar labels explicitly use white, otherwise black",
       "selection": "Native sidebar/inset List selection; appearance and focus remain system-controlled",
-      "accent": "DocumentPreview sets tint from the primary category's AtlasPalette ink; native prominent/bordered actions inherit that tint",
+      "accent": "Neutral gray from Assets.xcassets AccentColor (#5F5F63 light, #7C7C80 dark), applied by macOS only under the Multicolor system accent. DocumentPreview sets tint from the primary category's AtlasPalette ink; native prominent/bordered actions inherit that tint",
       "separator": "SwiftUI Divider; preview hero uses separator strokeBorder at 0.5pt",
       "icons": "SF Symbols; no browser icon substitution is normative",
       "previewActions": {
@@ -161,7 +161,7 @@
           560
         ],
         "tabs": [
-          "AI & accounts",
+          "AI",
           "Appearance",
           "Capture",
           "Filing",
@@ -213,9 +213,10 @@
           1180,
           780
         ],
-        "style": "hiddenTitleBar"
+        "style": "hiddenTitleBar",
+        "surface": "Dark: flat #0E0E10 behind sidebar and toolbar. Light: sidebar material. No page title is drawn in the toolbar."
       },
-      "structure": "ContentView: manual resizable sidebar beside main content; HSplitView for library list/detail. ConversationView: viewport-aware HSplitView for feed/optional saved-document preview, with composer beneath.",
+      "structure": "ContentView: manual resizable sidebar beside a rounded content panel; ListDetailColumns for list/detail. ConversationView: ColumnDivider between the optional saved-document preview and the feed, with composer beneath.",
       "sidebar": {
         "min": 180,
         "ideal": 220,

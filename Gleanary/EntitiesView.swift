@@ -140,6 +140,7 @@ struct EntitiesView: View {
     @State private var reviewingDuplicates = false
     @State private var renaming = false
     @State private var draftName = ""
+    @FocusState private var searchFocused: Bool
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readingInBackground = false
     /// An entity a link asked to show: searched for by name and selected.
     var focus: EntityFocus?
@@ -157,11 +158,11 @@ struct EntitiesView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            list.frame(width: 280)
-            Divider()
-            detail.frame(maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            pageBar
+            ListDetailColumns { list } detail: { detail }
         }
+        .focusedSceneValue(\.paneSearch) { searchFocused = true }
         .task(
             id: "\(model.kind?.rawValue ?? "all")/\(model.query)/\(model.showHidden)/\(model.sort)"
         ) {
@@ -177,11 +178,10 @@ struct EntitiesView: View {
         }
     }
 
-    /// Filters on top, then the list flush with the pane, as in Mail or Notes.
+    /// Built like Library's list: the shared header, then rows flush with the pane.
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            filters.padding(12)
-            Divider()
+            duplicateStatus
             if model.entities.isEmpty {
                 ContentUnavailableView(
                     model.query.isEmpty ? "No entities yet" : "No matches",
@@ -194,50 +194,56 @@ struct EntitiesView: View {
         }
     }
 
-    private var filters: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Picker("Kind", selection: $model.kind) {
-                    Text("All").tag(GraphNode.Kind?.none)
-                    ForEach(Self.kinds, id: \.self) { kind in
-                        Text(Self.plural(kind)).tag(Optional(kind))
-                    }
-                }
-                .pickerStyle(.menu).labelsHidden()
-                Menu {
-                    Picker("Sort by", selection: $model.sort) {
-                        ForEach(EntitySort.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.inline)
-                } label: {
-                    Label("Sort by \(model.sort.title)", systemImage: "arrow.up.arrow.down")
-                        .labelStyle(.iconOnly)
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .help("Sorted by \(model.sort.title)")
+    private var pageBar: some View {
+        PageBar(search: PageSearch(
+            prompt: "Find a person, organization or concept", label: "Search entities",
+            query: $model.query, focus: $searchFocused
+        )) {
+            PageTabs(
+                label: "Kind",
+                items: [(nil, "All")] + Self.kinds.map { (Optional($0), Self.plural($0)) },
+                selection: $model.kind
+            )
+        } accessory: {
+            sortMenu
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort by", selection: $model.sort) {
+                ForEach(EntitySort.allCases, id: \.self) { Text($0.title).tag($0) }
             }
-            TextField("Find a person, organization or concept", text: $model.query)
-                .textFieldStyle(.roundedBorder)
+            .pickerStyle(.inline)
+            Divider()
+            Toggle("Show Hidden", isOn: $model.showHidden)
+            Divider()
+            Button("Find Duplicates") { Task { await model.findDuplicates() } }
+                .disabled(model.findingDuplicates)
+                .help("Merge names written differently and suggest likely duplicates")
+        } label: {
+            Label("Sort and Filter", systemImage: "line.3.horizontal.decrease")
+        }
+        .menuStyle(.button).menuIndicator(.hidden).buttonStyle(PageIconButtonStyle())
+        .help("Sort, show hidden entities or find duplicates")
+    }
+
+    /// Only while there's something to say about the duplicate check.
+    @ViewBuilder private var duplicateStatus: some View {
+        if model.findingDuplicates {
+            WorkingProgress("Checking for duplicates…").font(.caption)
+                .padding(.horizontal, ListColumn.inset).padding(.bottom, 10)
+        } else if !model.suggestions.isEmpty {
             HStack {
-                Toggle("Show hidden", isOn: $model.showHidden).toggleStyle(.checkbox)
+                Text(model.suggestions.count == 1 ? "1 possible duplicate"
+                    : "\(model.suggestions.count) possible duplicates")
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 Spacer()
-                Text(model.total == 1 ? "1 entity" : "\(model.total.formatted()) entities")
-                    .monospacedDigit().foregroundStyle(.secondary)
+                Button("Review") { reviewingDuplicates = true }
+                    .buttonStyle(.borderless).font(.caption)
+                    .help("Possible duplicates for you to confirm")
             }
-            .font(.callout)
-            HStack(spacing: 8) {
-                if model.findingDuplicates {
-                    WorkingProgress("Checking for duplicates…").font(.callout)
-                } else {
-                    Button("Find Duplicates") { Task { await model.findDuplicates() } }
-                        .help("Merge names written differently and suggest likely duplicates")
-                }
-                if !model.findingDuplicates, !model.suggestions.isEmpty {
-                    Button("Review \(model.suggestions.count)") { reviewingDuplicates = true }
-                        .help("Possible duplicates for you to confirm")
-                }
-            }
-            .controlSize(.small)
+            .padding(.horizontal, ListColumn.inset).padding(.bottom, 10)
         }
     }
 
@@ -246,12 +252,12 @@ struct EntitiesView: View {
             HStack(spacing: 8) {
                 Image(systemName: Self.symbol(entity.kind)).foregroundStyle(.secondary)
                     .frame(width: 18)
-                Text(entity.name).lineLimit(1)
+                Text(entity.name).font(.body.weight(.medium)).lineLimit(1)
                 Spacer(minLength: 8)
-                Text(entity.noteCount.formatted()).monospacedDigit()
+                Text(entity.noteCount.formatted()).font(.caption).monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
             .tag(entity.id)
             .onAppear {
                 // Rows are built as they scroll into view, so the last one asks for more.
@@ -263,8 +269,7 @@ struct EntitiesView: View {
                 "\(entity.name), \(Self.singular(entity.kind)), \(Self.noteCount(entity.noteCount))"
             )
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+        .listStyle(.inset).scrollContentBackground(.hidden)
     }
 
     /// Says how entities get found, since nothing reads notes unless asked or turned on.
@@ -280,7 +285,7 @@ struct EntitiesView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .firstTextBaseline) {
-                            Label(entity.name, systemImage: Self.symbol(entity.kind))
+                            Text(entity.name)
                                 .font(.title2.weight(.semibold)).textSelection(.enabled)
                             Spacer()
                             editMenu(entity)
@@ -295,33 +300,29 @@ struct EntitiesView: View {
                     if !entity.aliases.isEmpty {
                         aliases(entity)
                     }
-                    ForEach(Self.byNote(model.mentions), id: \.noteID) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                Button {
-                                    open(group.noteID)
-                                } label: {
-                                    Label(group.noteName, systemImage: "doc.text")
-                                        .font(.headline)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text("Mentioned in").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityAddTraits(.isHeader).padding(.bottom, 8)
+                        ForEach(Self.byNote(model.mentions), id: \.noteID) { group in
+                            Divider()
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Button(group.noteName) { open(group.noteID) }
+                                        .buttonStyle(.plain).fontWeight(.medium)
+                                    if let filing = group.mentions.first?.filing {
+                                        FilingTag(category: filing)
+                                    }
                                 }
-                                .buttonStyle(.link)
-                                if let filing = group.mentions.first?.filing {
-                                    FilingTag(category: filing)
-                                }
-                            }
-                            ForEach(group.mentions) { mention in
-                                VStack(alignment: .leading, spacing: 3) {
+                                ForEach(group.mentions) { mention in
                                     if let relation = Self.relation(mention) {
                                         Text(relation).font(.caption).foregroundStyle(.secondary)
                                     }
-                                    Text(mention.quote).textSelection(.enabled)
+                                    Text(mention.quote).foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
-                                .padding(.leading, 12)
-                                .overlay(alignment: .leading) {
-                                    Capsule().fill(.separator).frame(width: 2)
-                                }
                             }
+                            .padding(.vertical, 10)
                         }
                     }
                 }

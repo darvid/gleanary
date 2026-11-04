@@ -68,7 +68,7 @@ struct LibraryGraphDetails: View {
                                 .padding(16)
                             }.id(graph.selectedEdgeID ?? anchor.id)
                         }
-                        .background(Color(nsColor: .windowBackgroundColor))
+                        .background(PanelSurface.color)
                     }
                 }
             }
@@ -151,7 +151,8 @@ struct LibraryGraphDetails: View {
                 ink: AtlasPalette.mark(
                     graph.nodeStyle(for: node).filingHue,
                     dark: colorScheme == .dark
-                )
+                ),
+                followsGraphStyle: true
             )
         } else {
             Image(systemName: inspector.symbol(for: node))

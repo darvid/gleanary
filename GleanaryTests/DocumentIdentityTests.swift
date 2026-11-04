@@ -125,8 +125,10 @@ import Testing
                     )
                 }
                 try await snapshot(
-                    List(documents) { document in LibraryDocumentRow(document: document) }
-                        .listStyle(.inset),
+                    List(documents + [filedCapture]) { document in
+                        LibraryDocumentRow(document: document)
+                    }
+                    .listStyle(.inset),
                     name: "list-\(suffix)", width: width, height: 400, dark: dark
                 )
             }
@@ -140,6 +142,25 @@ import Testing
                 dark: dark
             )
         }
+    }
+
+    /// A captured page with a preview and a home, which the store's fixtures don't have.
+    private var filedCapture: DocumentSummary {
+        let image = NSImage(size: NSSize(width: 320, height: 180), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        return DocumentSummary(
+            id: UUID(),
+            name: "A captured page with a long title that wraps onto a second line",
+            sourceURL: URL(string: "https://www.fixture.example/page"),
+            faviconData: nil,
+            faviconChecked: true,
+            kind: "source",
+            filing: "20.03 Synthetic research",
+            previewImage: image.tiffRepresentation
+        )
     }
 
     private func snapshot(

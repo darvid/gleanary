@@ -31,6 +31,33 @@ struct DocumentSummary: Identifiable, Sendable, Equatable {
     }
 }
 
+/// The filters above every Library view: the item types, then what's been put away.
+enum LibraryTab: CaseIterable, Hashable {
+    case all, notes, sources, archived
+
+    init(_ kind: LibraryKindFilter) {
+        switch kind {
+        case .all: self = .all
+        case .notes: self = .notes
+        case .sources: self = .sources
+        }
+    }
+
+    /// Nil for Archived, which is a place rather than a type.
+    var kind: LibraryKindFilter? {
+        switch self {
+        case .all: .all
+        case .notes: .notes
+        case .sources: .sources
+        case .archived: nil
+        }
+    }
+
+    var title: String {
+        kind?.label ?? "Archived"
+    }
+}
+
 enum LibraryKindFilter: String, CaseIterable, Identifiable, Sendable, Codable {
     case all, notes, sources
 

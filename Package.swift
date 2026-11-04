@@ -39,7 +39,7 @@ let package = Package(
             path: "Gleanary",
             // The app icon goes in the app bundle itself (scripts/build-app.sh), not the
             // resource bundle.
-            exclude: ["Gleanary.entitlements", "Info.plist", "AppIcon"],
+            exclude: ["Gleanary.entitlements", "Info.plist", "AppIcon", "Assets.xcassets"],
             resources: [.process("Resources")]
         ),
         .testTarget(

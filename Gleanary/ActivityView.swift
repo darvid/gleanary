@@ -41,11 +41,11 @@ struct ActivityView<Intake: View>: View {
     }
 
     var body: some View {
-        HSplitView {
-            timeline.frame(minWidth: 300, idealWidth: 400, maxWidth: 520, maxHeight: .infinity)
-            inspection.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        VStack(spacing: 0) {
+            pageBar
+            ListDetailColumns(range: 300 ... 520, ideal: 400) { timeline } detail: { inspection }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(PanelSurface.color)
         .environment(\.openURL, OpenURLAction { url in
             if let id = NoteLink.id(from: url) {
                 open(id); return .handled
@@ -60,7 +60,7 @@ struct ActivityView<Intake: View>: View {
         }
         .task(id: model.selection) { await model.inspectSelection() }
         .onChange(of: model.query) { model.selection = nil }
-        .focusedSceneValue(\.activitySearch) { searchFocused = true }
+        .focusedSceneValue(\.paneSearch) { searchFocused = true }
     }
 
     private var timeline: some View {
@@ -128,7 +128,8 @@ struct ActivityView<Intake: View>: View {
                             .disabled(model.loading).padding(.vertical, 8)
                     }
                 }
-                .listStyle(.inset).accessibilityLabel("Daily activity")
+                .listStyle(.inset).scrollContentBackground(.hidden)
+                .accessibilityLabel("Daily activity")
                 if model.loading {
                     WorkingProgress().padding(6)
                 }
@@ -200,61 +201,54 @@ struct ActivityView<Intake: View>: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Two rows: search with what and when, then who. A picked date adds a row to step
-    /// through days.
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search activity", text: $model.query.search)
-                        .textFieldStyle(.plain).focused($searchFocused)
-                    if !model.query.search.isEmpty {
-                        Button("Clear Search", systemImage: "xmark.circle.fill") {
-                            model.query.search = ""
-                        }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    }
-                }.padding(7).frame(maxWidth: .infinity).background(
-                    Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 7)
+    private var pageBar: some View {
+        PageBar(search: PageSearch(
+            prompt: "Search activity", label: "Search activity",
+            query: $model.query.search, focus: $searchFocused
+        )) {
+            PageTabs(
+                label: "Who made the change",
+                items: ActivityScope.allCases.map { ($0, $0.rawValue) },
+                selection: $model.query.scope
+            )
+        } accessory: {
+            Menu {
+                Picker("Event type", selection: $model.query.filter) {
+                    ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
+                }.pickerStyle(.inline).labelsHidden()
+            } label: {
+                Label(
+                    model.query.filter.rawValue,
+                    systemImage: model.query.filter == .all
+                        ? "line.3.horizontal.decrease.circle"
+                        : "line.3.horizontal.decrease.circle.fill"
                 )
-                Menu {
-                    Picker("Event type", selection: $model.query.filter) {
-                        ForEach(ActivityFilter.allCases) { Text($0.rawValue).tag($0) }
-                    }.pickerStyle(.inline).labelsHidden()
-                } label: {
-                    Label(
-                        model.query.filter.rawValue,
-                        systemImage: model.query.filter == .all
-                            ? "line.3.horizontal.decrease.circle"
-                            : "line.3.horizontal.decrease.circle.fill"
+            }
+            .labelStyle(.iconOnly).menuIndicator(.hidden).menuStyle(.button)
+            .buttonStyle(PageIconButtonStyle())
+            .help("Event type: \(model.query.filter.rawValue)")
+            .accessibilityLabel("Event type")
+            .accessibilityValue(model.query.filter.rawValue)
+            // Its popover has Today and Yesterday, so there's no separate Today button.
+            Button("Jump to Date", systemImage: "calendar") { choosingDate = true }
+                .buttonStyle(PageIconButtonStyle())
+                .help("Show one day’s activity")
+                .popover(isPresented: $choosingDate) {
+                    ActivityDateJump(
+                        date: model.query.day ?? Date(),
+                        show: { date in
+                            model.query.day = Calendar.current.startOfDay(for: date)
+                            choosingDate = false
+                        },
+                        cancel: { choosingDate = false }
                     )
                 }
-                .labelStyle(.iconOnly).menuIndicator(.hidden).fixedSize()
-                .help("Event type: \(model.query.filter.rawValue)")
-                .accessibilityLabel("Event type")
-                .accessibilityValue(model.query.filter.rawValue)
-                // Its popover has Today and Yesterday, so there's no separate Today button.
-                Button("Jump to Date", systemImage: "calendar") { choosingDate = true }
-                    .labelStyle(.iconOnly).fixedSize()
-                    .help("Show one day’s activity")
-                    .popover(isPresented: $choosingDate) {
-                        ActivityDateJump(
-                            date: model.query.day ?? Date(),
-                            show: { date in
-                                model.query.day = Calendar.current.startOfDay(for: date)
-                                choosingDate = false
-                            },
-                            cancel: { choosingDate = false }
-                        )
-                    }
-            }
-            Picker("Who", selection: $model.query.scope) {
-                ForEach(ActivityScope.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden()
-            .accessibilityLabel("Who made the change")
+        }
+    }
+
+    /// A picked date adds a row to step through days.
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 10) {
             if let day = model.query.day {
                 HStack {
                     Button("Previous Day", systemImage: "chevron.left") { moveDay(-1) }
@@ -602,10 +596,11 @@ private struct ActivityInspectionView: View {
 
     @ViewBuilder private var comparisonPicker: some View {
         if canCompare {
-            Picker("Inspect", selection: $changes) {
-                Text("Changes").tag(true)
-                Text("Current item").tag(false)
-            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+            PageTabs(
+                label: "Inspect",
+                items: [(true, "Changes"), (false, "Current item")],
+                selection: $changes
+            )
         }
     }
 
@@ -620,12 +615,11 @@ private struct ActivityInspectionView: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Label(event.kind.label, systemImage: event.kind.symbol).font(.headline)
-                Text(event.displayTitle).font(.title3.weight(.semibold)).textSelection(.enabled)
                 Text(
-                    "\(event.actorLabel) · \(event.date.formatted(date: .abbreviated, time: .shortened))"
+                    "\(event.kind.label) · \(event.actorLabel) · \(event.date.formatted(date: .abbreviated, time: .shortened))"
                 )
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
+                Text(event.displayTitle).font(.title3.weight(.semibold)).textSelection(.enabled)
                 if let detail = event.detail {
                     Text(detail).font(.callout).textSelection(.enabled)
                 }
@@ -701,7 +695,7 @@ private struct ActivitySearchKey: FocusedValueKey {
 }
 
 extension FocusedValues {
-    var activitySearch: (() -> Void)? {
+    var paneSearch: (() -> Void)? {
         get { self[ActivitySearchKey.self] }
         set { self[ActivitySearchKey.self] = newValue }
     }

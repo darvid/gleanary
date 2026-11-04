@@ -134,9 +134,7 @@ struct AISettings: View {
                 .font(.caption).foregroundStyle(Color.primary.opacity(0.72))
                 .fixedSize(horizontal: false, vertical: true).padding(.top, 8)
             } label: {
-                // Outside a List, macOS only toggles from the chevron, not the label.
-                Button("How AI Is Used") { withAnimation { showingDetails.toggle() } }
-                    .buttonStyle(.plain)
+                Text("How AI Is Used")
             }.font(.callout)
         }
         .confirmationDialog("Use ChatGPT?", isPresented: Binding(

@@ -11,7 +11,7 @@ struct LibraryGraphView: View {
     var openNote: (UUID) -> Void
     var openSource: (SourceCitation) -> Void
     @State private var retry = 0
-    @FocusState private var searching: Bool
+    private static let inspectorWidth: CGFloat = 300
 
     private var request: LibraryGraphRequest {
         LibraryGraphRequest(
@@ -30,63 +30,6 @@ struct LibraryGraphView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 16) {
-                    LibraryKindPicker(selection: $kind)
-                    Toggle("Entities", isOn: $graph.includesConcepts).toggleStyle(.switch)
-                        .controlSize(.small)
-                        .help("Include saved, evidence-backed entities. No analysis is started.")
-                    Spacer(minLength: 16)
-                    HStack(spacing: 12) {
-                        GraphArrangementControl(graph: graph)
-                        Button {
-                            graph.inspectorVisible.toggle()
-                        } label: {
-                            Image(systemName: graph.inspectorVisible
-                                ? "rectangle.righthalf.inset.filled" : "sidebar.right")
-                                .frame(width: 24, height: 24)
-                        }
-                        .buttonStyle(.borderless).foregroundStyle(.secondary)
-                        .help(graph
-                            .inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
-                        .accessibilityLabel(graph.inspectorVisible ? "Hide graph inspector" :
-                            "Show graph inspector")
-                        .accessibilityValue(graph.inspectorVisible ? "Shown" : "Hidden")
-                    }
-                }
-                HStack {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search this graph", text: $query).textFieldStyle(.plain)
-                        .focused($searching).accessibilityLabel("Search graph")
-                    if !query.isEmpty {
-                        Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
-                            .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    }
-                }
-                .padding(8).background(
-                    Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-                if focus != nil {
-                    HStack {
-                        Button("All Connections", systemImage: "arrow.left") { focus = nil }
-                            .buttonStyle(.borderless)
-                        Spacer()
-                        Picker("Neighborhood", selection: $graph.depth) {
-                            Text("Direct").tag(1)
-                            Text("2 hops").tag(2)
-                        }.pickerStyle(.segmented).fixedSize()
-                    }
-                }
-                if graph.includesConcepts {
-                    Text(graph.snapshot.nodes.contains(where: { $0.kind != .document })
-                        ? "Dashed lines are extracted relationships. Select a connection to inspect its evidence."
-                        :
-                        "No saved entities in this view. This switch reads existing analysis; it does not start extraction.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }.padding(18)
-            Divider()
             if let error = graph.error {
                 ContentUnavailableView {
                     Label("Connections unavailable", systemImage: "exclamationmark.triangle")
@@ -108,25 +51,18 @@ struct LibraryGraphView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                HSplitView {
-                    KnowledgeGraphView(
-                        graph: graph, openNote: openNote,
-                        excerpt: { id in
-                            guard let document = try? await store.document(id: id)
-                            else { return nil }
-                            return ReferencePeek.excerpt(from: document.markdown)
-                        },
-                        showsDocumentLegend: true, camera: $graph.camera
-                    )
-                    .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
-                    if graph.inspectorVisible {
-                        LibraryGraphDetails(
-                            graph: graph, openNote: openNote, openSource: openSource,
-                            focusNote: { focus = $0 }, close: { graph.inspectorVisible = false }
-                        )
-                        .frame(minWidth: 260, idealWidth: 320, maxWidth: 420)
-                    }
-                }
+                KnowledgeGraphView(
+                    graph: graph, openNote: openNote,
+                    excerpt: { id in
+                        guard let document = try? await store.document(id: id)
+                        else { return nil }
+                        return ReferencePeek.excerpt(from: document.markdown)
+                    },
+                    showsDocumentLegend: true, camera: $graph.camera
+                )
+                .frame(minWidth: 260, maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) { controls.padding(12) }
+                .overlay(alignment: .trailing) { inspector }
             }
         }
         .task(id: LibraryGraphLoadKey(request: request, revision: refreshToken, retry: retry)) {
@@ -136,8 +72,55 @@ struct LibraryGraphView: View {
         }
         .onDisappear { graph.stop() }
         .onExitCommand { query = "" }
-        .onReceive(NotificationCenter.default.publisher(for: .focusLibraryGraphSearch)) { _ in
-            searching = true
+    }
+}
+
+private extension LibraryGraphView {
+    /// Floats over the canvas, so the graph keeps the whole panel.
+    var controls: some View {
+        HStack(spacing: 12) {
+            if focus != nil {
+                Button("All Connections", systemImage: "arrow.left") { focus = nil }
+                    .buttonStyle(.borderless)
+                Picker("Neighborhood", selection: $graph.depth) {
+                    Text("Direct").tag(1)
+                    Text("2 hops").tag(2)
+                }.pickerStyle(.segmented).fixedSize()
+            }
+            Toggle("Entities", isOn: $graph.includesConcepts).toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Include saved, evidence-backed entities. No analysis is started.")
+            GraphArrangementControl(graph: graph)
+            Button(
+                graph.inspectorVisible ? "Hide graph inspector" : "Show graph inspector",
+                systemImage: graph.inspectorVisible
+                    ? "rectangle.righthalf.inset.filled" : "sidebar.right"
+            ) {
+                graph.inspectorVisible.toggle()
+            }
+            .buttonStyle(PageIconButtonStyle())
+            .help(graph.inspectorVisible ? "Hide graph inspector" : "Show graph inspector")
+            .accessibilityValue(graph.inspectorVisible ? "Shown" : "Hidden")
+        }
+        .padding(.horizontal, 10).padding(.vertical, 4)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    @ViewBuilder var inspector: some View {
+        if graph.inspectorVisible {
+            LibraryGraphDetails(
+                graph: graph, openNote: openNote, openSource: openSource,
+                focusNote: { focus = $0 }, close: { graph.inspectorVisible = false }
+            )
+            .frame(width: Self.inspectorWidth)
+            .frame(maxHeight: .infinity)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.separator, lineWidth: 1 / 2)
+            }
+            .padding(12)
         }
     }
 }
@@ -146,10 +129,6 @@ private struct LibraryGraphLoadKey: Equatable {
     let request: LibraryGraphRequest
     let revision: Int
     let retry: Int
-}
-
-extension Notification.Name {
-    static let focusLibraryGraphSearch = Notification.Name("focusLibraryGraphSearch")
 }
 
 struct NoteConnectionsView: View {

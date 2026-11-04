@@ -11,11 +11,14 @@ struct WorkspaceTasksView: View {
     @State private var tasks: [WorkspaceTask] = []
     @State private var names: [UUID: String] = [:]
     @State private var more = false
+    @State private var doneToday: [WorkspaceTask] = []
     @State private var loading = false
     @State private var loadToken = UUID()
     @State private var error: String?
     @State private var editing: WorkspaceTask?
     @State private var today = WorkspaceDay(date: .now)
+    @FocusState private var searchFocused: Bool
+    private static let columnWidth: CGFloat = 688
 
     private var view: WorkspaceTaskView {
         selection?.wrappedValue ?? localView
@@ -26,6 +29,27 @@ struct WorkspaceTasksView: View {
     }
 
     var body: some View {
+        if choose == nil {
+            VStack(spacing: 0) {
+                PageBar(search: PageSearch(
+                    prompt: "Search tasks", label: "Search tasks",
+                    query: $query, focus: $searchFocused
+                )) {
+                    PageTabs(
+                        label: "Task view",
+                        items: WorkspaceTaskView.allCases.map { ($0, $0.label) },
+                        selection: viewBinding
+                    )
+                }
+                content.frame(maxWidth: Self.columnWidth).frame(maxWidth: .infinity)
+            }
+            .focusedSceneValue(\.paneSearch) { searchFocused = true }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             if choose != nil {
                 HStack {
@@ -34,10 +58,12 @@ struct WorkspaceTasksView: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            Picker("Task view", selection: viewBinding) {
-                ForEach(WorkspaceTaskView.allCases) { Text($0.label).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden()
-            TextField("Search tasks", text: $query).textFieldStyle(.roundedBorder)
+            if choose != nil {
+                Picker("Task view", selection: viewBinding) {
+                    ForEach(WorkspaceTaskView.allCases) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented).labelsHidden()
+                TextField("Search tasks", text: $query).textFieldStyle(.roundedBorder)
+            }
             if let message = error ?? workspace
                 .error
             {
@@ -54,17 +80,40 @@ struct WorkspaceTasksView: View {
                         viewBinding.wrappedValue = destination
                     }
                     .id("task-quick-entry")
+                    .listRowBackground(
+                        Color.primary.opacity(0.05)
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    )
+                    .listRowSeparator(.hidden)
                     if tasks.isEmpty, !query.isEmpty, !loading {
                         Text("No matching tasks.").font(.callout).foregroundStyle(.secondary)
                     }
                 }
                 ForEach(tasks) { task in
+                    if choose == nil, let heading = heading(above: task) {
+                        Text(heading).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityAddTraits(.isHeader)
+                            .listRowSeparator(.hidden)
+                    }
                     if let choose {
                         Button { choose(task); dismiss() } label: {
                             Text(task.title).frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     } else {
+                        WorkspaceTaskRow(
+                            task: task,
+                            workspace: workspace,
+                            names: names,
+                            openNote: openNote
+                        ) { editing = task }
+                    }
+                }
+                if choose == nil, view == .today, !doneToday.isEmpty {
+                    Text("Done today").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityAddTraits(.isHeader)
+                        .listRowSeparator(.hidden)
+                    ForEach(doneToday) { task in
                         WorkspaceTaskRow(
                             task: task,
                             workspace: workspace,
@@ -100,6 +149,11 @@ struct WorkspaceTasksView: View {
         .task(id: "\(view.rawValue)/\(query)/\(today.rawValue)/\(workspace.generation)") {
             await load(reset: true)
         }
+        .task(id: "\(view.rawValue)/\(today.rawValue)/\(workspace.generation)") {
+            let finished = view == .today
+                ? try? await workspace.store.workspaceTasksDone(on: today) : nil
+            doneToday = finished ?? []
+        }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
             today = WorkspaceDay(date: .now)
         }
@@ -117,6 +171,20 @@ struct WorkspaceTasksView: View {
                 localView = .all
             }
         }
+    }
+
+    /// Today opens with what's overdue; a heading starts each group.
+    private func heading(above task: WorkspaceTask) -> String? {
+        guard view == .today, let index = tasks.firstIndex(of: task) else { return nil }
+        let overdue = isOverdue(task)
+        if index == 0 {
+            return overdue ? "Overdue" : "Today"
+        }
+        return isOverdue(tasks[index - 1]) && !overdue ? "Today" : nil
+    }
+
+    private func isOverdue(_ task: WorkspaceTask) -> Bool {
+        task.due.map { $0 < today } ?? false
     }
 
     private func load(reset: Bool) async {
@@ -179,7 +247,7 @@ struct WorkspaceTaskEntryRow: View {
                 .onTapGesture { focused = true }
             VStack(alignment: .leading, spacing: 6) {
                 TextField(
-                    view == .today ? "Add a task for today…" : "Add a task…",
+                    "Add a task. Try “review backup plan tomorrow”",
                     text: $entry.title
                 )
                 .textFieldStyle(.plain).font(.body)
