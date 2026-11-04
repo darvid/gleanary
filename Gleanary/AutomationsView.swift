@@ -9,29 +9,60 @@ struct AutomationsView: View {
     @State private var selected: AutomationKind? = AutomationKind.allCases.first
     @State private var reviewing: AutomationKind?
 
+    @State private var filter = AutomationFilter.all
     var body: some View {
-        HSplitView {
-            list.frame(minWidth: 260, idealWidth: 330, maxWidth: 440, maxHeight: .infinity)
-            Group {
-                if let selected {
-                    AutomationDetail(
-                        model: model,
-                        config: model.config(selected),
-                        review: { reviewing = selected },
-                        open: open
-                    )
-                    .id(selected)
-                } else {
-                    ContentUnavailableView(
-                        "Select an automation",
-                        systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90",
-                        description: Text("Choose one to see its schedule and history.")
-                    )
+        VStack(spacing: 0) {
+            PageBar {
+                PageTabs(
+                    label: "Show",
+                    items: AutomationFilter.allCases.map { ($0, $0.title) },
+                    selection: $filter
+                )
+            } accessory: {
+                if let next = nextRun {
+                    Text("Next run \(next.formatted(.relative(presentation: .numeric)))")
+                        .font(.caption).foregroundStyle(.secondary).padding(.trailing, 6)
                 }
             }
-            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            columns
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var nextRun: Date? {
+        AutomationKind.allCases.map { model.config($0) }
+            .filter(\.enabled).compactMap(\.nextRunAt).min()
+    }
+
+    private var shown: [AutomationKind] {
+        AutomationKind.allCases.filter { kind in
+            switch filter {
+            case .all: true
+            case .toReview: !(model.pending[kind] ?? []).isEmpty
+            case .on: model.config(kind).enabled
+            }
+        }
+    }
+
+    private var columns: some View {
+        ListDetailColumns {
+            list
+        } detail: {
+            if let selected {
+                AutomationDetail(
+                    model: model,
+                    config: model.config(selected),
+                    review: { reviewing = selected },
+                    open: open
+                )
+                .id(selected)
+            } else {
+                ContentUnavailableView(
+                    "Select an automation",
+                    systemImage: "clock.arrow.trianglehead.counterclockwise.rotate.90",
+                    description: Text("Choose one to see its schedule and history.")
+                )
+            }
+        }
         .task { await model.load() }
         .sheet(item: $reviewing) { kind in
             AgentChangesReview(
@@ -43,24 +74,25 @@ struct AutomationsView: View {
         }
     }
 
-    static let intro =
-        "Automations run while Gleanary is open, a batch at a time, and pause while you're importing or summarizing. Summaries, fetched pages, retried captures and digests happen on their own; links, filing and archiving wait for your review, unless the link checker is set to archive dead links."
-
     private var list: some View {
-        VStack(spacing: 0) {
-            // The window title names the page, so the list opens with what automations do.
-            Text(Self.intro).font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(18)
-            Divider()
-            List(selection: $selected) {
-                ForEach(AutomationKind.allCases) { kind in
-                    AutomationListRow(model: model, config: model.config(kind)).tag(kind)
-                }
+        List(selection: $selected) {
+            ForEach(shown) { kind in
+                AutomationListRow(model: model, config: model.config(kind)).tag(kind)
             }
-            .listStyle(.inset)
-            .accessibilityLabel("Automations")
+        }
+        .listStyle(.inset).scrollContentBackground(.hidden)
+        .accessibilityLabel("Automations")
+    }
+}
+
+private enum AutomationFilter: CaseIterable, Hashable {
+    case all, toReview, on
+
+    var title: String {
+        switch self {
+        case .all: "All"
+        case .toReview: "To review"
+        case .on: "On"
         }
     }
 }
@@ -109,9 +141,8 @@ private struct AutomationListRow: View {
         if waiting > 0 {
             Text(waiting.formatted())
                 .font(.caption.weight(.semibold)).monospacedDigit()
-                .foregroundStyle(.white)
                 .padding(.horizontal, 6).padding(.vertical, 1)
-                .background(Color.accentColor, in: Capsule())
+                .background(Color.primary.opacity(0.1), in: Capsule())
                 .countsOnChange(waiting)
                 .help(waiting == 1 ? "1 proposal to review" : "\(waiting) proposals to review")
                 .accessibilityLabel(waiting == 1 ? "1 proposal to review"
@@ -139,9 +170,12 @@ private struct AutomationTile: View {
 
     var body: some View {
         Image(systemName: kind.symbol)
-            .font(size > 32 ? .title2 : .body).foregroundStyle(.white)
+            .font(size > 32 ? .title2 : .body).foregroundStyle(.secondary)
             .frame(width: size, height: size)
-            .background(kind.color.gradient, in: RoundedRectangle(cornerRadius: size / 4))
+            .background(
+                Color.primary.opacity(0.07),
+                in: RoundedRectangle(cornerRadius: size / 4, style: .continuous)
+            )
             .accessibilityHidden(true)
     }
 }
@@ -186,7 +220,7 @@ private struct AutomationDetail: View {
                             )
                         } content: {
                             Button("Review \(pending.count.formatted())…", action: review)
-                                .buttonStyle(.borderedProminent).controlSize(.small)
+                                .buttonStyle(.borderedProminent).tint(.primary).controlSize(.small)
                         }
                     }
                 }
@@ -450,10 +484,9 @@ private struct AutomationCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) { content }
-            .padding(14)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.5)))
+            .overlay(alignment: .top) { Divider() }
     }
 }
 

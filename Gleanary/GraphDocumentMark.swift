@@ -6,6 +6,8 @@ enum GraphMarkStyle: String, CaseIterable, Identifiable {
     case pages, dots, shapes
 
     static let key = "appearance.graphMarks"
+    /// Used until someone picks a style in Settings.
+    static let standard = GraphMarkStyle.shapes
 
     var id: String {
         rawValue
@@ -100,7 +102,7 @@ struct GraphDocumentMark {
 
     func draw(
         in context: inout GraphicsContext, rect: CGRect, increasedContrast: Bool,
-        background: Color = Color(nsColor: .windowBackgroundColor), ink: Color = .primary
+        background: Color = PanelSurface.color, ink: Color = .primary
     ) {
         let shape = path(in: rect)
         if isSource {
@@ -150,17 +152,21 @@ struct DocumentIdentity: Equatable {
 struct DocumentIdentityMark: View {
     let isSource: Bool
     var ink: Color = .primary
+    var size: CGFloat = 18
+    /// For rows beside the graph, which match its canvas. Elsewhere marks stay pages: a Source's
+    /// outlined square would read as a checkbox beside a title.
+    var followsGraphStyle = false
     @Environment(\.colorSchemeContrast) private var contrast
-    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.pages
+    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.standard
 
     var body: some View {
         Canvas { context, size in
-            GraphDocumentMark(isSource: isSource, style: style).draw(
+            GraphDocumentMark(isSource: isSource, style: followsGraphStyle ? style : .pages).draw(
                 in: &context, rect: CGRect(origin: .zero, size: size).insetBy(dx: 1, dy: 1),
                 increasedContrast: contrast == .increased, ink: ink
             )
         }
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
         .accessibilityHidden(true)
     }
 }
@@ -190,7 +196,7 @@ struct DocumentIdentityLabel: View {
 struct GraphDocumentLegend: View {
     var usesFilingColors = false
     @Environment(\.colorSchemeContrast) private var contrast
-    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.pages
+    @AppStorage(GraphMarkStyle.key) private var style = GraphMarkStyle.standard
 
     var body: some View {
         HStack(spacing: 16) {

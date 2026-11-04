@@ -5,6 +5,12 @@ struct GleanaryApp: App {
     @State private var library = Self.makeLibrary()
     @State private var conversation: ConversationModel?
 
+    /// Library opens on its Map each launch; switching to List or Graph lasts until quit.
+    init() {
+        SlimScrollers.install()
+        UserDefaults.standard.removeObject(forKey: LibraryPresentation.key)
+    }
+
     private static func makeLibrary() -> LibraryModel {
         #if DEBUG
             if ProcessInfo.processInfo.environment["GLEANARY_TESTING"] == "1" {
@@ -70,6 +76,7 @@ struct GleanaryApp: App {
                 .task { ensureConversation() }
             }
         }
+        .windowStyle(.hiddenTitleBar)
     }
 }
 
@@ -101,7 +108,7 @@ extension FocusedValues {
 private struct GleanaryCommands: Commands {
     @FocusedValue(\.gleanaryActions) private var actions
     @FocusedValue(\.navigationActions) private var navigation
-    @FocusedValue(\.activitySearch) private var activitySearch
+    @FocusedValue(\.paneSearch) private var paneSearch
     @FocusedValue(\.commandActions) private var windowActions
     private let shortcuts = ShortcutSettings.shared
 
@@ -142,7 +149,7 @@ private struct GleanaryCommands: Commands {
     private func item(_ id: String, title: String? = nil) -> some View {
         let action = CommandRouter.action(
             id, window: windowActions, actions: actions, navigation: navigation,
-            activitySearch: activitySearch
+            paneSearch: paneSearch
         )
         return Button(title ?? AppCommand.named(id)?.title ?? id) { action?() }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: id))
@@ -157,7 +164,7 @@ private struct GleanaryCommands: Commands {
         window: [String: () -> Void]?,
         actions: GleanaryActions?,
         navigation: NavigationActions?,
-        activitySearch: (() -> Void)?
+        paneSearch: (() -> Void)?
     ) -> (() -> Void)? {
         let enabled = actions?.enabled == true
         switch id {
@@ -169,7 +176,7 @@ private struct GleanaryCommands: Commands {
         case "categorize": return enabled ? actions?.categorize : nil
         case "send": return enabled ? actions?.sendMessage : nil
         case "clear": return enabled ? actions?.clearConversation : nil
-        case "focus": return activitySearch ?? actions?.focus
+        case "focus": return paneSearch ?? actions?.focus
         default: return window?[id]
         }
     }

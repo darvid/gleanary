@@ -2,6 +2,19 @@ import Foundation
 import GRDB
 
 extension DocumentStore {
+    /// What was finished on a day, most recent first. Task rows keep only their last update, so
+    /// a finished task edited later moves to that day.
+    func workspaceTasksDone(on day: WorkspaceDay) throws -> [WorkspaceTask] {
+        let start = day.date.timeIntervalSince1970
+        return try readyDatabase().read { db in
+            try Row.fetchAll(db, sql: """
+            SELECT t.* FROM workspace_tasks t
+            WHERE t.status = 'completed' AND t.updatedAt >= ? AND t.updatedAt < ?
+            ORDER BY t.updatedAt DESC, t.id LIMIT 50
+            """, arguments: [start, start + 86400]).map(Self.workspaceTask)
+        }
+    }
+
     func workspaceTasks(
         view: WorkspaceTaskView = .all,
         query: String = "",

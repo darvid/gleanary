@@ -20,7 +20,6 @@ struct ContentView: View {
     @State private var pendingTemplate: NoteTemplate?
     @State private var replacingDraft = false
     @State private var readerTarget: ChatAttachmentTarget?
-    @State private var readerPreview = DocumentPreviewModel()
     var initialSelection: UUID?
     /// Whether this is the main window, which reopens where it was last left.
     private let restoresWindow: Bool
@@ -30,6 +29,8 @@ struct ContentView: View {
     @AppStorage("libraryKindFilter") private var kindFilter = LibraryKindFilter.all
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
+    @Environment(\.displayScale) private var displayScale
+    @State private var sidebarHeight: CGFloat = 0
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readEntitiesInBackground = false
     @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
@@ -46,9 +47,8 @@ struct ContentView: View {
     @State private var showingFiling = false
     @State private var preview = DocumentPreviewModel()
     @State private var source: SourceCitation?
-    @AppStorage("libraryPresentation") private var presentation = LibraryPresentation.map
+    @AppStorage(LibraryPresentation.key) private var presentation = LibraryPresentation.map
     /// Area digits folded in the sidebar's Filing section, comma-separated.
-    @AppStorage("collapsedFilingAreas") private var collapsedAreas = ""
     @State private var atlas = KnowledgeAtlasModel()
     @State private var graph = LibraryGraphModel()
     private var graphFocus: UUID? {
@@ -68,7 +68,10 @@ struct ContentView: View {
     /// Atlas navigations already accounted for, so a context change from free zooming isn't one.
     @State private var seenAtlasNavigations = 0
     @FocusState private var searchFocused: Bool
+    @State private var readerPreview = DocumentPreviewModel()
     @State private var showingPalette = false
+    @State private var tasksDueToday = 0
+    @State private var atlasQuery = ""
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -110,6 +113,7 @@ struct ContentView: View {
 
     var body: some View {
         windowContent
+            .disclosureGroupStyle(FullRowDisclosureStyle())
             .environment(\.commandPaletteOpen, showingPalette)
             .environment(\.showCategory) { sidebarSelection.wrappedValue = .library(.category($0)) }
             .focusedSceneValue(\.commandActions, commandActions)
@@ -117,49 +121,24 @@ struct ContentView: View {
     }
 
     private var windowContent: some View {
-        // Like ChatGPT: one toolbar spans the window, with the sidebar and content below it, so the
-        // sidebar toggle never moves and content never scrolls into the titlebar.
         HStack(spacing: 0) {
             if sidebarVisible {
-                sidebar.frame(width: sidebarWidth)
+                fadedSidebar.frame(width: sidebarWidth)
                     .transition(.move(edge: .leading).combined(with: .opacity))
                 // Above the content, so the handle's right half isn't covered by it.
-                Divider().overlay { sidebarResizeHandle }.zIndex(1)
+                Color.clear.frame(width: 1).overlay { sidebarResizeHandle }.zIndex(1)
             }
-            // Stacked, not a safe-area inset: HSplitView's AppKit columns ignore SwiftUI insets
-            // and would draw under the banner.
-            VStack(spacing: 0) {
-                notice
-                main.frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
-            // toolbar, which pulls content under this window's custom titlebar.
-            if showingFiling, !chatting, !showingActivity, !showingTasks, !showingEntities,
-               readerTarget == nil
-            {
-                // One unit, so the edge slides in with the panel instead of appearing first.
-                HStack(spacing: 0) {
-                    Divider()
-                    FilingInspector(
-                        document: preview.document, categories: categories, store: library.store,
-                        file: file,
-                        close: { withAnimation(.snappy(duration: 0.25)) { showingFiling = false } }
-                    )
-                    .frame(width: Self.inspectorWidth)
-                }
-                .background(Color(nsColor: .windowBackgroundColor))
-                .transition(.move(edge: .trailing))
-            }
+            contentPanel
         }
-        // Keep the sidebar's animation out of the window toolbar's layout transaction.
+        .overlay(alignment: .topLeading) { sidebarToggle }
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: sidebarVisible)
-        // One solid titlebar; sidebar translucency stays below its bottom edge.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            Divider().background(alignment: .bottom) {
-                Color(nsColor: .windowBackgroundColor).ignoresSafeArea(edges: .top)
-            }
-        }
-        .toolbar { toolbar }
+        // The panel rises beside the traffic lights, so nothing keeps clear of the titlebar.
+        .ignoresSafeArea(edges: .top)
+        // Never drawn in this window style; it names the window for the Window menu and VoiceOver.
+        .navigationTitle(location.windowTitle(
+            libraryTitle: scopeTitle,
+            showingReader: readerTarget != nil
+        ))
         .background {
             MouseNavigationMonitor(back: goBack, forward: goForward)
         }
@@ -169,8 +148,8 @@ struct ContentView: View {
         ))
 
         .onChange(of: location, initial: true) { old, new in record(from: old, to: new) }
-        .toolbarBackgroundVisibility(.visible, for: .windowToolbar)
-        .background(Color(nsColor: .windowBackgroundColor))
+        // The window itself is the sidebar's surface; only the content panel is solid.
+        .background { WindowSurface().ignoresSafeArea() }
         .environment(\.linkedSourceContext, LinkedSourceContext(
             store: library.store,
             revision: "\(library.documentGrid.generation)/\(library.captureRevision)",
@@ -232,13 +211,7 @@ struct ContentView: View {
             chatting && readerTarget == nil ? nil : GleanaryActions(
                 enabled: library.ready && !library.busy,
                 newItem: { requestDraft(nil) },
-                attach: { importing = true }, focus: {
-                    if presentation == .graph {
-                        NotificationCenter.default.post(name: .focusLibraryGraphSearch, object: nil)
-                    } else {
-                        searchFocused = true
-                    }
-                },
+                attach: { importing = true }, focus: { searchFocused = true },
                 importBookmarks: { importingBookmarks = true },
                 categorize: { categorizing = true }
             )
@@ -407,15 +380,15 @@ struct ContentView: View {
         }
     }
 
+    /// The reading view: the text with the panel to itself. The item page keeps everything else.
     private func readerPane(_ target: ChatAttachmentTarget) -> some View {
         VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button("Exit Reader Mode", systemImage: "arrow.down.right.and.arrow.up.left") {
-                    readerTarget = nil
-                }.keyboardShortcut(.cancelAction).buttonStyle(.borderless)
-            }.padding(.horizontal, 24).padding(.vertical, 12)
-            Divider()
+            PageBar {
+                Button("Exit Reader Mode", systemImage: "chevron.left") { readerTarget = nil }
+                    .keyboardShortcut(.cancelAction)
+                    .buttonStyle(PageIconButtonStyle())
+                    .help("Exit Reader Mode")
+            }
             switch target {
             case .note:
                 DocumentPreview(model: readerPreview)
@@ -452,6 +425,11 @@ struct ContentView: View {
 
     /// Drag the sidebar's edge within this range; double-click it to go back to the default.
     static let sidebarWidths: ClosedRange<Double> = 180 ... 340
+    private static let panelInset: CGFloat = 8
+    /// The row that holds the traffic lights and sidebar toggle.
+    private static let chromeHeight: CGFloat = 46
+    private static let panelRadius: CGFloat = 12
+    private static let sidebarFade: CGFloat = 12
     static let defaultSidebarWidth: Double = 220
 
     /// A few points either side of the divider take the drag, with the system resize cursor.
@@ -490,6 +468,10 @@ struct ContentView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: readerTarget != nil)
+        .environment(\.pageMenu, AnyView(moreMenu))
+        .environment(\.openCommandPalette) {
+            withAnimation(.snappy(duration: 0.15)) { showingPalette = true }
+        }
     }
 
     private var browsingMain: some View {
@@ -541,54 +523,135 @@ struct ContentView: View {
             }
         } else if automating {
             AutomationsView(model: library.automations, open: openSavedItem)
-        } else if scope == .archived || presentation == .list {
-            libraryColumns
-        } else if presentation == .graph {
-            graphPane
         } else {
-            atlasPane
+            VStack(spacing: 0) {
+                libraryBar
+                if scope == .archived || presentation == .list {
+                    libraryColumns
+                } else if presentation == .graph {
+                    graphPane
+                } else {
+                    atlasPane
+                }
+            }
         }
     }
 
-    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
-        ToolbarItem(id: "navigation", placement: .navigation) {
-            HStack(spacing: 0) {
-                // The shortcut lives on View › Toggle Sidebar, so Settings › Keyboard can change
-                // it.
-                let shortcut = ShortcutSettings.shared.shortcut(for: "toggle-sidebar")
-                    .map { " (\($0.display))" } ?? ""
-                Button("Toggle Sidebar", systemImage: "sidebar.left") {
-                    sidebarVisible.toggle()
-                }
-                .labelStyle(.iconOnly).buttonStyle(.borderless)
-                .help((sidebarVisible ? "Hide sidebar" : "Show sidebar") + shortcut)
-                if sidebarVisible {
-                    // Continues the sidebar's edge through the toolbar, as ChatGPT does.
-                    Spacer().frame(width: titleIndent)
-                    Divider().frame(height: 22)
-                }
-                Spacer().frame(width: 14)
-                Text(location.windowTitle(
-                    libraryTitle: scopeTitle,
-                    showingReader: readerTarget != nil
-                ))
-                .font(.headline).lineLimit(1)
-                // The toolbar keeps the width of the previous title, so a longer one would
-                // otherwise truncate ("Activi…") after switching from a shorter page.
-                .fixedSize()
+    /// Stays beside the traffic lights whether or not the sidebar is showing.
+    private var sidebarToggle: some View {
+        // The shortcut lives on View › Toggle Sidebar, so Settings › Keyboard can change it.
+        let shortcut = ShortcutSettings.shared.shortcut(for: "toggle-sidebar")
+            .map { " (\($0.display))" } ?? ""
+        return Button("Toggle Sidebar", systemImage: "sidebar.left") {
+            sidebarVisible.toggle()
+        }
+        .buttonStyle(PageIconButtonStyle())
+        .help((sidebarVisible ? "Hide sidebar" : "Show sidebar") + shortcut)
+        .padding(.leading, 72).padding(.top, 2)
+    }
+
+    /// Ends every page's bar, in the same place. Chat puts its own menu in this slot.
+    private var moreMenu: some View {
+        Menu("More", systemImage: "ellipsis") {
+            Button("Note Templates…", systemImage: "doc.badge.plus") {
+                showingTemplates = true
             }
-            .transaction { $0.animation = nil }
+            .disabled(!library.ready || library.busy)
+            Divider()
+            Button("Attach Documents…", systemImage: "paperclip") { importing = true }
+                .disabled(!library.ready || library.busy)
+            Button("Import Bookmarks…", systemImage: "square.and.arrow.down") {
+                importingBookmarks = true
+            }.disabled(!library.ready || library.busy)
+            Divider()
+            Button("Categorize Unfiled…", systemImage: "wand.and.sparkles") {
+                categorizing = true
+            }.disabled(!library.ready)
+            Divider()
+            SettingsLink { Text("Settings…") }
+                .keyboardShortcut(",", modifiers: .command)
         }
-        .sharedBackgroundVisibility(.hidden)
-        // Chat draws its own More menu; the library and Automations share this one.
-        if !chatting {
-            ToolbarSpacer(.flexible)
+        .menuIndicator(.hidden).menuStyle(.button)
+        .buttonStyle(PageIconButtonStyle())
+        .help("Templates, import, filing review, and Settings")
+        .accessibilityIdentifier("library-more-menu")
+    }
+
+    private var libraryTab: Binding<LibraryTab> {
+        Binding {
+            scope == .archived ? .archived : LibraryTab(kindFilter)
+        } set: { tab in
+            if let kind = tab.kind {
+                if scope == .archived {
+                    sidebarSelection.wrappedValue = .library(.all)
+                }
+                kindFilter = kind
+            } else {
+                sidebarSelection.wrappedValue = .library(.archived)
+            }
         }
-        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
-           readerTarget == nil,
-           scope == .unfiled
-        {
-            ToolbarItem {
+    }
+
+    private var showsPresentations: Bool {
+        presentation.showsPicker(
+            in: scope,
+            hasOpenedItem: atlasItem != nil,
+            isEditing: editing != nil
+        )
+    }
+
+    /// Map highlights matches in place; List and Graph narrow to them.
+    private var librarySearch: PageSearch? {
+        // Nothing to search yet: Search falls back to the command palette.
+        guard !scopeIsEmpty else { return nil }
+        let map = presentation == .map && scope != .archived
+        return PageSearch(
+            prompt: map ? "Highlight matches" : "Search this view",
+            label: map ? "Search the atlas" : "Search library",
+            query: map ? $atlasQuery : Binding(
+                get: { library.documentGrid.query },
+                set: { library.documentGrid.query = $0 }
+            ),
+            focus: $searchFocused
+        )
+    }
+
+    /// The way back from an open item: to the Map's regions, or to the Graph.
+    private var itemBreadcrumb: some View {
+        HStack(spacing: 6) {
+            Button("Back", systemImage: "chevron.left") { atlasItem = nil }
+                .buttonStyle(PageIconButtonStyle())
+                .help(presentation == .graph ? "Return to the Graph" : "Return to the Atlas")
+                .disabled(editing != nil)
+            if presentation != .graph {
+                ForEach(atlasItem.map(atlasLocation(of:)) ?? [], id: \.id) { region in
+                    Button(region.label) {
+                        atlasItem = nil
+                        atlas.focus(region.id)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary).lineLimit(1)
+                    .disabled(editing != nil)
+                    .help("Show \(region.label) in the Atlas")
+                    Text("/").foregroundStyle(.tertiary).accessibilityHidden(true)
+                }
+            }
+            Text(preview.document?.name ?? "").lineLimit(1)
+        }
+    }
+
+    private var libraryBar: some View {
+        PageBar(search: librarySearch) {
+            if atlasItem != nil || (editing != nil && presentation != .list) {
+                itemBreadcrumb
+            } else {
+                PageTabs(
+                    label: "Item type",
+                    items: LibraryTab.allCases.map { ($0, $0.title) },
+                    selection: libraryTab
+                )
+            }
+        } accessory: {
+            if scope == .unfiled, editing == nil {
                 Button { categorizing = true } label: {
                     if library.categorizing {
                         HStack(spacing: 6) {
@@ -596,7 +659,7 @@ struct ContentView: View {
                             Text("Review filing…")
                         }
                     } else {
-                        Label("Suggest filing…", systemImage: "sparkles")
+                        Text("Suggest filing…")
                     }
                 }
                 .disabled(!library.ready)
@@ -604,44 +667,9 @@ struct ContentView: View {
                     "Suggest homes in batches, then review before filing. Saved suggestions can be resumed."
                 )
             }
-        }
-        if !chatting, !automating, !showingActivity, !showingTasks, !showingEntities,
-           readerTarget == nil,
-           presentation.showsPicker(
-               in: scope,
-               hasOpenedItem: atlasItem != nil,
-               isEditing: editing != nil
-           )
-        {
-            ToolbarItem(id: "library-presentation") {
+            if showsPresentations {
                 LibraryPresentationPicker(selection: presentationSelection)
-            }
-        }
-        if !chatting {
-            ToolbarItem(id: "library-more") {
-                // Mirrors the File menu, as Finder and Mail do with their toolbar More menus.
-                // Plain ellipsis: Liquid Glass already draws the circular button.
-                Menu("More", systemImage: "ellipsis") {
-                    Button("Note Templates…", systemImage: "doc.badge.plus") {
-                        showingTemplates = true
-                    }
-                    .disabled(!library.ready || library.busy)
-                    Divider()
-                    Button("Attach Documents…", systemImage: "paperclip") { importing = true }
-                        .disabled(!library.ready || library.busy)
-                    Button("Import Bookmarks…", systemImage: "square.and.arrow.down") {
-                        importingBookmarks = true
-                    }.disabled(!library.ready || library.busy)
-                    Divider()
-                    Button("Categorize Unfiled…", systemImage: "wand.and.sparkles") {
-                        categorizing = true
-                    }.disabled(!library.ready)
-                    Divider()
-                    SettingsLink { Label("Settings…", systemImage: "gearshape") }
-                }
-                .menuIndicator(.hidden)
-                .help("Templates, import, filing review, and Settings")
-                .accessibilityIdentifier("library-more-menu")
+                Divider().frame(height: 16).padding(.horizontal, 4)
             }
         }
     }
@@ -682,10 +710,77 @@ struct ContentView: View {
         (try? conversation?.providers.filingInference()) ?? AppleConversationInference()
     }
 
-    /// Gap from the toggle to the sidebar's edge, given the toggle's place beside the traffic
-    /// lights, so the toolbar divider continues the sidebar's.
-    private var titleIndent: CGFloat {
-        max(0, sidebarWidth - Self.defaultSidebarWidth + 105)
+    /// A rounded panel set into the window, concentric with its lower corners.
+    private var contentPanel: some View {
+        let shape = RoundedRectangle(cornerRadius: Self.panelRadius, style: .continuous)
+        return HStack(spacing: 0) {
+            // Stacked, not a safe-area inset, so columns can't draw under the banner.
+            VStack(spacing: 0) {
+                notice
+                main.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            // A plain trailing column like the sidebar: SwiftUI's `.inspector` claims the window
+            // toolbar, which pulls content under this window's custom titlebar.
+            if showingFiling, !chatting, !showingActivity, !showingTasks, !showingEntities,
+               readerTarget == nil
+            {
+                // One unit, so the edge slides in with the panel instead of appearing first.
+                HStack(spacing: 0) {
+                    Divider()
+                    FilingInspector(
+                        document: preview.document, categories: categories, store: library.store,
+                        file: file,
+                        close: { withAnimation(.snappy(duration: 0.25)) { showingFiling = false } }
+                    )
+                    .frame(width: Self.inspectorWidth)
+                }
+                .background(PanelSurface.color)
+                .transition(.move(edge: .trailing))
+            }
+        }
+        .background(PanelSurface.color)
+        .clipShape(shape)
+        // One device pixel: a fixed 0.5pt straddles pixels at 1x, stepping where curve meets edge.
+        .overlay { shape.strokeBorder(.separator, lineWidth: 1 / displayScale) }
+        .padding(.leading, sidebarVisible ? 0 : Self.panelInset)
+        .padding([.trailing, .bottom], Self.panelInset)
+        // Without the sidebar, the panel keeps clear of the traffic lights and toggle.
+        .padding(.top, sidebarVisible ? Self.panelInset : Self.chromeHeight)
+    }
+
+    /// The sidebar's rows stop level with the content panel and fade into its edges.
+    private var fadedSidebar: some View {
+        let fade = Self.sidebarFade / max(1, sidebarHeight)
+        return sidebar
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { sidebarHeight = $0 }
+            .mask {
+                // Rows fade; the scroller beside them stays whole, so it ends where the panel does.
+                HStack(spacing: 0) {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black, location: fade),
+                            .init(color: .black, location: 1 - fade),
+                            .init(color: .clear, location: 1),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    Color.black.frame(width: SlimScrollers.width)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) { sidebarFooter }
+            .padding(.top, Self.chromeHeight)
+            .padding(.bottom, Self.panelInset)
+    }
+
+    private var sidebarFooter: some View {
+        HStack {
+            SettingsLink { Label("Settings", systemImage: "gearshape") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 18).padding(.vertical, 6)
     }
 
     @ViewBuilder private var notice: some View {
@@ -740,49 +835,17 @@ struct ContentView: View {
     }
 
     private var splitColumns: some View {
-        HSplitView {
-            documentList.frame(
-                minWidth: 260,
-                idealWidth: 330,
-                maxWidth: 440,
-                maxHeight: .infinity,
-                alignment: .top
-            )
-            detail().frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-        }
-        // A split view centers columns shorter than itself, such as an empty list.
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ListDetailColumns { documentList } detail: { detail() }
     }
 
     @ViewBuilder private var atlasPane: some View {
         if atlasItem != nil || editing != nil {
-            VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Button("Atlas", systemImage: "chevron.left") { atlasItem = nil }
-                        .buttonStyle(.borderless)
-                        .help("Return to the Atlas")
-                        .disabled(editing != nil)
-                    ForEach(atlasItem.map(atlasLocation(of:)) ?? [], id: \.id) { region in
-                        Image(systemName: "chevron.right").font(.caption2)
-                            .foregroundStyle(.tertiary).accessibilityHidden(true)
-                        Button(region.label) {
-                            atlasItem = nil
-                            atlas.focus(region.id)
-                        }
-                        .buttonStyle(.borderless).foregroundStyle(.secondary).lineLimit(1)
-                        .disabled(editing != nil)
-                        .help("Show \(region.label) in the Atlas")
+            detail(openDocument: openFromAtlas)
+                .onExitCommand {
+                    if editing == nil {
+                        atlasItem = nil
                     }
-                    Spacer()
-                }.font(.callout).padding(.horizontal, 20).padding(.vertical, 10)
-                Divider()
-                detail(openDocument: openFromAtlas)
-            }
-            .onExitCommand {
-                if editing == nil {
-                    atlasItem = nil
                 }
-            }
         } else {
             KnowledgeAtlasView(
                 atlas: atlas, store: library.store,
@@ -796,7 +859,9 @@ struct ContentView: View {
                             preview.showsCapturedSource = true
                         } catch { library.error = "This saved source is no longer available." }
                     }
-                }
+                },
+                search: $atlasQuery,
+                suggestFiling: { categorizing = true }
             )
         }
     }
@@ -813,15 +878,7 @@ struct ContentView: View {
 
     @ViewBuilder private var graphPane: some View {
         if atlasItem != nil || editing != nil {
-            VStack(spacing: 0) {
-                HStack {
-                    Button("Graph", systemImage: "chevron.left") { atlasItem = nil }
-                        .buttonStyle(.borderless).disabled(editing != nil)
-                    Spacer()
-                }.padding(.horizontal, 20).padding(.vertical, 10)
-                Divider()
-                detail(openDocument: openFromGraph)
-            }
+            detail(openDocument: openFromGraph)
         } else {
             LibraryGraphView(
                 graph: graph, store: library.store,
@@ -1082,7 +1139,7 @@ struct ContentView: View {
                     canGoBack: history.canGoBack, canGoForward: history.canGoForward,
                     back: goBack, forward: goForward
                 ),
-                activitySearch: nil
+                paneSearch: nil
             ) else { continue }
             let title = command.id == "new-item" ? (focusedActions?.newItemTitle ?? "New Note")
                 : command.title
@@ -1259,9 +1316,24 @@ struct ContentView: View {
                 Label("Entities", systemImage: "person.2")
                     .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     .tag(SidebarItem.entities)
-                Label("Tasks", systemImage: "checklist")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
-                    .tag(SidebarItem.tasks)
+                HStack {
+                    Label("Tasks", systemImage: "checklist")
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
+                    Spacer()
+                    if tasksDueToday > 0 {
+                        Text(tasksDueToday.formatted())
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .foregroundStyle(sidebarColor.opacity(0.72))
+                            .countsOnChange(tasksDueToday)
+                            .accessibilityLabel(tasksDueToday == 1 ? "1 task for today"
+                                : "\(tasksDueToday) tasks for today")
+                    }
+                }
+                .tag(SidebarItem.tasks)
+                .task(id: library.workspace.generation) {
+                    let page = try? await library.store.workspaceTasks(view: .today, limit: 200)
+                    tasksDueToday = page?.tasks.count ?? 0
+                }
             }
             // Upkeep: Activity first, as the overview of the queues beneath it. It holds
             // captures too, so its only badge is the failures that need you.
@@ -1316,36 +1388,28 @@ struct ContentView: View {
                                 : "\(waiting) proposals to review")
                     }
                 }.tag(SidebarItem.automations)
-                Label("Archive", systemImage: "archivebox")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
-                    .tag(SidebarItem.library(.archived))
             }
             Section("Filing") {
                 // The items with no home, ahead of the homes.
-                Label("Unfiled", systemImage: "folder.badge.questionmark")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
-                    .accessibilityHint("Show unfiled items in Library")
-                    .tag(SidebarItem.library(.unfiled))
-                ForEach(CategoryArea.group(categories)) { area in
-                    let header = area.categories.first { $0.code == "\(area.digit)0" }
-                    let members = area.categories.filter { $0.id != header?.id }
-                    if let header, !members.isEmpty {
-                        DisclosureGroup(isExpanded: areaExpanded(area.digit)) {
-                            ForEach(members) { filingRow($0, icon: nil) }
-                        } label: {
-                            filingRow(header, icon: "folder")
-                        }
-                    } else {
-                        ForEach(area.categories) { filingRow($0, icon: "folder") }
-                    }
+                HStack(spacing: 8) {
+                    Circle().fill(.secondary).frame(width: 7, height: 7).accessibilityHidden(true)
+                    Text("Unfiled").foregroundStyle(sidebarColor)
                 }
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Show unfiled items in Library")
+                .tag(SidebarItem.library(.unfiled))
+                // Flat, in code order: the codes already show which area each home belongs to.
+                ForEach(CategoryArea.group(categories).flatMap(\.categories)) { filingRow($0) }
             }
-        }.listStyle(.sidebar).foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
+        }.listStyle(.sidebar).scrollContentBackground(.hidden)
+            // A sidebar's sections are disclosure groups too, and these stay plain headings.
+            .disclosureGroupStyle(.automatic)
+            .foregroundStyle(colorScheme == .dark ? Color.white : Color.black)
             .accessibilityLabel("Library navigation")
     }
 
-    /// One line per category: an area's `X0` row carries the icon and its members sit beneath it.
-    private func filingRow(_ category: DecimalCategory, icon: String?) -> some View {
+    /// One line per category, led by its Atlas colour.
+    private func filingRow(_ category: DecimalCategory) -> some View {
         let color = sidebarColor
         // Dimmed, not removed: the map hides empty categories, but they stay reachable here.
         let hidden = presentation == .map && atlasHidesEmpty
@@ -1356,16 +1420,17 @@ struct ContentView: View {
             dark: colorScheme == .dark
         )
         return HStack(spacing: 8) {
-            if let icon {
-                Image(systemName: icon).foregroundStyle(mark).frame(width: 18)
-            } else {
-                Circle().fill(mark).frame(width: 7, height: 7).accessibilityHidden(true)
-            }
+            Circle().fill(mark).frame(width: 7, height: 7).accessibilityHidden(true)
             // Leading, as Johnny Decimal writes it: a trailing number reads as a count.
             Text(category.code).font(.caption).monospacedDigit()
                 .foregroundStyle(color.opacity(0.5))
             Text(category.name).foregroundStyle(color).lineLimit(1)
             Spacer(minLength: 4)
+            // Nil until the Atlas has loaded.
+            if let count = atlas.layout.tile(.category(category.id))?.node.itemCount, count > 0 {
+                Text(count.formatted()).font(.caption).monospacedDigit()
+                    .foregroundStyle(color.opacity(0.5))
+            }
         }
         .opacity(hidden ? 0.4 : 1)
         .padding(.leading, category.code.contains(".") ? 10 : 0)
@@ -1373,20 +1438,6 @@ struct ContentView: View {
         .help(hidden ? "\(category.label) is empty and hidden in the map" : category.label)
         .accessibilityElement(children: .combine)
         .accessibilityValue(hidden ? "Empty, hidden in the map" : "")
-    }
-
-    private func areaExpanded(_ digit: Int) -> Binding<Bool> {
-        Binding {
-            !collapsedAreas.split(separator: ",").contains(Substring(String(digit)))
-        } set: { expanded in
-            var collapsed = Set(collapsedAreas.split(separator: ",").map(String.init))
-            if expanded {
-                collapsed.remove(String(digit))
-            } else {
-                collapsed.insert(String(digit))
-            }
-            collapsedAreas = collapsed.sorted().joined(separator: ",")
-        }
     }
 
     private var sidebarScope: LibraryScope? {
@@ -1461,36 +1512,6 @@ struct ContentView: View {
 
     private var documentList: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text(scopeTitle).font(.title3.weight(.semibold))
-                    Spacer()
-                    Text(kindFilter.countLabel(library.documentGrid.total))
-                        .font(.caption.monospacedDigit())
-                        .countsOnChange(library.documentGrid.total)
-                        .foregroundStyle(.secondary)
-                }
-                LibraryKindPicker(selection: $kindFilter)
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                    TextField("Search this view", text: Binding(
-                        get: { library.documentGrid.query },
-                        set: { library.documentGrid.query = $0 }
-                    ))
-                    .textFieldStyle(.plain).focused($searchFocused)
-                    .accessibilityLabel("Search library")
-                    if !library.documentGrid.query.isEmpty {
-                        Button("Clear Search", systemImage: "xmark.circle.fill") {
-                            library.documentGrid.query = ""
-                        }
-                        .labelStyle(.iconOnly).buttonStyle(.borderless)
-                    }
-                }.padding(8).background(
-                    Color(nsColor: .controlBackgroundColor),
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-            }.padding(18)
-            Divider()
             if let error = library.documentGrid.error {
                 ContentUnavailableView(
                     "Search unavailable",
@@ -1537,56 +1558,60 @@ struct ContentView: View {
                             Text("Loading…").foregroundStyle(.secondary)
                         }
                     }
-                }.listStyle(.inset).accessibilityLabel("Saved library items")
+                }.listStyle(.inset).scrollContentBackground(.hidden)
+                    .accessibilityLabel("Saved library items")
                     .task(id: "\(library.documentGrid.generation)/\(page)") {
                         library.documentGrid.show(indices: Array(pageRange))
                     }
                 pagination
             }
             handoff
-        }.navigationSplitViewColumnWidth(min: 260, ideal: 330, max: 440)
-    }
-
-    private var pagination: some View {
-        HStack {
-            Text(
-                "\(pageRange.lowerBound + 1)–\(pageRange.upperBound) of \(library.documentGrid.total)"
-            )
-            .font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            Button("Previous Page", systemImage: "chevron.left") { page -= 1 }
-                .disabled(page == 0)
-            Button("Next Page", systemImage: "chevron.right") { page += 1 }
-                .accessibilityIdentifier("library-next-page")
-                .disabled(pageRange.upperBound >= library.documentGrid.total)
-        }.labelStyle(.iconOnly).buttonStyle(.borderless).padding(.horizontal, 18).padding(
-            .vertical,
-            10
+        }.navigationSplitViewColumnWidth(
+            min: ListColumn.minWidth, ideal: ListColumn.idealWidth, max: ListColumn.maxWidth
         )
     }
 
-    private var handoff: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var pagination: some View {
+        VStack(spacing: 0) {
             Divider()
-            if !selection.isEmpty {
-                HStack {
-                    Text("\(selection.count) selected").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
+            HStack {
+                Text(
+                    "\(pageRange.lowerBound + 1)–\(pageRange.upperBound) of \(library.documentGrid.total)"
+                )
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                Spacer()
+                Button("Previous Page", systemImage: "chevron.left") { page -= 1 }
+                    .disabled(page == 0)
+                Button("Next Page", systemImage: "chevron.right") { page += 1 }
+                    .accessibilityIdentifier("library-next-page")
+                    .disabled(pageRange.upperBound >= library.documentGrid.total)
+            }
+            .labelStyle(.iconOnly).buttonStyle(.borderless)
+            .padding(.horizontal, ListColumn.inset).padding(.vertical, 7)
+        }
+    }
+
+    /// Appears with the selection, so an unselected list has no chrome beneath it.
+    @ViewBuilder private var handoff: some View {
+        if !selection.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Divider().padding(.horizontal, -ListColumn.inset)
+                HStack(spacing: 10) {
+                    Text("\(selection.count) selected")
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     Button("Clear") { selection = [] }.buttonStyle(.borderless).font(.caption)
+                    Spacer()
+                    Button("Use in Chat", systemImage: "bubble.left") {
+                        useInConversation(Array(selection).sorted { $0.uuidString < $1.uuidString })
+                    }
+                    .disabled(selection.count > 4)
                 }
-                Button("Use in Chat", systemImage: "bubble.left") {
-                    useInConversation(Array(selection).sorted { $0.uuidString < $1.uuidString })
-                }
-                .disabled(selection.count > 4)
-                Text(selection
-                    .count > 4 ? "Choose up to 4 items for one request." :
-                    "Ask a question or compare these items in chat.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Text("Select items to use in Chat. ⌘-click to select more than one.")
+                Text(selection.count > 4 ? "Choose up to 4 items for one request."
+                    : "⌘-click to choose more, up to 4.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }.padding(.horizontal, 18).padding(.bottom, 16)
+            .padding(.horizontal, ListColumn.inset).padding(.bottom, 10)
+        }
     }
 
     @ViewBuilder private func detail(openDocument: ((UUID) -> Void)? = nil) -> some View {
@@ -1946,6 +1971,8 @@ struct ContentView: View {
 enum LibraryPresentation: String {
     case map, list, graph
 
+    static let key = "libraryPresentation"
+
     func showsPicker(in scope: LibraryScope?, hasOpenedItem: Bool, isEditing: Bool) -> Bool {
         // These scopes always use columns, regardless of the remembered presentation.
         guard scope != .captures, scope != .archived else { return false }
@@ -1958,55 +1985,78 @@ struct LibraryDocumentRow: View {
     let document: DocumentSummary
     /// Background work on this item, such as fetching a bookmark's page or summarizing it.
     var activity: String?
+    @Environment(\.colorScheme) private var colorScheme
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let preview = document.previewImage {
-                PagePreviewHeader(id: document.id, data: preview)
-            }
-            details
-        }.padding(.vertical, 7).help(document.name)
+    private var identity: DocumentIdentity {
+        DocumentIdentity(kind: document.kind)
     }
 
-    private var details: some View {
-        HStack(alignment: .top, spacing: 10) {
-            DocumentIdentityMark(isSource: document.kind == "source").padding(.top, 2)
-            VStack(alignment: .leading, spacing: 5) {
+    private var host: String? {
+        document.sourceURL?.host().map { $0.hasPrefix("www.") ? String($0.dropFirst(4)) : $0 }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(document.name).font(.body.weight(.medium)).lineLimit(2)
-                HStack(spacing: 12) {
-                    DocumentIdentityLabel(
-                        identity: DocumentIdentity(kind: document.kind), showsMark: false
-                    )
-                    if let host = document.sourceURL?.host {
-                        Text(host).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                }.font(.caption)
-                Text(document.filing ?? "Unfiled").font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if let activity {
-                    Label {
-                        Text(activity).lineLimit(1)
-                            .fadesOnChange(activity)
-                    } icon: {
-                        ChatWorkingIndicator(color: .secondary)
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-                } else if let coverage = document.coverage.flatMap(Coverage.init(rawValue:)), [
-                    .partial,
-                    .abstractOnly,
-                    .visibleThread
-                ].contains(coverage) {
-                    Text(coverage.label).font(.caption).foregroundStyle(.secondary)
-                }
+                metadata
+                status
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let preview = document.previewImage {
+                PagePreviewThumbnail(id: document.id, data: preview)
             }
         }
+        .padding(.vertical, 5).help(document.name)
+    }
+
+    /// One line: the mark says source or note, so words go to where it's from and where it lives.
+    private var metadata: some View {
+        HStack(spacing: 5) {
+            DocumentIdentityMark(isSource: identity.isSource, ink: .secondary, size: 14)
+            Text(host ?? identity.subtype ?? identity.label).lineLimit(1)
+            if let filing = document.filing {
+                Circle().fill(filingMark(filing)).frame(width: 6, height: 6).padding(.leading, 4)
+                Text(filing).lineLimit(1).layoutPriority(1)
+            } else {
+                Text("Unfiled").lineLimit(1).padding(.leading, 4).layoutPriority(1)
+            }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            [identity.text, host, document.filing ?? "Unfiled"].compactMap(\.self)
+                .joined(separator: ", ")
+        )
+    }
+
+    @ViewBuilder private var status: some View {
+        if let activity {
+            Label {
+                Text(activity).lineLimit(1).fadesOnChange(activity)
+            } icon: {
+                ChatWorkingIndicator(color: .secondary)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+        } else if let coverage = document.coverage.flatMap(Coverage.init(rawValue:)), [
+            .partial,
+            .abstractOnly,
+            .visibleThread
+        ].contains(coverage) {
+            Text(coverage.label).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// `filing` reads "20.01 Name", the code first, as in the sidebar.
+    private func filingMark(_ filing: String) -> Color {
+        let code = filing.prefix { !$0.isWhitespace }
+        return AtlasPalette.mark(AtlasHierarchy.hue(for: String(code)), dark: colorScheme == .dark)
     }
 }
 
 /// A top-aligned crop of the page as it looked when captured, like a link preview's image.
 /// It repeats what the title already says, so assistive technologies skip it.
-private struct PagePreviewHeader: View {
-    static let height: CGFloat = 96
+private struct PagePreviewThumbnail: View {
     private static let decoded = NSCache<NSString, NSImage>()
 
     let id: UUID
@@ -2015,8 +2065,8 @@ private struct PagePreviewHeader: View {
 
     var body: some View {
         if let image = Self.image(id: id, data: data) {
-            let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
-            Color.clear.frame(maxWidth: .infinity).frame(height: Self.height)
+            let shape = RoundedRectangle(cornerRadius: 6, style: .continuous)
+            Color.clear.frame(width: 64, height: 48)
                 .overlay(alignment: .top) {
                     Image(nsImage: image).resizable().interpolation(.high).scaledToFill()
                 }

@@ -18,20 +18,9 @@ struct LibraryPresentationPicker: View {
     }
 
     private func option(_ value: LibraryPresentation, title: String, symbol: String) -> some View {
-        Toggle(isOn: Binding(
-            get: { selection == value },
-            set: {
-                if $0 {
-                    selection = value
-                }
-            }
-        )) {
-            Label(title, systemImage: symbol).labelStyle(.iconOnly)
-                .frame(width: 20, height: 20)
-        }
-        .toggleStyle(.button)
-        .help("Show \(title.lowercased()) view")
-        .accessibilityLabel("\(title) view")
-        .accessibilityAddTraits(selection == value ? .isSelected : [])
+        Button("\(title) view", systemImage: symbol) { selection = value }
+            .buttonStyle(PageIconButtonStyle(selected: selection == value))
+            .help("Show \(title.lowercased()) view")
+            .accessibilityAddTraits(selection == value ? .isSelected : [])
     }
 }

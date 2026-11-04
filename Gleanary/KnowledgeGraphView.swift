@@ -11,7 +11,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.pages
+    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.standard
     @State private var scale = 1.0
     @State private var pan = CGSize.zero
     @State private var dragOrigin: CGSize?
@@ -37,7 +37,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         )
         GeometryReader { geometry in
             ZStack {
-                Color(nsColor: .windowBackgroundColor)
+                PanelSurface.color
                 Canvas { context, size in
                     drawEdges(in: &context, size: size)
                     drawNodes(in: &context, size: size)
@@ -156,7 +156,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
                     GraphDocumentLegend(usesFilingColors: graph.usesFilingColors)
                         .padding(.horizontal, 8).padding(.vertical, 6)
                         .background(
-                            Color(nsColor: .windowBackgroundColor),
+                            PanelSurface.color,
                             in: RoundedRectangle(cornerRadius: 6)
                         )
                         .padding(10)
@@ -347,7 +347,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             if selected {
                 context.stroke(
                     nodePath(node, in: rect.insetBy(dx: -5, dy: -5)),
-                    with: .color(Color(nsColor: .windowBackgroundColor)), lineWidth: 4
+                    with: .color(PanelSurface.color), lineWidth: 4
                 )
                 context.stroke(
                     nodePath(node, in: rect.insetBy(dx: -5, dy: -5)),
@@ -415,7 +415,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
         lines: GraphDrawingBatch,
         in context: inout GraphicsContext
     ) {
-        let background = Color(nsColor: .windowBackgroundColor)
+        let background = PanelSurface.color
         for (style, batch) in shapes.sorted(by: { $0.key < $1.key })
             where style.kind == .document && !style.isSource
         {
@@ -469,7 +469,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             )
             context.stroke(
                 nodePath(node, in: rect),
-                with: .color(Color(nsColor: .windowBackgroundColor)),
+                with: .color(PanelSurface.color),
                 lineWidth: 4
             )
             context.stroke(nodePath(node, in: rect), with: .color(.accentColor), lineWidth: 2)
@@ -523,7 +523,7 @@ struct KnowledgeGraphView<Graph: GraphCanvasModel>: View {
             ) else { continue }
             context.fill(
                 Path(roundedRect: rect.insetBy(dx: -3, dy: -1), cornerRadius: 3),
-                with: .color(Color(nsColor: .windowBackgroundColor))
+                with: .color(PanelSurface.color)
             )
             context.draw(entry.text, at: rect.origin, anchor: .topLeading)
         }

@@ -554,4 +554,19 @@ struct WorkspaceFixture {
         _ = await workspace.change(changesNote: true) { _ = try await fixture.note("Changed note") }
         #expect(workspace.generation == 2 && workspace.noteGeneration == 1)
     }
+
+    @Test func quickEntryReadsADayOffTheEndOfATask() throws {
+        // A Wednesday.
+        let today = try #require(WorkspaceDay(rawValue: "2026-11-04"))
+        let tomorrow = TaskEntryDate.parse("review backup plan tomorrow", today: today)
+        #expect(tomorrow.title == "review backup plan")
+        #expect(tomorrow.day?.rawValue == "2026-11-05")
+        #expect(TaskEntryDate.parse("call Grace Friday", today: today).day?
+            .rawValue == "2026-11-06")
+        // The same weekday means next week, not today.
+        #expect(TaskEntryDate.parse("plan Wednesday", today: today).day?.rawValue == "2026-11-11")
+        // Only the last word counts, and a lone word is a title.
+        #expect(TaskEntryDate.parse("tomorrow's reading", today: today).day == nil)
+        #expect(TaskEntryDate.parse("today", today: today).title == "today")
+    }
 }

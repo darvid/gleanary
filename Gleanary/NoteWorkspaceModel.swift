@@ -50,6 +50,36 @@ import SwiftUI
 }
 
 /// The entry row is transient UI state, not a task record until Return is pressed.
+/// Reads a plain day off the end of a new task: "review backup plan tomorrow". Only the last word
+/// counts, so a title that merely mentions a day elsewhere stays as typed.
+enum TaskEntryDate {
+    private static let weekdays = [
+        "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    ]
+
+    static func parse(_ text: String, today: WorkspaceDay) -> (title: String, day: WorkspaceDay?) {
+        guard let space = text.lastIndex(where: \.isWhitespace) else { return (text, nil) }
+        let word = text[text.index(after: space)...].lowercased()
+        let title = text[..<space].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return (text, nil) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let start = today.date
+        let offset: Int? = switch word {
+        case "today": 0
+        case "tomorrow": 1
+        default: weekdays.firstIndex(of: word).map { index in
+                // The next one: a weekday named on that same day means a week from now.
+                let current = calendar.component(.weekday, from: start) - 1
+                return (index - current + 6) % 7 + 1
+            }
+        }
+        guard let offset, let date = calendar.date(byAdding: .day, value: offset, to: start)
+        else { return (text, nil) }
+        return (title, WorkspaceDay(date: date))
+    }
+}
+
 @MainActor @Observable final class WorkspaceTaskEntryModel {
     var title = ""
     private(set) var submitting = false
@@ -64,12 +94,16 @@ import SwiftUI
         guard !trimmed.isEmpty, !submitting else { return nil }
         submitting = true
         defer { submitting = false }
-        let task = WorkspaceTask(title: trimmed, planned: view == .today ? today : nil)
+        let (name, day) = TaskEntryDate.parse(trimmed, today: today)
+        let task = WorkspaceTask(title: name, planned: day ?? (view == .today ? today : nil))
         guard await workspace.change({ _ = try await workspace.store.saveWorkspaceTask(task) })
         else { return nil }
         // Do not discard text entered while the local write was in flight.
         if title == entered {
             title = ""
+        }
+        if let day {
+            return day > today ? .upcoming : .today
         }
         switch view {
         case .upcoming, .completed: return .inbox

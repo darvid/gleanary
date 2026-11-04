@@ -235,6 +235,7 @@ struct DocumentPreview: View {
             WorkingProgress("Loading preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let document = model.document {
             if readerMode {
+                // Reading view: the words and nothing else.
                 ReaderTextView(
                     title: document.name,
                     markdown: document.markdown,
@@ -245,112 +246,59 @@ struct DocumentPreview: View {
                 .environment(\.entityLinks, model.entities)
             } else {
                 GeometryReader { viewport in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            if let data = model.details.previewImage,
-                               let image = NSImage(data: data)
-                            {
-                                hero(image)
-                            }
-                            header(document)
-                            if model.citation != nil || sourceURL != nil || model.canGenerateSummary
-                                || generatingSummary || addToChat != nil
-                            {
-                                ViewThatFits(in: .horizontal) {
-                                    actionBar(document, compact: false)
-                                    actionBar(document, compact: true)
-                                }
-                            }
-                            infoCard(document)
-                            Divider()
-                            VStack(alignment: .leading, spacing: 12) {
-                                if contentTitle != nil || (enterReader != nil && !readerMode) {
-                                    HStack(alignment: .firstTextBaseline) {
-                                        if let contentTitle {
-                                            Text(contentTitle)
-                                                .font(readingFont.scaledFont(
-                                                    17.0 / 14,
-                                                    weight: .semibold
-                                                ))
-                                                .accessibilityAddTraits(.isHeader)
-                                        }
-                                        Spacer()
-                                        if model.showsCapturedSource,
-                                           let citation = model.citation
-                                        {
-                                            ReaderModeButton(target: .source(citation.captureID))
-                                        } else {
-                                            ReaderModeButton(target: .note(document.id))
+                    let railed = viewport.size.width >= Self.railedWidth
+                    // Leaves the scroller's width too. A scroll view reserves it beside fixed-width
+                    // content and grows past the pane if there's no room, over whatever is next.
+                    let room = viewport.size.width - 64 - Self.scrollerReserve
+                        - (railed ? Self.railWidth + Self.railGap : 0)
+                    ScrollViewReader { reader in
+                        ScrollView {
+                            HStack(alignment: .top, spacing: Self.railGap) {
+                                VStack(alignment: .leading, spacing: 20) {
+                                    header(document)
+                                    if !railed {
+                                        infoCard(document)
+                                    }
+                                    if model.citation != nil || sourceURL != nil
+                                        || model.canGenerateSummary
+                                        || generatingSummary || addToChat != nil
+                                    {
+                                        ViewThatFits(in: .horizontal) {
+                                            actionBar(document, compact: false)
+                                            actionBar(document, compact: true)
                                         }
                                     }
+                                    content(document)
+                                    if !railed {
+                                        relatedItems
+                                    }
                                 }
-                                MarkdownPreview(
-                                    markdown: model.displayedMarkdown ?? document.markdown,
-                                    readingFont: readingFont
+                                // A vertical scroll view must not inherit the metadata's ideal
+                                // width.
+                                .frame(
+                                    width: min(readingMeasure, max(0, room)),
+                                    alignment: .leading
                                 )
-                                // Extraction read the note's text, not the captured original.
-                                .environment(
-                                    \.entityLinks,
-                                    model.showsCapturedSource ? [] : model.entities
-                                )
-                                .textSelection(.enabled)
+                                if railed {
+                                    VStack(alignment: .leading, spacing: 24) {
+                                        infoCard(document)
+                                        outline(document, reader: reader)
+                                        relatedItems
+                                    }
+                                    .frame(width: Self.railWidth, alignment: .leading)
+                                }
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityElement(children: .contain)
-                            .accessibilityLabel("Document content")
-                            if !model.showsCapturedSource, let noteWorkspace {
-                                NoteWorkspaceSection(
-                                    document: document,
-                                    workspace: noteWorkspace,
-                                    openNote: openDocument
-                                )
-                            }
-                            if readingKind == .notes, let linkedSourceContext {
-                                LinkedSourcesView(
-                                    document: document, context: linkedSourceContext,
-                                    openDocument: openDocument
-                                ).id(document.id).padding(.top, 12)
-                            }
-                            if let graphContext, model.details.archived == nil {
-                                NoteConnectionsView(
-                                    noteID: document.id, store: graphContext.store,
-                                    refreshToken: graphContext.refreshToken,
-                                    explore: graphContext.explore, openNote: openDocument,
-                                    openSource: openSource
-                                ).padding(.top, 12)
-                            }
-                            if showsLibraryDetails,
-                               graphContext == nil || model.details.archived != nil,
-                               !model.links.isEmpty
-                            {
-                                itemList(
-                                    "Linked",
-                                    items: model.links.map { ($0.document, $0.rationale) }
-                                )
-                            }
-                            if showsLibraryDetails, !model.related.isEmpty {
-                                itemList(
-                                    "Other notes from these sources",
-                                    items: model.related.map { ($0, nil) }
-                                )
-                            }
+                            .padding(.horizontal, 32).padding(.vertical, 28)
+                            .frame(maxWidth: .infinity, alignment: .top)
                         }
-                        // A vertical scroll view must not inherit the image or metadata's ideal
-                        // width.
-                        .frame(
-                            width: min(readingMeasure, max(0, viewport.size.width - 64)),
-                            alignment: .leading
-                        )
-                        .padding(.horizontal, 32).padding(.vertical, 28)
-                        .frame(maxWidth: .infinity, alignment: .top)
+                        .tint(categoryInk)
+                        .accessibilityLabel("Markdown preview")
+                        // The fetched page replaces the bookmark's note in place; fade rather than
+                        // jump.
+                        .id(document.revision)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.25), value: document.revision)
                     }
-                    .tint(categoryInk)
-                    .accessibilityLabel("Markdown preview")
-                    // The fetched page replaces the bookmark's note in place; fade rather than
-                    // jump.
-                    .id(document.revision)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.25), value: document.revision)
                 }
             }
         } else {
@@ -360,6 +308,97 @@ struct DocumentPreview: View {
                 description: Text(model
                     .error ??
                     "Its summary or note opens here.")
+            )
+        }
+    }
+
+    /// Beside the text once there's room for it, so the page opens with the words.
+    private static let railedWidth: CGFloat = 780
+    private static let railWidth: CGFloat = 220
+    private static let railGap: CGFloat = 40
+    private static let scrollerReserve: CGFloat = 17
+
+    /// The text, then what's attached to it.
+    @ViewBuilder private func content(_ document: MarkdownDocument) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let contentTitle {
+                Text(contentTitle).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            MarkdownPreview(
+                markdown: model.displayedMarkdown ?? document.markdown,
+                readingFont: readingFont
+            )
+            // Extraction read the note's text, not the captured original.
+            .environment(
+                \.entityLinks,
+                model.showsCapturedSource ? [] : model.entities
+            )
+            .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Document content")
+        if !model.showsCapturedSource, let noteWorkspace {
+            NoteWorkspaceSection(
+                document: document,
+                workspace: noteWorkspace,
+                openNote: openDocument
+            )
+        }
+        if readingKind == .notes, let linkedSourceContext {
+            LinkedSourcesView(
+                document: document, context: linkedSourceContext,
+                openDocument: openDocument
+            ).id(document.id).padding(.top, 12)
+        }
+        if let graphContext, model.details.archived == nil {
+            NoteConnectionsView(
+                noteID: document.id, store: graphContext.store,
+                refreshToken: graphContext.refreshToken,
+                explore: graphContext.explore, openNote: openDocument,
+                openSource: openSource
+            ).padding(.top, 12)
+        }
+    }
+
+    /// Headings to jump to, beside the text they lead to.
+    @ViewBuilder private func outline(
+        _ document: MarkdownDocument,
+        reader: ScrollViewProxy
+    ) -> some View {
+        let headings = MarkdownPreview.outline(model.displayedMarkdown ?? document.markdown)
+        if !headings.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("In this piece").font(.caption).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(headings, id: \.id) { heading in
+                    Button(heading.title) {
+                        withAnimation(.snappy(duration: 0.25)) {
+                            reader.scrollTo(heading.id, anchor: .top)
+                        }
+                    }
+                    .buttonStyle(.plain).font(.callout).lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var relatedItems: some View {
+        if showsLibraryDetails,
+           graphContext == nil || model.details.archived != nil,
+           !model.links.isEmpty
+        {
+            itemList(
+                "Linked",
+                items: model.links.map { ($0.document, $0.rationale) }
+            )
+        }
+        if showsLibraryDetails, !model.related.isEmpty {
+            itemList(
+                "Other notes from these sources",
+                items: model.related.map { ($0, nil) }
             )
         }
     }
@@ -382,24 +421,6 @@ struct DocumentPreview: View {
 
     // MARK: Header
 
-    /// The page as it looked when captured. It repeats the title, so VoiceOver skips it.
-    private func hero(_ image: NSImage) -> some View {
-        GeometryReader { viewport in
-            Image(nsImage: image)
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .frame(width: viewport.size.width, height: 170, alignment: .top)
-                .clipped()
-        }
-        .frame(height: 170)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12).strokeBorder(.separator, lineWidth: 0.5)
-        }
-        .opacity(dark ? 0.9 : 1)
-        .accessibilityHidden(true)
-    }
-
     private func header(_ document: MarkdownDocument) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
@@ -413,6 +434,11 @@ struct DocumentPreview: View {
                     }
                 }
                 Spacer(minLength: 8)
+                if model.showsCapturedSource, let citation = model.citation {
+                    ReaderModeButton(target: .source(citation.captureID))
+                } else {
+                    ReaderModeButton(target: .note(document.id))
+                }
                 if editDocument != nil || fileDocument != nil || archiveDocument != nil
                     || model
                     .citation != nil || sourceURL != nil ||
@@ -466,19 +492,18 @@ struct DocumentPreview: View {
     // MARK: Actions
 
     private func actionBar(_ document: MarkdownDocument, compact: Bool) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 16) {
             if model.canViewCapturedSource || !model.summaries.isEmpty {
                 SourceSummaryNavigation(
                     summaries: model.summaries, compact: compact,
                     showsSource: model.canViewCapturedSource, openSummary: openSummary,
                     viewSource: { model.showsCapturedSource = true }
-                ).buttonStyle(.bordered)
+                )
             }
             if let url = model.citation?.url ?? sourceURL {
                 Link(destination: url) {
                     actionLabel("Open Original", systemImage: "safari", compact: compact)
                 }
-                .buttonStyle(.bordered)
                 .help("Open the original page in your browser")
             }
             AddToChatButton(target: .note(document.id), compact: compact)
@@ -488,14 +513,15 @@ struct DocumentPreview: View {
                 Button { generateSummary(document) } label: {
                     actionLabel("Summarize", systemImage: "sparkles", compact: compact)
                 }
-                .buttonStyle(.bordered)
                 .disabled(!summaryEnabled)
                 .help(summaryEnabled ? "Summarize the retained source. No download is needed."
                     : bookmarkFetch != nil ? "Summarized when the page fetch finishes"
                     : "Available once the current library task finishes")
             }
         }
-        .controlSize(.large)
+        // Quiet text, not pills, and not the category's colour: these are options, and the
+        // page's weight belongs to its title and text.
+        .buttonStyle(.borderless).tint(.secondary).foregroundStyle(.secondary).font(.callout)
         .fixedSize(horizontal: !compact, vertical: false)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Document actions")
@@ -898,6 +924,10 @@ private struct NotebookDots: View {
 }
 
 /// Render local Markdown as native, selectable text. No scripts or remote images are loaded.
+struct MarkdownBlockID: Hashable {
+    let index: Int
+}
+
 struct MarkdownPreview: View {
     let markdown: String
     var font: Font = .body
@@ -917,82 +947,93 @@ struct MarkdownPreview: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
                 let fade = index == blocks.count - 1 ? trailingFade : nil
                 let entities = mentions[index] ?? []
-                if let latex = MathMarkdown.displayFormula(block) {
-                    MathBlock(latex: latex, size: nativeFont().pointSize)
-                } else if fade == nil, let diagram = MermaidDiagram.source(block) {
-                    MermaidBlock(source: diagram) { codeBlock(block, fade: nil) }
-                } else if block.hasPrefix("```") {
-                    codeBlock(block, fade: fade)
-                } else if let rows = Self.tableRows(block) {
-                    ScrollView(.horizontal) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
-                                HStack(alignment: .top, spacing: 16) {
-                                    ForEach(Array(cells.enumerated()), id: \.offset) { _, cell in
-                                        inlineText(
-                                            cell,
-                                            nativeFont: nativeFont(weight: index == 0 ? .semibold :
-                                                .regular)
-                                        )
-                                        .fontWeight(index == 0 ? .semibold : .regular)
-                                        .frame(width: 150, alignment: .leading)
+                // One id per block, so an outline can scroll to its heading.
+                Group {
+                    if let latex = MathMarkdown.displayFormula(block) {
+                        MathBlock(latex: latex, size: nativeFont().pointSize)
+                    } else if fade == nil, let diagram = MermaidDiagram.source(block) {
+                        MermaidBlock(source: diagram) { codeBlock(block, fade: nil) }
+                    } else if block.hasPrefix("```") {
+                        codeBlock(block, fade: fade)
+                    } else if let rows = Self.tableRows(block) {
+                        ScrollView(.horizontal) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(Array(rows.enumerated()), id: \.offset) { index, cells in
+                                    HStack(alignment: .top, spacing: 16) {
+                                        ForEach(
+                                            Array(cells.enumerated()),
+                                            id: \.offset
+                                        ) { _, cell in
+                                            inlineText(
+                                                cell,
+                                                nativeFont: nativeFont(weight: index == 0 ?
+                                                    .semibold :
+                                                    .regular)
+                                            )
+                                            .fontWeight(index == 0 ? .semibold : .regular)
+                                            .frame(width: 150, alignment: .leading)
+                                        }
+                                    }.padding(.vertical, 8)
+                                    if index < rows.count - 1 {
+                                        Divider()
                                     }
-                                }.padding(.vertical, 8)
-                                if index < rows.count - 1 {
-                                    Divider()
                                 }
                             }
                         }
-                    }
-                } else if block.hasPrefix("#") {
-                    let heading = block.prefix(while: { $0 == "#" }).count
-                    inlineText(
-                        String(block.dropFirst(heading)).trimmingCharacters(in: .whitespaces),
-                        nativeFont: nativeFont(
-                            scale: readingFont == nil ? 1 : (heading == 1 ? 17.0 / 14 : 1),
-                            style: heading == 1 ? .title2 : .headline, weight: .semibold
-                        ),
-                        fade: fade
-                    )
-                    .font(readingFont?.scaledFont(
-                        heading == 1 ? 17.0 / 14 : 1,
-                        weight: .semibold
-                    )
-                        ?? (heading == 1 ? .title2.weight(.semibold) : .headline))
-                    .padding(.top, 8).accessibilityAddTraits(.isHeader)
-                } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block.hasPrefix("+ ") {
-                    HStack(alignment: .top, spacing: 10) {
-                        Text("•").foregroundStyle(.tint).accessibilityHidden(true)
+                    } else if block.hasPrefix("#") {
+                        let heading = block.prefix(while: { $0 == "#" }).count
                         inlineText(
-                            String(block.dropFirst(2)), lineSpacing: 3, fade: fade,
-                            entities: entities
+                            String(block.dropFirst(heading)).trimmingCharacters(in: .whitespaces),
+                            nativeFont: nativeFont(
+                                scale: readingFont == nil ? 1 : (heading == 1 ? 17.0 / 14 : 1),
+                                style: heading == 1 ? .title2 : .headline, weight: .semibold
+                            ),
+                            fade: fade
                         )
-                        .lineSpacing(3)
+                        .font(readingFont?.scaledFont(
+                            heading == 1 ? 17.0 / 14 : 1,
+                            weight: .semibold
+                        )
+                            ?? (heading == 1 ? .title2.weight(.semibold) : .headline))
+                        .padding(.top, 8).accessibilityAddTraits(.isHeader)
+                    } else if block.hasPrefix("- ") || block.hasPrefix("* ") || block
+                        .hasPrefix("+ ")
+                    {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("•").foregroundStyle(.tint).accessibilityHidden(true)
+                            inlineText(
+                                String(block.dropFirst(2)), lineSpacing: 3, fade: fade,
+                                entities: entities
+                            )
+                            .lineSpacing(3)
+                        }
+                    } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
+                              let marker = block.firstIndex(of: ".")
+                    {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(String(block[...marker])).foregroundStyle(.secondary)
+                            inlineText(
+                                String(block[block.index(after: marker)...])
+                                    .trimmingCharacters(in: .whitespaces),
+                                fade: fade, entities: entities
+                            )
+                        }
+                    } else if let quote = Self.quoteText(block) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "quote.opening").font(.caption)
+                                .accessibilityHidden(true)
+                            inlineText(
+                                quote, lineSpacing: 4, color: .secondaryLabelColor, fade: fade,
+                                entities: entities
+                            )
+                            .lineSpacing(4)
+                        }.foregroundStyle(.secondary).padding(.leading, 12)
+                    } else {
+                        inlineText(block, lineSpacing: 4, fade: fade, entities: entities)
+                            .lineSpacing(4)
                     }
-                } else if block.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil,
-                          let marker = block.firstIndex(of: ".")
-                {
-                    HStack(alignment: .top, spacing: 10) {
-                        Text(String(block[...marker])).foregroundStyle(.secondary)
-                        inlineText(
-                            String(block[block.index(after: marker)...])
-                                .trimmingCharacters(in: .whitespaces),
-                            fade: fade, entities: entities
-                        )
-                    }
-                } else if let quote = Self.quoteText(block) {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "quote.opening").font(.caption).accessibilityHidden(true)
-                        inlineText(
-                            quote, lineSpacing: 4, color: .secondaryLabelColor, fade: fade,
-                            entities: entities
-                        )
-                        .lineSpacing(4)
-                    }.foregroundStyle(.secondary).padding(.leading, 12)
-                } else {
-                    inlineText(block, lineSpacing: 4, fade: fade, entities: entities)
-                        .lineSpacing(4)
                 }
+                .id(MarkdownBlockID(index: index))
             }
         }
         .font(readingFont?.font ?? font)
@@ -1007,6 +1048,21 @@ struct MarkdownPreview: View {
                 .monospaced())
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12).background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    /// The headings, with the block each one is, for an outline. A heading alone says nothing
+    /// to navigate, so it takes two.
+    nonisolated static func outline(_ markdown: String) -> [(id: MarkdownBlockID, title: String)] {
+        let headings = blocks(markdown).enumerated().compactMap { index, block in
+            block.range(of: #"^#{1,3}\s"#, options: .regularExpression).map { range in
+                (
+                    id: MarkdownBlockID(index: index),
+                    title: String(block[range.upperBound...])
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+            }
+        }
+        return headings.count > 1 ? headings : []
     }
 
     nonisolated static func blocks(_ markdown: String) -> [String] {
@@ -1267,9 +1323,7 @@ struct RowDisclosure<Content: View>: View {
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } label: {
-            Button(title) { expanded.toggle() }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
+            Text(title)
         }
     }
 }

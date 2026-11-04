@@ -344,15 +344,23 @@ struct DocumentLibraryTests {
             try await Task.sleep(for: .milliseconds(100))
             host.layoutSubtreeIfNeeded()
             #expect(abs(host.bounds.width - width) < 1)
-            let split = try #require(Self.descendant(NSSplitView.self, in: host))
-            #expect(split.arrangedSubviews.count == 2)
-            for pane in split.arrangedSubviews {
+            // The document and Chat beside it each scroll, and both fit.
+            let panes = Self.scrollViews(in: host)
+            #expect(panes.count >= 2)
+            for pane in panes {
                 let frame = pane.convert(pane.bounds, to: host)
                 #expect(frame.minX >= -1)
                 #expect(frame.maxX <= host.bounds.maxX + 1)
             }
             try Self.screenshot(host, name: "gleanary-chat-preview-\(Int(width))")
         }
+    }
+
+    @MainActor private static func scrollViews(in view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView {
+            return [scroll]
+        }
+        return view.subviews.flatMap { scrollViews(in: $0) }
     }
 
     @Test @MainActor func hostedListUpdatesUncachedSecondPageWithoutAnotherInteraction(

@@ -28,9 +28,13 @@ struct KnowledgeAtlasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
-    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.pages
+    @AppStorage(GraphMarkStyle.key) private var markStyle = GraphMarkStyle.standard
     @Environment(\.displayScale) private var displayScale
-    @State private var query = ""
+    /// The page bar's Search field, or this view's own in previews.
+    var search: Binding<String>?
+    /// Asks for homes for what isn't filed; nil where that can't be asked for.
+    var suggestFiling: (() -> Void)?
+    @State private var localQuery = ""
     @AppStorage("atlasHidesEmptyCategories") private var hidesEmpty = false
     @State private var hoverPoint: CGPoint?
     @State private var dragStart: AtlasCamera?
@@ -38,7 +42,6 @@ struct KnowledgeAtlasView: View {
     @State private var lastClick: (id: AtlasNodeID, time: Date)?
     @State private var pinchStart: AtlasCamera?
     @FocusState private var canvasFocused: Bool
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -99,28 +102,31 @@ struct KnowledgeAtlasView: View {
         kindSelection ?? $atlas.kindFilter
     }
 
+    private var query: String {
+        search?.wrappedValue ?? localQuery
+    }
+
     private var header: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    breadcrumb
-                    if let focus = atlas.focusTile {
-                        Text(focus.node.label).font(.title3.weight(.semibold)).lineLimit(1)
-                            .accessibilityAddTraits(.isHeader)
-                        Text(summary(of: focus)).font(.callout).foregroundStyle(.secondary)
-                            .fadesOnChange(summary(of: focus))
-                            .monospacedDigit().lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 12)
-                searchField
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            breadcrumb
+            if let focus = atlas.focusTile {
+                Text(focus.node.label).fontWeight(.medium).lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Text(summary(of: focus)).foregroundStyle(.secondary)
+                    .fadesOnChange(summary(of: focus))
+                    .monospacedDigit().lineLimit(1)
             }
-            HStack {
-                LibraryKindPicker(selection: typeSelection).frame(maxWidth: 240)
-                Spacer(minLength: 12)
-                emptyToggle
+            Spacer(minLength: 12)
+            if let suggestFiling, let unfiled = atlas.layout.tile(.uncategorized)?.node.itemCount,
+               unfiled > 0
+            {
+                Text("\(unfiled.formatted()) need a home").foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Button("Suggest Filing", action: suggestFiling)
             }
-        }.padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
+            emptyToggle
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
     }
 
     /// Enclosing regions above the focused one, which the header titles itself.
@@ -159,10 +165,10 @@ struct KnowledgeAtlasView: View {
         .toggleStyle(.button).buttonStyle(.borderless).controlSize(.regular)
         .padding(.horizontal, 8).padding(.vertical, 5)
         .background(
-            hidesEmpty ? Color.accentColor.opacity(0.18) : Color(nsColor: .controlBackgroundColor),
+            Color.primary.opacity(hidesEmpty ? 0.09 : 0),
             in: RoundedRectangle(cornerRadius: 7)
         )
-        .foregroundStyle(hidesEmpty ? Color.accentColor : Color.primary.opacity(0.8))
+        .foregroundStyle(hidesEmpty ? Color.primary : Color.secondary)
         .disabled(count == 0 && !hidesEmpty)
         .help(hidesEmpty
             ? "Show \(count == 1 ? "1 empty category" : "\(count) empty categories")"
@@ -171,23 +177,6 @@ struct KnowledgeAtlasView: View {
         .accessibilityLabel("Hide empty categories")
         .accessibilityValue(hidesEmpty ? "\(count) hidden" : "Off")
         .animation(.snappy(duration: 0.2), value: hidesEmpty)
-    }
-
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Highlight matches", text: $query)
-                .textFieldStyle(.plain).focused($searchFocused)
-                .accessibilityLabel("Search the atlas")
-                .onExitCommand { query = ""; canvasFocused = true }
-            if !query.isEmpty {
-                Button("Clear Search", systemImage: "xmark.circle.fill") { query = "" }
-                    .labelStyle(.iconOnly).buttonStyle(.borderless)
-            }
-        }
-        .padding(.horizontal, 8).padding(.vertical, 6)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
-        .frame(maxWidth: 240)
     }
 
     private var footer: some View {

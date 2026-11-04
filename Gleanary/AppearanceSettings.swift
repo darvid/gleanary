@@ -124,7 +124,7 @@ struct ReadingAppearance: DynamicProperty {
 
 struct AppearanceSettingsView: View {
     private var appearance = ReadingAppearance()
-    @AppStorage(GraphMarkStyle.key) private var graphMarks = GraphMarkStyle.pages
+    @AppStorage(GraphMarkStyle.key) private var graphMarks = GraphMarkStyle.standard
     private static let families = NSFontManager.shared.availableFontFamilies
         .filter { !$0.hasPrefix(".") }
         .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -160,16 +160,24 @@ struct AppearanceSettingsView: View {
     @ViewBuilder private func fontControls(_ kind: ReadingKind) -> some View {
         let choice = appearance[kind]
         LabeledContent("Font") {
-            FontFamilyPicker(
-                family: Binding {
-                    appearance[kind].family
-                } set: { family in
-                    appearance[kind] = ReadingFont(family: family, size: appearance[kind].size)
-                },
-                families: Self.families,
-                available: choice.available,
-                accessibilityLabel: "\(kind.title) font"
-            )
+            HStack(spacing: 8) {
+                FontFamilyPicker(
+                    family: Binding {
+                        appearance[kind].family
+                    } set: { family in
+                        appearance[kind] = ReadingFont(family: family, size: appearance[kind].size)
+                    },
+                    families: Self.families,
+                    available: choice.available,
+                    accessibilityLabel: "\(kind.title) font"
+                )
+                Button("Reset \(kind.title) Font", systemImage: "arrow.counterclockwise") {
+                    appearance[kind] = kind.defaultFont
+                }
+                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                .help("Reset font and size to the default")
+                .disabled(choice == kind.defaultFont)
+            }
         }
         Stepper(value: Binding {
             appearance[kind].size
@@ -179,8 +187,6 @@ struct AppearanceSettingsView: View {
             LabeledContent("Size", value: "\(Int(choice.size)) pt")
         }
         .accessibilityLabel("\(kind.title) font size")
-        Button("Reset \(kind.title) Font") { appearance[kind] = kind.defaultFont }
-            .disabled(choice == kind.defaultFont)
         if !choice.available {
             Text("This font is not installed. Using the system font until it is available.")
                 .font(.caption).foregroundStyle(.secondary)
