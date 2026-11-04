@@ -30,7 +30,6 @@ struct ContentView: View {
     @AppStorage("libraryKindFilter") private var kindFilter = LibraryKindFilter.all
     @State private var sidebarVisible = true
     @AppStorage("sidebarWidth") private var sidebarWidth = ContentView.defaultSidebarWidth
-    @AppStorage("librarySidebarExpanded") private var librarySidebarExpanded = true
     @AppStorage(LibraryModel.backgroundEntitiesKey) private var readEntitiesInBackground = false
     @State private var sidebarDragStart: Double?
     @State private var selection: Set<UUID> = []
@@ -1241,10 +1240,10 @@ struct ContentView: View {
             if let conversation {
                 HStack {
                     Label("Chat", systemImage: "bubble.left.and.text.bubble.right")
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(nil)))
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     Spacer()
                     if conversation.running {
-                        ChatWorkingIndicator(color: sidebarColor(nil))
+                        ChatWorkingIndicator(color: sidebarColor)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -1253,53 +1252,15 @@ struct ContentView: View {
                 .tag(SidebarItem.conversation)
             }
             Section {
-                DisclosureGroup(isExpanded: $librarySidebarExpanded) {
-                    Label("Notes", systemImage: "note.text")
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.notes)))
-                        .accessibilityHint("Show notes in Library")
-                        .tag(SidebarItem.library(.notes))
-                    Label("Sources", systemImage: "doc.text")
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.sources)))
-                        .accessibilityHint("Show sources in Library")
-                        .tag(SidebarItem.library(.sources))
-                    Label("Unfiled", systemImage: "folder.badge.questionmark")
-                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.unfiled)))
-                        .accessibilityHint("Show unfiled items in Library")
-                        .tag(SidebarItem.library(.unfiled))
-                } label: {
-                    // A button still opens all items when this selected row represents a
-                    // hidden filter. Re-selecting an already selected List row would not.
-                    Button {
-                        sidebarSelection.wrappedValue = .library(.all)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label("Library", systemImage: "books.vertical")
-                                .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.all)))
-                            Spacer(minLength: 4)
-                            if let filter = collapsedLibraryFilter {
-                                Text(filter).font(.caption)
-                                    .foregroundStyle(sidebarColor(.all).opacity(0.72))
-                                    .lineLimit(1)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Show all saved items")
-                    .accessibilityLabel("Library")
-                    .accessibilityValue(collapsedLibraryFilter ?? "All items")
-                    .accessibilityHint("Show all saved items")
-                }
-                .foregroundStyle(sidebarColor(.all))
-                .tag(SidebarItem.library(.all))
+                Label("Library", systemImage: "books.vertical")
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
+                    .tag(SidebarItem.library(.all))
                 // What you browse and work on sits with the library; housekeeping follows.
                 Label("Entities", systemImage: "person.2")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingEntities ? .white : .black))
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     .tag(SidebarItem.entities)
                 Label("Tasks", systemImage: "checklist")
-                    .labelStyle(LibrarySidebarLabelStyle(color:
-                        colorScheme == .dark || showingTasks ? .white : .black))
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     .tag(SidebarItem.tasks)
             }
             // Upkeep: Activity first, as the overview of the queues beneath it. It holds
@@ -1307,8 +1268,7 @@ struct ContentView: View {
             Section {
                 HStack {
                     Label("Activity", systemImage: "clock")
-                        .labelStyle(LibrarySidebarLabelStyle(color:
-                            colorScheme == .dark || showingActivity ? .white : .black))
+                        .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     Spacer()
                     // Only failures are counted, so the badge says so instead of looking like a
                     // total.
@@ -1330,8 +1290,7 @@ struct ContentView: View {
                     }
                 }.tag(SidebarItem.activity)
                 HStack {
-                    let color: Color = colorScheme == .dark || (automating && !chatting)
-                        ? .white : .black
+                    let color = sidebarColor
                     Label("Automations", systemImage: "clock.arrow.2.circlepath")
                         .labelStyle(LibrarySidebarLabelStyle(color: color))
                     Spacer()
@@ -1358,10 +1317,15 @@ struct ContentView: View {
                     }
                 }.tag(SidebarItem.automations)
                 Label("Archive", systemImage: "archivebox")
-                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor(.archived)))
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
                     .tag(SidebarItem.library(.archived))
             }
             Section("Filing") {
+                // The items with no home, ahead of the homes.
+                Label("Unfiled", systemImage: "folder.badge.questionmark")
+                    .labelStyle(LibrarySidebarLabelStyle(color: sidebarColor))
+                    .accessibilityHint("Show unfiled items in Library")
+                    .tag(SidebarItem.library(.unfiled))
                 ForEach(CategoryArea.group(categories)) { area in
                     let header = area.categories.first { $0.code == "\(area.digit)0" }
                     let members = area.categories.filter { $0.id != header?.id }
@@ -1382,7 +1346,7 @@ struct ContentView: View {
 
     /// One line per category: an area's `X0` row carries the icon and its members sit beneath it.
     private func filingRow(_ category: DecimalCategory, icon: String?) -> some View {
-        let color = sidebarColor(.category(category.id))
+        let color = sidebarColor
         // Dimmed, not removed: the map hides empty categories, but they stay reachable here.
         let hidden = presentation == .map && atlasHidesEmpty
             && atlas.emptyCategoryIDs.contains(category.id)
@@ -1434,29 +1398,9 @@ struct ContentView: View {
         }
     }
 
-    private var collapsedLibraryFilter: String? {
-        guard !librarySidebarExpanded, !chatting, !automating, !showingActivity,
-              !showingTasks, !showingEntities else { return nil }
-        switch sidebarScope {
-        case .notes?, .sources?, .unfiled?: return scopeTitle
-        default: return nil
-        }
-    }
-
-    private var visibleSidebarScope: LibraryScope? {
-        collapsedLibraryFilter == nil ? sidebarScope : .all
-    }
-
-    /// Pass nil for the conversation row.
-    private func sidebarColor(_ item: LibraryScope?) -> Color {
-        let selected = item
-            .map {
-                !chatting && !automating && !showingActivity && !showingTasks &&
-                    !showingEntities &&
-                    visibleSidebarScope == $0
-            } ??
-            chatting
-        return colorScheme == .dark || selected ? .white : .black
+    /// Selected rows keep this too: the sidebar's selection is a neutral fill, not an accent.
+    private var sidebarColor: Color {
+        colorScheme == .dark ? .white : .black
     }
 
     private var sidebarSelection: Binding<SidebarItem?> {
@@ -1464,7 +1408,7 @@ struct ContentView: View {
             chatting ? .conversation : showingTasks ? .tasks : showingEntities ? .entities :
                 showingActivity ? .activity :
                 automating ? .automations :
-                visibleSidebarScope.map(SidebarItem.library)
+                scope.map(SidebarItem.library)
         } set: { item in
             readerTarget = nil
             showingTasks = item == .tasks
@@ -1481,7 +1425,7 @@ struct ContentView: View {
                 switch scope {
                 case .notes: kindFilter = .notes; self.scope = .all
                 case .sources: kindFilter = .sources; self.scope = .all
-                case .all: kindFilter = .all; self.scope = .all
+                // Library keeps its picker's remembered type.
                 default: self.scope = scope
                 }
             case nil: break

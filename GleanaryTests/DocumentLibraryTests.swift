@@ -1160,7 +1160,7 @@ struct DocumentLibraryTests {
         #expect(collection.visibleItems().count < 200)
     }
 
-    @Test @MainActor func sidebarHierarchyRendersWithLibraryAndItsFiltersSelected() async throws {
+    @Test @MainActor func sidebarKeepsLibrarySelectedWhileItsPickerNarrowsTheType() async throws {
         let fixture = try LibraryFixture(); defer { fixture.clean() }
         _ = try await fixture.store.open(seed: [
             MarkdownDocument(name: "Synthetic sidebar note", markdown: "Local fixture."),
@@ -1200,6 +1200,8 @@ struct DocumentLibraryTests {
             #expect(library.documentGrid.kindFilter == .all)
             #expect(library.captureJobs.filter { $0.state == .failed }.count == 1)
             try Self.screenshot(host, name: "sidebar-library-\(dark ? "dark" : "light")")
+            let libraryRow = try #require(Self.descendant(NSTableView.self, in: host)).selectedRow
+            #expect(libraryRow >= 0)
 
             // Change the public persisted filter, not SwiftUI's internal view state.
             defaults.set(LibraryKindFilter.notes.rawValue, forKey: "libraryKindFilter")
@@ -1210,35 +1212,15 @@ struct DocumentLibraryTests {
             #expect(library.documentGrid.kindFilter == .notes)
             host.layoutSubtreeIfNeeded()
             try Self.screenshot(host, name: "sidebar-notes-\(dark ? "dark" : "light")")
-            let expandedRows = try #require(Self.descendant(NSTableView.self, in: host))
-                .numberOfRows
-            defaults.set(false, forKey: "librarySidebarExpanded")
-            try await Task.sleep(for: .milliseconds(150))
-            host.layoutSubtreeIfNeeded()
-            #expect(library.documentGrid.kindFilter == .notes)
-            #expect(Self.descendant(NSTableView.self, in: host)?.numberOfRows == expandedRows - 3)
-            try Self.screenshot(host, name: "sidebar-collapsed-notes-\(dark ? "dark" : "light")")
-
-            // Recreating the shell must honor the persisted collapsed preference.
-            host.rootView = ContentView(library: library)
-                .defaultAppStorage(defaults)
-                .preferredColorScheme(dark ? .dark : .light)
-                .environment(\.scenePhase, .inactive)
-            try await Task.sleep(for: .milliseconds(150))
-            host.layoutSubtreeIfNeeded()
-            #expect(defaults.bool(forKey: "librarySidebarExpanded") == false)
-            #expect(library.documentGrid.kindFilter == .notes)
-            #expect(Self.descendant(NSTableView.self, in: host)?.numberOfRows == expandedRows - 3)
+            // A type filter narrows Library; it isn't a place of its own in the sidebar.
+            let sidebar = try #require(Self.descendant(NSTableView.self, in: host))
+            #expect(sidebar.selectedRow == libraryRow)
             defaults.set(180, forKey: "sidebarWidth")
             window.setContentSize(NSSize(width: 900, height: 600))
             try await Task.sleep(for: .milliseconds(150))
             host.layoutSubtreeIfNeeded()
             try Self.screenshot(host, name: "sidebar-narrow-\(dark ? "dark" : "light")")
-            defaults.set(true, forKey: "librarySidebarExpanded")
-            try await Task.sleep(for: .milliseconds(150))
-            host.layoutSubtreeIfNeeded()
             #expect(library.documentGrid.kindFilter == .notes)
-            #expect(Self.descendant(NSTableView.self, in: host)?.numberOfRows == expandedRows)
         }
     }
 
