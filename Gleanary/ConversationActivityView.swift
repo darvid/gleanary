@@ -76,6 +76,9 @@ struct ConversationActivityView<Content: View>: View {
             }
             .buttonStyle(.plain)
         }
+        // Its label is already a button for the whole line, and the shared row style would make
+        // one click toggle twice.
+        .disclosureGroupStyle(.automatic)
         .accessibilityHint(
             "Show or hide specialist messages. Results and review actions remain below."
         )

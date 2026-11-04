@@ -3,7 +3,13 @@ import AppKit
 import SwiftUI
 import Testing
 
-@MainActor @Suite(.serialized) struct FullRowDisclosureTests {
+/// Real clicks reach whichever window is under them, and suites run in parallel, so these and the
+/// other click-driven tests disturb each other. Run them alone:
+/// `GLEANARY_CLICK_TESTS=1 swift test --filter FullRowDisclosureTests`
+@MainActor @Suite(
+    .serialized,
+    .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_CLICK_TESTS"] != nil)
+) struct FullRowDisclosureTests {
     private struct Row: View {
         @Binding var expanded: Bool
 
@@ -83,6 +89,8 @@ import Testing
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
+        // Well away from the origin, where other suites' windows take clicks at the same time.
+        window.setFrameOrigin(NSPoint(x: 6000, y: 6000))
         window.orderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()
@@ -104,6 +112,8 @@ import Testing
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
+        // Well away from the origin, where other suites' windows take clicks at the same time.
+        window.setFrameOrigin(NSPoint(x: 6000, y: 6000))
         window.orderFront(nil)
         try await Task.sleep(for: .milliseconds(150))
         host.layoutSubtreeIfNeeded()

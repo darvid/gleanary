@@ -506,8 +506,9 @@ button radius. Code blocks use a rectangular control surface.
   An item opens as one page everywhere: Library's detail, Map and Graph
   show the same text column, with filing, status, an outline and related
   items in a 220pt rail once the page is 780pt wide, and beneath the
-  title below that. Its actions are quiet text under the title, not
-  pills. Reader Mode is the exception on purpose: the bar's
+  title below that. The page opens with its title and one line of facts
+  (source, kind, date, what it came from); its actions sit in the item's
+  own 46pt bar, which hosts such as Chat start with their way back. Reader Mode is the exception on purpose: the bar's
   back button, then only the title and text at the larger reading size.
   Search expands leftward over the page's own field; a page with nothing
   to search opens the command palette from the same button. Chat puts

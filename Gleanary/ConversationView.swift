@@ -221,22 +221,12 @@ struct ConversationView: View {
 
     private var documentPane: some View {
         VStack(spacing: 0) {
-            // With Chat hidden this is the page's only bar, so it ends in Search and More.
-            if focusingDocument {
-                PageBar { documentBack } accessory: { documentActions }
-                    .environment(\.pageMenu, AnyView(conversationMenu))
-            } else {
-                HStack(spacing: 4) {
-                    documentBack
-                    Spacer(minLength: 8)
-                    documentActions
-                }
-                .padding(.leading, 12).padding(.trailing, 10)
-                .frame(height: 46)
-                .overlay(alignment: .bottom) { Divider() }
-            }
             // Focus already does this here, so the page's own expand button would be a second one.
             savedDocumentPreview(for: preview).environment(\.enterReader, nil)
+                .environment(\.itemBarLeading, AnyView(HStack(spacing: 2) {
+                    documentBack
+                    documentActions
+                }))
         }
         .background(PanelSurface.color)
         .onExitCommand(perform: closePreview)

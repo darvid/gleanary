@@ -204,6 +204,7 @@ struct DocumentPreview: View {
     @Environment(\.addToChat) private var addToChat
     @Environment(\.isReaderMode) private var readerMode
     @Environment(\.enterReader) private var enterReader
+    @Environment(\.itemBarLeading) private var itemBarLeading
     @Environment(\.libraryGraphContext) private var graphContext
     @Environment(\.linkedSourceContext) private var linkedSourceContext
     @Environment(\.noteWorkspace) private var noteWorkspace
@@ -251,45 +252,42 @@ struct DocumentPreview: View {
                     // content and grows past the pane if there's no room, over whatever is next.
                     let room = viewport.size.width - 64 - Self.scrollerReserve
                         - (railed ? Self.railWidth + Self.railGap : 0)
-                    ScrollViewReader { reader in
-                        ScrollView {
-                            HStack(alignment: .top, spacing: Self.railGap) {
-                                VStack(alignment: .leading, spacing: 20) {
-                                    header(document)
-                                    if !railed {
-                                        infoCard(document)
-                                    }
-                                    if model.citation != nil || sourceURL != nil
-                                        || model.canGenerateSummary
-                                        || generatingSummary || addToChat != nil
-                                    {
-                                        ViewThatFits(in: .horizontal) {
-                                            actionBar(document, compact: false)
-                                            actionBar(document, compact: true)
+                    VStack(spacing: 0) {
+                        itemBar(document)
+                        ScrollViewReader { reader in
+                            ScrollView {
+                                HStack(alignment: .top, spacing: Self.railGap) {
+                                    VStack(alignment: .leading, spacing: 28) {
+                                        // Filing sits with the facts above it, as one block.
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            header(document)
+                                            if !railed {
+                                                infoCard(document, details: false)
+                                            }
+                                        }
+                                        content(document)
+                                        if !railed {
+                                            relatedItems
                                         }
                                     }
-                                    content(document)
-                                    if !railed {
-                                        relatedItems
+                                    // A vertical scroll view must not inherit the metadata's ideal
+                                    // width.
+                                    .frame(
+                                        width: min(readingMeasure, max(0, room)),
+                                        alignment: .leading
+                                    )
+                                    if railed {
+                                        VStack(alignment: .leading, spacing: 24) {
+                                            infoCard(document, details: true)
+                                            outline(document, reader: reader)
+                                            relatedItems
+                                        }
+                                        .frame(width: Self.railWidth, alignment: .leading)
                                     }
                                 }
-                                // A vertical scroll view must not inherit the metadata's ideal
-                                // width.
-                                .frame(
-                                    width: min(readingMeasure, max(0, room)),
-                                    alignment: .leading
-                                )
-                                if railed {
-                                    VStack(alignment: .leading, spacing: 24) {
-                                        infoCard(document)
-                                        outline(document, reader: reader)
-                                        relatedItems
-                                    }
-                                    .frame(width: Self.railWidth, alignment: .leading)
-                                }
+                                .padding(.horizontal, 32).padding(.vertical, 28)
+                                .frame(maxWidth: .infinity, alignment: .top)
                             }
-                            .padding(.horizontal, 32).padding(.vertical, 28)
-                            .frame(maxWidth: .infinity, alignment: .top)
                         }
                         .tint(categoryInk)
                         .accessibilityLabel("Markdown preview")
@@ -321,10 +319,6 @@ struct DocumentPreview: View {
     /// The text, then what's attached to it.
     @ViewBuilder private func content(_ document: MarkdownDocument) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            if let contentTitle {
-                Text(contentTitle).font(.caption).foregroundStyle(.secondary)
-                    .accessibilityAddTraits(.isHeader)
-            }
             MarkdownPreview(
                 markdown: model.displayedMarkdown ?? document.markdown,
                 readingFont: readingFont
@@ -409,69 +403,74 @@ struct DocumentPreview: View {
         min(760, max(520, readingFont.size * 36))
     }
 
-    private var contentTitle: String? {
-        if model.showsCapturedSource {
-            return "Full Text"
-        }
-        if model.generatedSummary {
-            return "Summary"
-        }
-        return model.citation == nil ? nil : "Full Text"
-    }
-
     // MARK: Header
 
+    /// The title, then one line of what it is: where it's from, when, and what it was made from.
     private func header(_ document: MarkdownDocument) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                DocumentIdentityLabel(identity: model.identity).layoutPriority(1)
-                if !sourceMetadata.isEmpty {
-                    HStack(spacing: 8) {
-                        sourceIcon
-                        ForEach(Array(sourceMetadata.enumerated()), id: \.offset) { _, value in
-                            Text(value).lineLimit(1)
-                        }
-                    }
-                }
-                Spacer(minLength: 8)
-                if model.showsCapturedSource, let citation = model.citation {
-                    ReaderModeButton(target: .source(citation.captureID))
-                } else {
-                    ReaderModeButton(target: .note(document.id))
-                }
-                if editDocument != nil || fileDocument != nil || archiveDocument != nil
-                    || model
-                    .citation != nil || sourceURL != nil ||
-                    (refreshDocument != nil && model.composed)
-                {
-                    moreMenu(document)
-                }
-            }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
             Text(model.showsCapturedSource ? model.retainedSource?.title ?? document.name : document
                 .name)
                 .font(readingFont.scaledFont(22.0 / 14, weight: .bold))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .accessibilityAddTraits(.isHeader)
-            if !model.sources.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.sources.count == 1 ? "Source" : "Sources")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(model.sources) { source in
-                        Button { (linkedSourceContext?.viewSource ?? openDocument)(source.id)
-                        } label: {
-                            Label(source.name, systemImage: "doc.text")
-                                .lineLimit(2).multilineTextAlignment(.leading)
-                        }
-                        .buttonStyle(.link).font(.callout)
-                        .accessibilityLabel("Source: \(source.name)")
-                        .help("Open the saved source in Library")
+            HStack(spacing: 6) {
+                sourceIcon
+                ForEach(Array(headerFacts.enumerated()), id: \.offset) { index, fact in
+                    if index > 0 {
+                        Text("·").foregroundStyle(.tertiary).accessibilityHidden(true)
                     }
+                    Text(fact).lineLimit(1)
+                }
+                ForEach(model.sources) { source in
+                    Text("·").foregroundStyle(.tertiary).accessibilityHidden(true)
+                    Button("From \(source.name)") {
+                        (linkedSourceContext?.viewSource ?? openDocument)(source.id)
+                    }
+                    .buttonStyle(.plain).lineLimit(1).truncationMode(.middle)
+                    .help("Open the saved source in Library")
                 }
             }
+            .font(.callout).foregroundStyle(.secondary)
         }
+    }
+
+    /// The pane's own bar: everything you can do with the item, kept off the page.
+    private func itemBar(_ document: MarkdownDocument) -> some View {
+        HStack(spacing: 2) {
+            itemBarLeading
+            Spacer(minLength: 8)
+            if model.citation != nil || sourceURL != nil || model.canGenerateSummary
+                || generatingSummary || addToChat != nil
+            {
+                ViewThatFits(in: .horizontal) {
+                    actionBar(document, compact: false)
+                    actionBar(document, compact: true)
+                }
+            }
+            if model.showsCapturedSource, let citation = model.citation {
+                ReaderModeButton(target: .source(citation.captureID))
+            } else {
+                ReaderModeButton(target: .note(document.id))
+            }
+            if editDocument != nil || fileDocument != nil || archiveDocument != nil
+                || model.citation != nil || sourceURL != nil
+                || (refreshDocument != nil && model.composed)
+            {
+                moreMenu(document)
+            }
+        }
+        .buttonStyle(PageIconButtonStyle())
+        .padding(.leading, 12).padding(.trailing, 10)
+        .frame(height: PageBar<EmptyView, EmptyView>.height)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private var headerFacts: [String] {
+        let saved = model.details.saved?.formatted(date: .abbreviated, time: .omitted)
+        let part = model.showsCapturedSource || model.citation != nil && !model.generatedSummary
+            ? nil : model.generatedSummary ? "Summary" : nil
+        return sourceMetadata + [part, saved].compactMap(\.self)
     }
 
     @ViewBuilder private var sourceIcon: some View {
@@ -614,7 +613,8 @@ struct DocumentPreview: View {
 
     /// Filing leads, since it's the fact you act on; status that needs attention stays visible;
     /// who wrote it and when sit in a collapsed Details row.
-    private func infoCard(_ document: MarkdownDocument) -> some View {
+    /// `details` adds the collapsed Details row; the header already says when it was saved.
+    private func infoCard(_ document: MarkdownDocument, details: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             FilingRow(
                 document: document, categories: model.categories,
@@ -627,8 +627,8 @@ struct DocumentPreview: View {
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                 statusRows(document)
             }
-            if hasDetails {
-                RowDisclosure(title: detailsTitle) {
+            if details ? hasDetails : hasMoreThanSaved {
+                RowDisclosure(title: details ? detailsTitle : "Details") {
                     Grid(
                         alignment: .leadingFirstTextBaseline,
                         horizontalSpacing: 14, verticalSpacing: 8
@@ -749,6 +749,11 @@ struct DocumentPreview: View {
         model.authorProvider != nil && !model.showsCapturedSource
             || model.canGenerateSummary && model.summaries.isEmpty
             || model.details.saved != nil || !model.warnings.isEmpty
+    }
+
+    private var hasMoreThanSaved: Bool {
+        model.authorProvider != nil && !model.showsCapturedSource
+            || model.canGenerateSummary && model.summaries.isEmpty || !model.warnings.isEmpty
     }
 
     /// The saved date, so the collapsed row still says when.
@@ -924,6 +929,12 @@ private struct NotebookDots: View {
 }
 
 /// Render local Markdown as native, selectable text. No scripts or remote images are loaded.
+extension EnvironmentValues {
+    /// What a host puts at the start of an item's bar, such as the way back, so the page has one
+    /// bar rather than its host's stacked on its own.
+    @Entry var itemBarLeading: AnyView?
+}
+
 struct MarkdownBlockID: Hashable {
     let index: Int
 }
