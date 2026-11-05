@@ -9,7 +9,10 @@
 </p>
 
 <p align="center">
-  <!-- TODO: Website · Docs links, once they exist. -->
+  <a href="https://gleanary.app">Website</a> · <a href="https://gleanary.app/docs">Docs</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/nightmodelabs/gleanary/releases/latest"><img src="https://img.shields.io/github/v/release/nightmodelabs/gleanary?label=Download&amp;color=2ea44f" alt="Download the latest release"></a>
   <a href="#requirements"><img src="https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&amp;logoColor=white" alt="Requires macOS 26 or later"></a>
   <a href="#build-from-source"><img src="https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&amp;logoColor=white" alt="Built with Swift 6.2"></a>
