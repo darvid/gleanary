@@ -845,7 +845,10 @@ struct CaptureTests {
         #expect(!document.warnings.contains { $0.contains("low OCR confidence") })
     }
 
-    @Test func nativeVisionExtractsScannedPDFLocally() async throws {
+    /// Vision's document recognition needs the Neural Engine, which virtual machines such as
+    /// GitHub's macOS runners don't have. There it finds nothing and the extractor falls back.
+    @Test(.disabled(if: runningInVirtualMachine, "Vision document recognition needs real hardware"))
+    func nativeVisionExtractsScannedPDFLocally() async throws {
         let data = try Self.pdfData(scanned: true)
         let document = try await PDFExtractor().extract(
             data,
@@ -907,3 +910,10 @@ struct CaptureTests {
         return buffer as Data
     }
 }
+
+/// True on a virtual Mac, where hardware-backed frameworks behave differently.
+private let runningInVirtualMachine: Bool = {
+    var present: Int32 = 0
+    var size = MemoryLayout<Int32>.size
+    return sysctlbyname("kern.hv_vmm_present", &present, &size, nil, 0) == 0 && present == 1
+}()
