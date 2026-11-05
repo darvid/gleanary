@@ -113,6 +113,9 @@ private struct GleanaryCommands: Commands {
     private let shortcuts = ShortcutSettings.shared
 
     var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("About Gleanary") { AboutPanel.show() }
+        }
         CommandMenu("Go") {
             item("palette", title: "Command Palette…")
             Divider()
