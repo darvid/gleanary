@@ -142,8 +142,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+          version="${RELEASE_TAG#v}"
+          # The website's Download buttons link to this fixed name through /releases/latest/download/.
+          cp ".build/distribution/Gleanary-${version}-arm64.dmg" .build/distribution/Gleanary-arm64.dmg
           gh release upload "$RELEASE_TAG" \
-            ".build/distribution/Gleanary-${RELEASE_TAG#v}-arm64.dmg" \
+            ".build/distribution/Gleanary-${version}-arm64.dmg" \
+            .build/distribution/Gleanary-arm64.dmg \
             .build/distribution/SHA256SUMS --clobber
       - name: Preserve notarization diagnostics
         if: always()
