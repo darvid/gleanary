@@ -1,8 +1,8 @@
 name: Release
 
 # On each push to main, release-please keeps a release PR up to date. Merging that PR creates a
-# draft GitHub release, and this workflow attaches a signed, notarized DMG to it. Publish the
-# draft by hand. To rebuild a draft, run this workflow manually with its tag.
+# draft GitHub release, and this workflow attaches a signed, notarized DMG to it and publishes it.
+# A failed build stays a draft. To rebuild it, run this workflow manually with its tag.
 on:
   push:
     branches: [main]
@@ -149,6 +149,11 @@ jobs:
             ".build/distribution/Gleanary-${version}-arm64.dmg" \
             .build/distribution/Gleanary-arm64.dmg \
             .build/distribution/SHA256SUMS --clobber
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "$RELEASE_TAG" --draft=false --latest
       - name: Preserve notarization diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
