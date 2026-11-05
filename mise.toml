@@ -25,6 +25,20 @@ open "$MISE_PROJECT_ROOT/.build/Gleanary.app"
 description = "Build and sign a local sandboxed Gleanary.app bundle"
 run = 'bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
 
+[tasks."signed-app"]
+description = "Build the arm64 Developer ID-signed app in .build/distribution, without notarizing"
+run = 'SIGNING=developer-id bash "$MISE_PROJECT_ROOT/scripts/build-app.sh"'
+
+[tasks.dmg]
+description = "Package the Developer ID app into a signed DMG, without notarizing"
+depends = ["signed-app"]
+run = 'bash "$MISE_PROJECT_ROOT/scripts/package-dmg.sh"'
+
+[tasks.release]
+description = "Build the signed DMG, then notarize, staple, and checksum it"
+depends = ["dmg"]
+run = 'bash "$MISE_PROJECT_ROOT/scripts/notarize-app.sh"'
+
 [tasks.format]
 description = "Format Swift source files"
 run = "swiftformat ."

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "26e19b2a3f8d7ea56f62dfbb53c21ca0b69d4af3",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "Gleanary",
+      "include-component-in-tag": false,
+      "draft": true,
+      "bump-minor-pre-major": true
+    }
+  }
+}
