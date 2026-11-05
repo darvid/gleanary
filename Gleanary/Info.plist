@@ -4,6 +4,8 @@
 <dict>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Night Mode Labs</string>
     <key>NSAppTransportSecurity</key>
     <dict>
         <!-- User-selected public HTTP sources only; URLPolicy checks every hop. -->
