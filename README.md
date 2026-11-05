@@ -9,7 +9,8 @@
 </p>
 
 <p align="center">
-  <!-- TODO: Download · Website · Docs links, once they exist. -->
+  <!-- TODO: Website · Docs links, once they exist. -->
+  <a href="https://github.com/nightmodelabs/gleanary/releases/latest"><img src="https://img.shields.io/github/v/release/nightmodelabs/gleanary?label=Download&amp;color=2ea44f" alt="Download the latest release"></a>
   <a href="#requirements"><img src="https://img.shields.io/badge/macOS-26%2B-000000?logo=apple&amp;logoColor=white" alt="Requires macOS 26 or later"></a>
   <a href="#build-from-source"><img src="https://img.shields.io/badge/Swift-6.2-F05138?logo=swift&amp;logoColor=white" alt="Built with Swift 6.2"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
@@ -51,14 +52,21 @@ synthesis, and curation.
 
 ## Install
 
+### Download
+
+1. Download the `.dmg` file from the [latest release][9].
+2. Open it and drag Gleanary to Applications.
+
 ### Requirements
 
 - **Operating system:** macOS 26 or later.
+- **Mac:** Apple silicon (M1 or later). The download doesn't run on
+  Intel Macs.
 - **Basic library use:** You can browse, search, and edit your library
   without Apple Intelligence or an AI provider account.
-- **On-device AI:** Requires a Mac with Apple silicon (M1 or later).
-  Turn on Apple Intelligence in System Settings and wait for its model
-  to finish downloading. No ChatGPT account or API key is needed.
+- **On-device AI:** Turn on Apple Intelligence in System Settings and
+  wait for its model to finish downloading. No ChatGPT account or API
+  key is needed.
 - **Online AI:** Instead of Apple Intelligence, you can use your ChatGPT
   subscription or your own API key for OpenAI, Claude, Gemini, or
   OpenRouter. Gleanary uses [Sign in with ChatGPT (SIWC)](https://developers.openai.com/siwc/token-sharing-open-source)
@@ -140,3 +148,4 @@ Gleanary is available under the [MIT License](LICENSE).
 [6]: https://github.com/nodes-app/swift-markdown-engine
 [7]: https://github.com/arraypress/swift-youtube-metadata
 [8]: https://github.com/alexeichhorn/YouTubeKit
+[9]: https://github.com/nightmodelabs/gleanary/releases/latest
