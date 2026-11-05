@@ -11,12 +11,41 @@ if [[ -z "$sdk" ]]; then
     sdk="$(xcrun --sdk macosx26.5 --show-sdk-path 2>/dev/null || xcrun --sdk macosx --show-sdk-path)"
 fi
 
+version="$(< version.txt)"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'version.txt must contain a major.minor.patch version\n' >&2
+    exit 1
+fi
+
+# SIGNING=local (the default) builds .build/Gleanary.app for development. SIGNING=developer-id
+# builds the arm64 release app in .build/distribution, signed for notarization.
+signing="${SIGNING:-local}"
 configuration="${CONFIGURATION:-debug}"
+output_dir="$project_dir/.build"
+build_args=(--sdk "$sdk")
+case "$signing" in
+    local) ;;
+    developer-id)
+        : "${SIGNING_IDENTITY:?Set SIGNING_IDENTITY to a Developer ID Application identity}"
+        if [[ "$SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
+            printf 'SIGNING_IDENTITY must be a Developer ID Application identity\n' >&2
+            exit 1
+        fi
+        configuration=release
+        output_dir="$project_dir/.build/distribution"
+        build_args+=(--arch arm64)
+        ;;
+    *)
+        printf 'SIGNING must be local or developer-id\n' >&2
+        exit 1
+        ;;
+esac
 if [[ "$configuration" != debug && "$configuration" != release ]]; then
     printf 'CONFIGURATION must be debug or release\n' >&2
     exit 1
 fi
-build_args=(--configuration "$configuration" --sdk "$sdk")
+build_args+=(--configuration "$configuration")
+mkdir -p "$output_dir"
 swift build "${build_args[@]}" --product Gleanary
 bin_dir="$(swift build "${build_args[@]}" --show-bin-path)"
 
@@ -39,8 +68,8 @@ plutil -replace CFBundleIdentifier -string app.gleanary "$plist"
 plutil -replace CFBundleExecutable -string Gleanary "$plist"
 plutil -replace CFBundleName -string Gleanary "$plist"
 plutil -replace CFBundlePackageType -string APPL "$plist"
-plutil -replace CFBundleVersion -string 1 "$plist"
-plutil -replace CFBundleShortVersionString -string 0.1 "$plist"
+plutil -replace CFBundleVersion -string "$version" "$plist"
+plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace LSMinimumSystemVersion -string 26.0 "$plist"
 plutil -replace NSHighResolutionCapable -bool YES "$plist"
 
@@ -51,18 +80,28 @@ if xcrun --find actool >/dev/null 2>&1; then
         --minimum-deployment-target 26.0 --accent-color AccentColor \
         --output-partial-info-plist "$stage/assets.plist" >/dev/null
     plutil -replace NSAccentColorName -string AccentColor "$plist"
+elif [[ "$signing" == developer-id ]]; then
+    printf 'actool not found: release builds need Xcode for the accent color\n' >&2
+    exit 1
 else
     printf 'actool not found: building without the neutral accent\n' >&2
 fi
+cp LICENSE "$contents/Resources/LICENSE"
 
 # Ad hoc by default. Ad hoc signatures change every build, so macOS treats each build as a new
 # app and asks for Keychain access again. Set CODESIGN_IDENTITY (e.g. in .env) to a
 # local signing certificate to keep a stable identity across rebuilds.
-codesign --force --sign "${CODESIGN_IDENTITY:--}" \
-    --entitlements Gleanary/Gleanary.entitlements "$stage/Gleanary.app"
-codesign --verify --strict "$stage/Gleanary.app"
+if [[ "$signing" == developer-id ]]; then
+    # Notarization requires the hardened runtime and a secure timestamp.
+    codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" \
+        --entitlements Gleanary/Gleanary.entitlements "$stage/Gleanary.app"
+else
+    codesign --force --sign "${CODESIGN_IDENTITY:--}" \
+        --entitlements Gleanary/Gleanary.entitlements "$stage/Gleanary.app"
+fi
+codesign --verify --deep --strict "$stage/Gleanary.app"
 
 # Replace only the generated bundle; the sandboxed library is untouched.
-rm -rf "$project_dir/.build/Gleanary.app"
-mv "$stage/Gleanary.app" "$project_dir/.build/Gleanary.app"
-printf 'Built %s\n' "$project_dir/.build/Gleanary.app"
+rm -rf "$output_dir/Gleanary.app"
+mv "$stage/Gleanary.app" "$output_dir/Gleanary.app"
+printf 'Built %s\n' "$output_dir/Gleanary.app"

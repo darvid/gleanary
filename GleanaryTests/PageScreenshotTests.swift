@@ -238,9 +238,14 @@ struct PageScreenshotTests {
             fetcher: PageFetcher(shareImage: ("https://fixture.example/logo.png", logo))
         )
         #expect(!detail.artifacts.contains { $0.name == IngestionEngine.shareImageName })
+        // The preview falls back to the page screenshot. Which band of it Vision picks varies by
+        // macOS version, so check only that the green logo isn't what's shown.
         let preview = try #require(await previewImage())
-        let color = try #require(preview.colorAt(x: preview.pixelsWide / 2, y: 4))
-        #expect(color.redComponent > 0.8)
+        let color = try #require(preview.colorAt(
+            x: preview.pixelsWide / 2,
+            y: preview.pixelsHigh / 2
+        ))
+        #expect(color.greenComponent < 0.2)
     }
 
     private func previewImage() async throws -> NSBitmapImageRep? {

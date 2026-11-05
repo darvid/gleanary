@@ -41,7 +41,8 @@ import Testing
         window.isReleasedWhenClosed = false
         window.contentView = host
         defer { window.contentView = nil; window.close() }
-        let deadline = ContinuousClock.now + .seconds(2)
+        // The scan is fast alone but can take seconds while the full suite runs in parallel.
+        let deadline = ContinuousClock.now + .seconds(10)
         while sources.sources.isEmpty, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }

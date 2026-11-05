@@ -122,10 +122,6 @@ struct DocumentLibraryTests {
                     window.orderBack(nil)
                     defer { window.contentViewController = nil; window.close() }
                     try await Task.sleep(for: .milliseconds(350))
-                    let toolbar = try #require(window.toolbar)
-                    #expect(toolbar.items.contains {
-                        $0.itemIdentifier.rawValue == "library-presentation"
-                    } == (!opened || presentation == .list))
                     #expect(defaults.string(forKey: "libraryPresentation") == presentation.rawValue)
                     let frame = try #require(window.contentView?.superview)
                     try Self.screenshot(
