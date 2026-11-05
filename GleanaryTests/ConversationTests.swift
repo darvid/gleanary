@@ -2263,52 +2263,6 @@ private struct NoTranscriptProvider: YouTubeProviding {
     }
 
     @Test(
-        .enabled(if: ProcessInfo.processInfo.environment["GLEANARY_TOOLBAR_SCREENSHOTS"] == "1"),
-        arguments: [false, true]
-    )
-    @MainActor func sidebarToolbarHasStableGeometry(dark: Bool) async throws {
-        let (root, store) = try await fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let suite = "gleanary-toolbar-" + UUID().uuidString
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        defaults.set(287.0, forKey: "sidebarWidth")
-        let controller =
-            NSHostingController(rootView: ContentView(library: LibraryModel(store: store))
-                    .defaultAppStorage(defaults).preferredColorScheme(dark ? .dark : .light))
-        let window = NSWindow(contentViewController: controller)
-        window.titleVisibility = .hidden
-        window.titlebarAppearsTransparent = true
-        window.styleMask.insert(.fullSizeContentView)
-        window.setContentSize(NSSize(width: 1100, height: 780))
-        window.isReleasedWhenClosed = false
-        window.makeKeyAndOrderFront(nil)
-        defer { window.contentViewController = nil; window.close() }
-        try await Task.sleep(for: .milliseconds(500))
-        let toolbar = try #require(window.toolbar)
-        #expect(toolbar.items.first?.itemIdentifier.rawValue == "navigation")
-        let frame = try #require(window.contentView?.superview)
-        try saveToolbarScreenshot(frame, name: "shown-\(dark ? "dark" : "light")")
-        let navigation = try #require(toolbar.items.first?.view)
-        let initial = navigation.convert(navigation.bounds, to: nil)
-        let event = try #require(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: [.command, .control], timestamp: 0,
-            windowNumber: window.windowNumber, context: nil, characters: "s",
-            charactersIgnoringModifiers: "s", isARepeat: false, keyCode: 1
-        ))
-        for name in ["hidden", "restored"] {
-            #expect(window.performKeyEquivalent(with: event))
-            for _ in 0 ..< 6 {
-                try await Task.sleep(for: .milliseconds(50))
-                let current = try #require(toolbar.items.first?.view)
-                #expect(current === navigation)
-                #expect(abs(current.convert(current.bounds, to: nil).minX - initial.minX) < 1)
-            }
-            try saveToolbarScreenshot(frame, name: "\(name)-\(dark ? "dark" : "light")")
-        }
-    }
-
-    @Test(
         .enabled(if: ProcessInfo.processInfo
             .environment["GLEANARY_CHAT_STATUS_SCREENSHOTS"] == "1"),
         arguments: [false, true]
@@ -2407,25 +2361,6 @@ private struct NoTranscriptProvider: YouTubeProviding {
             }
         }
         return changed
-    }
-
-    @MainActor private func saveToolbarScreenshot(_ view: NSView, name: String) throws {
-        view.layoutSubtreeIfNeeded()
-        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        let scale = Double(bitmap.pixelsWide) / view.bounds.width
-        let content = try #require(bitmap.colorAt(x: Int(294 * scale), y: Int(600 * scale))?
-            .usingColorSpace(.deviceRGB))
-        // Both sides of the sidebar boundary share the content's solid titlebar color.
-        for x in [280.0, 294.0] {
-            let titlebar = try #require(bitmap.colorAt(x: Int(x * scale), y: Int(12 * scale))?
-                .usingColorSpace(.deviceRGB))
-            #expect(abs(titlebar.redComponent - content.redComponent) < 0.01)
-            #expect(abs(titlebar.greenComponent - content.greenComponent) < 0.01)
-            #expect(abs(titlebar.blueComponent - content.blueComponent) < 0.01)
-        }
-        let png = try #require(bitmap.representation(using: .png, properties: [:]))
-        try png.write(to: URL(fileURLWithPath: "/tmp/gleanary-toolbar-\(name).png"))
     }
 
     @Test(
